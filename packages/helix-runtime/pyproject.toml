@@ -12,6 +12,8 @@ dependencies = [
     "helix-agent-persistence",
     "helix-agent-protocol",
     "sqlalchemy[asyncio]>=2.0.30,<3",
+    "langgraph>=0.2.50,<0.3",
+    "langgraph-checkpoint-postgres>=2.0.20,<3",
 ]
 
 [build-system]
