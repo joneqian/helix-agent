@@ -134,15 +134,15 @@
 - [x] ADR-0007：应用 Secret 存储 — 阿里云 KMS Secrets Manager（M0）+ M1 评估 Vault
 
 **0.5 测试基础设施**（落实 P0 #34、#35）
-- [ ] pytest fixture 库（`tests/conftest.py`：tmp_postgres、mock_llm、tmp_vault）
-- [ ] testcontainers-python 集成
-- [ ] Mock LLM（基于 VCR 录制回放）
+- [x] pytest fixture 库（`tests/conftest.py`：`tmp_postgres_dsn`、`mock_llm`、`mock_secret_store` — Vault fixture 改名按 ADR-0007）
+- [x] testcontainers-python 集成（postgres extra）
+- [x] Mock LLM 抽象（MockLLM + FakeCompletion）+ VCR 脚手架（vcrpy 已装；cassettes/ 目录就绪，首条录制随 Stream E.1）
 
 ### Exit Criteria（Phase 0 → M0 验证门）
-- [ ] CI 跑通：lint + mypy + test + image build + 安全扫描全绿
-- [ ] `uv sync` 在干净环境一行安装
-- [ ] ADR-0002~0007 全部决策完成
-- [ ] 5 项启动前决策书面化并写入 `docs/decisions/`（决策 1、5 标 TBD 也算完成）
+- [x] CI 跑通：lint + mypy + test + 安全扫描全绿（镜像构建按 JIT 策略推迟到首个 service 创建时，见 03-MONOREPO-LAYOUT.md §"创建策略"）
+- [x] `uv sync` 在干净环境一行安装（PR #13 验证：26 packages resolved）
+- [x] ADR-0002~0007 全部决策完成
+- [x] 5 项启动前决策书面化并写入 `docs/decisions/phase-0-launch.md`（决策 1 dogfood 业务 + 决策 5 训练时间窗 显式标 TBD/软推迟）
 
 ---
 
