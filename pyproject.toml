@@ -10,6 +10,8 @@ authors = [
 ]
 dependencies = [
     "helix-agent-common",
+    "helix-agent-persistence",
+    "helix-agent-protocol",
 ]
 
 [tool.uv]
@@ -29,10 +31,14 @@ dev = [
 [tool.uv.workspace]
 members = [
     "packages/helix-common",
+    "packages/helix-persistence",
+    "packages/helix-protocol",
 ]
 
 [tool.uv.sources]
 helix-agent-common = { workspace = true }
+helix-agent-persistence = { workspace = true }
+helix-agent-protocol = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -57,7 +63,11 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S105", "S106"]
+"**/tests/**/*.py" = ["S101", "S105", "S106"]
 "**/conftest.py" = ["S101"]
+# Audit action enum values legitimately contain words like "secret"/"token";
+# they are public identifiers, not actual credentials.
+"packages/helix-protocol/src/helix_agent/protocol/audit.py" = ["S105"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -75,12 +85,16 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "$MYPY_CONFIG_FILE_DIR/packages/helix-common/src"
+mypy_path = "$MYPY_CONFIG_FILE_DIR/packages/helix-common/src:$MYPY_CONFIG_FILE_DIR/packages/helix-persistence/src:$MYPY_CONFIG_FILE_DIR/packages/helix-protocol/src"
+
+[[tool.mypy.overrides]]
+module = "testcontainers.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/*/tests", "services/*/tests"]
 asyncio_mode = "auto"
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 markers = [
     "integration: marks integration tests (require external services)",
     "e2e: marks end-to-end tests (full docker-compose stack)",

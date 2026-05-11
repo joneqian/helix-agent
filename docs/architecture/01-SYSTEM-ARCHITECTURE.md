@@ -55,19 +55,21 @@
 
 ## Event Log 表结构（关键基础）
 
+> **权威 DDL 见 [ADR-0002](../adr/0002-state-layer-schema.md)**（含 `thread_id` + `tenant_id UUID` + `trace_id` 等扩展字段）。下面是 M0 早期高层示意，实际 schema 落地以 ADR-0002 为准；`audit_log` 表是分离的，DDL 同样在 ADR-0002。
+
 ```sql
+-- 概念示意（非权威）
 CREATE TABLE event_log (
-  event_id   UUID PRIMARY KEY,
-  session_id UUID NOT NULL,
-  tenant     TEXT NOT NULL,
-  seq        BIGINT NOT NULL,
-  event_type TEXT NOT NULL,    -- llm_call|tool_call|tool_result|state|error|checkpoint
-  payload    JSONB NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE (session_id, seq)
+  id          BIGSERIAL PRIMARY KEY,
+  thread_id   UUID NOT NULL,
+  tenant_id   UUID NOT NULL,
+  seq         BIGINT NOT NULL,
+  event_type  TEXT NOT NULL,   -- llm_call|tool_call|tool_result|state|error|checkpoint
+  payload     JSONB NOT NULL,  -- 已经 PII redactor 处理
+  trace_id    TEXT,             -- W3C
+  created_at  TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (thread_id, seq)
 );
-CREATE INDEX ON event_log (session_id, seq);
-CREATE INDEX ON event_log (tenant, created_at);
 
 -- DB 角色禁 UPDATE/DELETE，强制 append-only
 -- 每 50 events 写一个 LangGraph checkpoint 加速冷启动
