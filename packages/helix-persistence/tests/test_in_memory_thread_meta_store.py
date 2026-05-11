@@ -73,9 +73,14 @@ async def test_update_status_returns_true_only_on_match() -> None:
     thread_id, owner, other = uuid4(), uuid4(), uuid4()
     await store.create(thread_id=thread_id, tenant_id=owner, created_by="x")
 
-    assert await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=owner) is True
-    assert await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=other) is False
-    assert await store.update_status(uuid4(), ThreadStatus.PAUSED, tenant_id=owner) is False
+    # Bind awaited mutations before asserting; `assert await foo()` is stripped
+    # under `python -O` and the side effect would disappear silently.
+    owner_match = await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=owner)
+    assert owner_match is True
+    other_mismatch = await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=other)
+    assert other_mismatch is False
+    missing = await store.update_status(uuid4(), ThreadStatus.PAUSED, tenant_id=owner)
+    assert missing is False
 
 
 @pytest.mark.asyncio
@@ -84,10 +89,17 @@ async def test_check_access_and_delete() -> None:
     thread_id, owner, other = uuid4(), uuid4(), uuid4()
     await store.create(thread_id=thread_id, tenant_id=owner, created_by="x")
 
-    assert await store.check_access(thread_id, owner) is True
-    assert await store.check_access(thread_id, other) is False
+    owner_access = await store.check_access(thread_id, owner)
+    assert owner_access is True
+    other_access = await store.check_access(thread_id, other)
+    assert other_access is False
 
-    assert await store.delete(thread_id, tenant_id=other) is False
-    assert await store.check_access(thread_id, owner) is True
-    assert await store.delete(thread_id, tenant_id=owner) is True
-    assert await store.check_access(thread_id, owner) is False
+    wrong_tenant_delete = await store.delete(thread_id, tenant_id=other)
+    assert wrong_tenant_delete is False
+    still_accessible = await store.check_access(thread_id, owner)
+    assert still_accessible is True
+
+    owner_delete = await store.delete(thread_id, tenant_id=owner)
+    assert owner_delete is True
+    gone = await store.check_access(thread_id, owner)
+    assert gone is False

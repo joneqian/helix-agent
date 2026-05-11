@@ -119,8 +119,13 @@ async def test_update_status_tenant_isolation(sql_store: SqlStoreFixture) -> Non
         thread_id, owner, other = uuid4(), uuid4(), uuid4()
         await store.create(thread_id=thread_id, tenant_id=owner, created_by="u")
 
-        assert await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=owner) is True
-        assert await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=other) is False
+        # Bind the awaited result first; `assert await foo()` would be stripped
+        # under `python -O` and the side effect (the UPDATE) would silently
+        # disappear (CodeQL py/side-effect-in-assert).
+        owner_update = await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=owner)
+        assert owner_update is True
+        other_update = await store.update_status(thread_id, ThreadStatus.PAUSED, tenant_id=other)
+        assert other_update is False
     finally:
         await engine.dispose()
 
@@ -132,10 +137,14 @@ async def test_delete_tenant_isolation(sql_store: SqlStoreFixture) -> None:
         thread_id, owner, other = uuid4(), uuid4(), uuid4()
         await store.create(thread_id=thread_id, tenant_id=owner, created_by="u")
 
-        assert await store.delete(thread_id, tenant_id=other) is False
-        assert await store.check_access(thread_id, owner) is True
+        other_delete = await store.delete(thread_id, tenant_id=other)
+        assert other_delete is False
+        still_accessible = await store.check_access(thread_id, owner)
+        assert still_accessible is True
 
-        assert await store.delete(thread_id, tenant_id=owner) is True
-        assert await store.check_access(thread_id, owner) is False
+        owner_delete = await store.delete(thread_id, tenant_id=owner)
+        assert owner_delete is True
+        gone = await store.check_access(thread_id, owner)
+        assert gone is False
     finally:
         await engine.dispose()
