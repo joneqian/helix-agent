@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.models import EventLogRow
@@ -46,6 +46,21 @@ logger = logging.getLogger(__name__)
 
 def _coerce_event_type(value: EventType | str) -> EventType:
     return value if isinstance(value, EventType) else EventType(value)
+
+
+async def _acquire_thread_lock(session: AsyncSession, thread_id: UUID) -> None:
+    """Serialize seq allocation for a given thread within the current transaction.
+
+    DeerFlow's ``with_for_update()`` on a ``max(seq)`` aggregate is invalid on
+    Postgres (``FeatureNotSupportedError``); it relied on SQLite's no-op
+    behaviour. Postgres native ``pg_advisory_xact_lock(bigint)`` keyed on the
+    thread_id hash gives us the same "one writer per thread at a time"
+    semantics without locking aggregates.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:t, 0))"),
+        {"t": str(thread_id)},
+    )
 
 
 class DbEventStore(EventStore):
@@ -122,10 +137,9 @@ class DbEventStore(EventStore):
         safe_payload = self._maybe_truncate(payload)
         async with self._sf() as session:
             async with session.begin():
+                await _acquire_thread_lock(session, thread_id)
                 max_seq = await session.scalar(
-                    select(func.max(EventLogRow.seq))
-                    .where(EventLogRow.thread_id == thread_id)
-                    .with_for_update()
+                    select(func.max(EventLogRow.seq)).where(EventLogRow.thread_id == thread_id)
                 )
                 row = EventLogRow(
                     thread_id=thread_id,
@@ -151,10 +165,9 @@ class DbEventStore(EventStore):
 
         async with self._sf() as session:
             async with session.begin():
+                await _acquire_thread_lock(session, thread_id)
                 max_seq = await session.scalar(
-                    select(func.max(EventLogRow.seq))
-                    .where(EventLogRow.thread_id == thread_id)
-                    .with_for_update()
+                    select(func.max(EventLogRow.seq)).where(EventLogRow.thread_id == thread_id)
                 )
                 seq = max_seq or 0
                 rows: list[EventLogRow] = []
