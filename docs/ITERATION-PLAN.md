@@ -34,6 +34,33 @@
 
 ---
 
+## 迭代启动前置条件（所有 Phase / Stream 共用）
+
+每个 Phase 或 Stream 开始**编码**前，必须先完成下面三步，否则不进入工作清单：
+
+1. **架构设计**
+   - 明确组件边界、数据流、关键 API/Schema
+   - 列依赖（外部服务、内部模块）
+   - 明确与 24 项 P0 横切关注点的对接点（auth/audit/PII/observability/limits/...）
+   - 写下 Verification 方案（怎么证明这块设计可行）
+
+2. **更新设计文档**
+   - 已有模块 → 更新 `docs/architecture/` 对应文件
+   - 新子系统 → 新增 `docs/architecture/subsystems/xx-*.md`
+   - 技术选型 → 新增 `docs/adr/000X-*.md`
+   - 设计与实现的偏离一律以**先改文档再改代码**的顺序解决
+
+3. **设计 self-review**（单人项目用以下 checklist）
+   - [ ] 边界清晰：能 1 句话说出"这个模块只做 X，不做 Y"
+   - [ ] 数据流可追踪：每条数据从入口到出口路径明确
+   - [ ] 失败模式列举：列出至少 3 种失败场景及对应处理
+   - [ ] 与现有架构无冲突（看 `docs/architecture/00-OVERVIEW.md` 的核心范式）
+   - [ ] 24 P0 关联标注：本 Stream 落实哪些 P0 已在 checklist 中点名
+
+> 每个 Stream 的 Exit Criteria 隐含包含"对应设计文档已更新且与实现一致"。如果实施过程中发现设计漏洞，**回到第 1 步**，不是边写边改。
+
+---
+
 ## Phase 0 — Pre-flight（2-3 周）
 
 ### 目标
