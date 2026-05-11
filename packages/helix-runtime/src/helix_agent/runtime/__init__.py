@@ -3,6 +3,12 @@
 See ``README.md`` for the per-module vendor provenance + adaptation notes.
 """
 
+from helix_agent.runtime.checkpointer import (
+    CheckpointerBackend as CheckpointerBackend,
+)
+from helix_agent.runtime.checkpointer import (
+    make_checkpointer as make_checkpointer,
+)
 from helix_agent.runtime.event_log import (
     DbEventStore as DbEventStore,
 )
@@ -12,5 +18,15 @@ from helix_agent.runtime.event_log import (
 from helix_agent.runtime.event_log import (
     InMemoryEventStore as InMemoryEventStore,
 )
+from helix_agent.runtime.store import StoreBackend as StoreBackend
+from helix_agent.runtime.store import make_store as make_store
 
-__all__ = ["DbEventStore", "EventStore", "InMemoryEventStore"]
+__all__ = [
+    "CheckpointerBackend",
+    "DbEventStore",
+    "EventStore",
+    "InMemoryEventStore",
+    "StoreBackend",
+    "make_checkpointer",
+    "make_store",
+]
