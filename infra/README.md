@@ -50,7 +50,7 @@ Per [subsystems/23 § 5.1](../docs/architecture/subsystems/23-postgres-scalabili
 - ❌ No advisory locks that span transactions (`pg_advisory_lock` → use
   `pg_advisory_xact_lock` instead — already in `DbEventStore`).
 - ❌ No `LISTEN`/`NOTIFY` (migrate to Redis pub/sub if needed).
-- ⚠️ Prepared statements need PgBouncer ≥ 1.21 (this stack ships 1.23.1).
+- ⚠️ Prepared statements need PgBouncer ≥ 1.21 (this stack ships 1.24.1).
   Helix uses **asyncpg with `statement_cache_size=0`** to sidestep the
   client-side prepared cache entirely — see
   `packages/helix-persistence/src/helix_agent/persistence/database.py`.

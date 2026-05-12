@@ -44,7 +44,7 @@ services:
       retries: 15
 
   pgbouncer:
-    image: edoburu/pgbouncer:1.23.1
+    image: edoburu/pgbouncer:v1.24.1-p1
     container_name: helix-pgbouncer
     environment:
       # edoburu/pgbouncer generates pgbouncer.ini from these env vars.
