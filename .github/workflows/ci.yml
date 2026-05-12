@@ -68,6 +68,9 @@ jobs:
   test:
     name: Test (pytest)
     runs-on: ubuntu-latest
+    # Unit-only path; ``integration`` marker (testcontainers Postgres /
+    # MinIO / pgbouncer compose) runs in the separate ``test-integration``
+    # job so a slow Docker image pull on the runner never gates the PR.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -84,8 +87,34 @@ jobs:
       - name: Sync workspace
         run: uv sync --frozen
 
-      - name: Run pytest
-        run: uv run pytest -v
+      - name: Run pytest (unit)
+        run: uv run pytest -v -m "not integration"
+
+  test-integration:
+    name: Test (integration)
+    runs-on: ubuntu-latest
+    # Image pulls on shared runners are bursty; budget 25 min and allow
+    # this job to fail without gating the PR (until self-hosted runners
+    # with warm Docker caches land).
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Sync workspace
+        run: uv sync --frozen
+
+      - name: Run pytest (integration)
+        run: uv run pytest -v -m integration
 
   security:
     name: Security (pip-audit)
