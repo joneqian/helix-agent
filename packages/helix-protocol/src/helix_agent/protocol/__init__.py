@@ -1,5 +1,25 @@
 """Helix-Agent cross-service Pydantic schemas."""
 
+from helix_agent.protocol.agent_spec import (
+    AgentMetadata,
+    AgentSpec,
+    AgentSpecBody,
+    CodePackageSpec,
+    CustomReminderSpec,
+    DynamicContextSpec,
+    FilesystemSpec,
+    MemorySpec,
+    ModelSpec,
+    MountSpec,
+    NetworkSpec,
+    ObservabilitySpec,
+    PolicySpec,
+    ResourceSpec,
+    SandboxSpec,
+    SystemPromptSpec,
+    TenantConfig,
+    WorkflowSpec,
+)
 from helix_agent.protocol.audit import (
     AuditAction,
     AuditEntry,
@@ -19,6 +39,9 @@ from helix_agent.protocol.event import EventRecord, EventType
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
 
 __all__ = [
+    "AgentMetadata",
+    "AgentSpec",
+    "AgentSpecBody",
     "AuditAction",
     "AuditEntry",
     "AuditPage",
@@ -28,10 +51,25 @@ __all__ = [
     "BackupRecord",
     "BackupStatus",
     "BackupTier",
+    "CodePackageSpec",
+    "CustomReminderSpec",
     "DrillRecord",
     "DrillType",
+    "DynamicContextSpec",
     "EventRecord",
     "EventType",
+    "FilesystemSpec",
+    "MemorySpec",
+    "ModelSpec",
+    "MountSpec",
+    "NetworkSpec",
+    "ObservabilitySpec",
+    "PolicySpec",
+    "ResourceSpec",
+    "SandboxSpec",
+    "SystemPromptSpec",
+    "TenantConfig",
     "ThreadMeta",
     "ThreadStatus",
+    "WorkflowSpec",
 ]
