@@ -60,3 +60,10 @@ class Settings(BaseSettings):
     single_instance: bool = True
 
     health_check_timeout_s: float = Field(default=5.0, gt=0)
+
+    # ------------------------------------------------------------------ rate limit (B.2)
+    # Gateway-tier limiter (subsystems/16 § 5.1, layer 1). Per-tenant
+    # (layer 2, C.6) and per-provider (layer 3, E.6) tiers stack on top.
+    rate_limit_enabled: bool = True
+    rate_limit_burst: int = Field(default=60, gt=0)
+    rate_limit_per_second: float = Field(default=20.0, gt=0)

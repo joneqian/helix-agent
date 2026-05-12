@@ -31,7 +31,9 @@ from control_plane.middleware import (
     AuditContextMiddleware,
     InFlightMiddleware,
     ObservabilityMiddleware,
+    RateLimitMiddleware,
 )
+from control_plane.ratelimit import InProcessTokenBucketLimiter, RateLimiter
 from control_plane.settings import Settings
 from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
@@ -57,12 +59,16 @@ def create_app(
     *,
     settings: Settings | None = None,
     lifecycle: Lifecycle | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
     :param settings: Optional pre-built settings (tests use this).
     :param lifecycle: Optional pre-built :class:`Lifecycle`; default is a
         fresh instance owned by the app.
+    :param rate_limiter: Optional pre-built limiter (tests inject a stub
+        or a tuned bucket). Defaults to :class:`InProcessTokenBucketLimiter`
+        sized from ``settings.rate_limit_*``.
     :raises ProdAuthModeNotReadyError: if ``settings.auth_mode == "prod"``
         (ADR B-5 — waits for C.1).
     """
@@ -76,6 +82,10 @@ def create_app(
         raise ProdAuthModeNotReadyError(msg)
 
     resolved_lifecycle = lifecycle or Lifecycle()
+    resolved_limiter = rate_limiter or InProcessTokenBucketLimiter(
+        capacity=resolved_settings.rate_limit_burst,
+        refill_per_sec=resolved_settings.rate_limit_per_second,
+    )
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -115,11 +125,17 @@ def create_app(
     app.state.settings = resolved_settings
     app.state.lifecycle = resolved_lifecycle
     app.state.health_provider = health_provider
+    app.state.rate_limiter = resolved_limiter
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
     # therefore register innermost first.
     app.add_middleware(InFlightMiddleware, lifecycle=resolved_lifecycle)
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=resolved_limiter,
+        enabled=resolved_settings.rate_limit_enabled,
+    )
     app.add_middleware(
         AuditContextMiddleware,
         default_tenant_id=resolved_settings.default_dev_tenant_id,

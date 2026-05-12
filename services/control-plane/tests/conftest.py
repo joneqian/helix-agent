@@ -23,6 +23,11 @@ def settings() -> Settings:
         default_dev_actor_id="anonymous",
         # Avoid touching a real Postgres in unit-only tests.
         db_dsn="postgresql+asyncpg://test@localhost/test",
+        # Default fixture buckets are deliberately huge so non-rate-limit
+        # tests never trip 429; B.2 tests build their own constrained
+        # limiter via ``create_app(rate_limiter=...)``.
+        rate_limit_burst=10_000,
+        rate_limit_per_second=10_000.0,
     )
 
 
