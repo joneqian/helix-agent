@@ -15,7 +15,14 @@ from helix_agent.persistence.database import (
 from helix_agent.persistence.database import (
     create_async_session_factory as create_async_session_factory,
 )
+from helix_agent.persistence.dr import BackupRecordStore as BackupRecordStore
+from helix_agent.persistence.dr import (
+    InMemoryBackupRecordStore as InMemoryBackupRecordStore,
+)
+from helix_agent.persistence.dr import SqlBackupRecordStore as SqlBackupRecordStore
 from helix_agent.persistence.models import AuditLogRow as AuditLogRow
+from helix_agent.persistence.models import BackupRecordRow as BackupRecordRow
+from helix_agent.persistence.models import DrDrillRow as DrDrillRow
 from helix_agent.persistence.models import EventLogRow as EventLogRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
 from helix_agent.persistence.thread_meta import (
@@ -29,12 +36,17 @@ from helix_agent.persistence.thread_meta import ThreadMetaStore as ThreadMetaSto
 __all__ = [
     "AuditLogRow",
     "AuditLogStore",
+    "BackupRecordRow",
+    "BackupRecordStore",
     "Base",
     "DatabaseConfig",
+    "DrDrillRow",
     "EventLogRow",
     "InMemoryAuditLogStore",
+    "InMemoryBackupRecordStore",
     "InMemoryThreadMetaStore",
     "SqlAuditLogStore",
+    "SqlBackupRecordStore",
     "SqlThreadMetaStore",
     "ThreadMetaRow",
     "ThreadMetaStore",

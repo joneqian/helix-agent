@@ -7,6 +7,14 @@ from helix_agent.protocol.audit import (
     AuditQuery,
     AuditResult,
 )
+from helix_agent.protocol.dr import (
+    BackupAssetType,
+    BackupRecord,
+    BackupStatus,
+    BackupTier,
+    DrillRecord,
+    DrillType,
+)
 from helix_agent.protocol.event import EventRecord, EventType
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
 
@@ -16,6 +24,12 @@ __all__ = [
     "AuditPage",
     "AuditQuery",
     "AuditResult",
+    "BackupAssetType",
+    "BackupRecord",
+    "BackupStatus",
+    "BackupTier",
+    "DrillRecord",
+    "DrillType",
     "EventRecord",
     "EventType",
     "ThreadMeta",
