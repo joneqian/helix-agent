@@ -30,6 +30,7 @@ from control_plane.api import (
     build_agents_router,
     build_health_router,
     build_metrics_router,
+    build_sessions_router,
 )
 from control_plane.audit import build_default_audit_logger
 from control_plane.manifest import ManifestLoader
@@ -47,6 +48,7 @@ from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
 from helix_agent.common.observability import init_logging, init_tracing
 from helix_agent.persistence.agent_spec import AgentSpecStore, InMemoryAgentSpecStore
+from helix_agent.persistence.thread_meta import InMemoryThreadMetaStore, ThreadMetaStore
 from helix_agent.runtime.audit.logger import AuditLogger
 
 __all__ = ["ProdAuthModeNotReadyError", "create_app"]
@@ -71,6 +73,7 @@ def create_app(
     lifecycle: Lifecycle | None = None,
     rate_limiter: RateLimiter | None = None,
     agent_spec_repo: AgentSpecStore | None = None,
+    thread_meta_repo: ThreadMetaStore | None = None,
     audit_logger: AuditLogger | None = None,
     manifest_loader: ManifestLoader | None = None,
 ) -> FastAPI:
@@ -100,6 +103,7 @@ def create_app(
         refill_per_sec=resolved_settings.rate_limit_per_second,
     )
     resolved_repo = agent_spec_repo or InMemoryAgentSpecStore()
+    resolved_threads = thread_meta_repo or InMemoryThreadMetaStore()
     resolved_audit = audit_logger or build_default_audit_logger()
     resolved_loader = manifest_loader or ManifestLoader()
     health_provider = DefaultHealthProvider(
@@ -143,6 +147,7 @@ def create_app(
     app.state.health_provider = health_provider
     app.state.rate_limiter = resolved_limiter
     app.state.agent_spec_repo = resolved_repo
+    app.state.thread_meta_repo = resolved_threads
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader
 
@@ -179,5 +184,6 @@ def create_app(
     app.include_router(build_health_router(health_provider))
     app.include_router(build_metrics_router())
     app.include_router(build_agents_router())
+    app.include_router(build_sessions_router())
 
     return app
