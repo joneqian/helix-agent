@@ -97,6 +97,31 @@ services:
       timeout: 3s
       retries: 15
 
+  keycloak:
+    # Keycloak IdP — Stream C.1 (per ADR-0003 § 2.1).
+    # ``start-dev`` boots a single-instance Keycloak with the H2 storage
+    # bootstrapped from the imported realm. Credentials below are dev-only
+    # placeholders; prod overrides via env / secret manager.
+    image: quay.io/keycloak/keycloak:25.0
+    container_name: helix-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: ${HELIX_KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${HELIX_KEYCLOAK_ADMIN_PASSWORD:-admin_dev}
+      # Hostname matches the issuer the control plane validates against
+      # (``HELIX_AGENT_OIDC_ISSUER`` in ``environments/dev.yaml``).
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-helix-agent.json:/opt/keycloak/data/import/realm-helix-agent.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 5s
+      timeout: 4s
+      retries: 30
+
 volumes:
   postgres-data:
   minio-data:

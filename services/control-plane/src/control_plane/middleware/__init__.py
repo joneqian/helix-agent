@@ -1,5 +1,6 @@
-"""Control Plane HTTP middleware stack (Stream B)."""
+"""Control Plane HTTP middleware stack (Streams B + C)."""
 
+from control_plane.auth.middleware import AuthMiddleware
 from control_plane.middleware.audit_context import AuditContextMiddleware
 from control_plane.middleware.cancellation import CancellationMiddleware
 from control_plane.middleware.deadline import DeadlineMiddleware
@@ -9,6 +10,7 @@ from control_plane.middleware.rate_limit import RateLimitMiddleware
 
 __all__ = [
     "AuditContextMiddleware",
+    "AuthMiddleware",
     "CancellationMiddleware",
     "DeadlineMiddleware",
     "InFlightMiddleware",

@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from control_plane.app import create_app
+from control_plane.auth import JWTVerifier
 from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.common.lifecycle import Lifecycle
+from tests.auth_fixtures import (
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+    build_test_jwt_verifier,
+    make_test_jwt,
+)
 
 
 @pytest.fixture
@@ -28,7 +35,49 @@ def settings() -> Settings:
         # limiter via ``create_app(rate_limiter=...)``.
         rate_limit_burst=10_000,
         rate_limit_per_second=10_000.0,
+        # C.1 — point at the test issuer / audience used by ``make_test_jwt``.
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
     )
+
+
+@pytest.fixture
+def jwt_verifier() -> JWTVerifier:
+    """Verifier wired to the in-process test keypair (no Keycloak)."""
+    return build_test_jwt_verifier()
+
+
+@pytest.fixture
+def jwt_factory() -> Callable[..., str]:
+    """Return a callable that mints a fresh JWT for the test process.
+
+    Default tenant is ``DEFAULT_DEV_TENANT_ID`` so pre-C.1 tests that
+    relied on the dev nil-UUID continue to operate unchanged.
+    """
+
+    def _factory(
+        *,
+        tenant_id: UUID = DEFAULT_DEV_TENANT_ID,
+        subject: str = "dev-user",
+        roles: tuple[str, ...] = ("admin",),
+        ttl_s: int = 3600,
+        **kwargs: object,
+    ) -> str:
+        return make_test_jwt(
+            tenant_id=tenant_id,
+            subject=subject,
+            roles=roles,
+            ttl_s=ttl_s,
+            **kwargs,
+        )
+
+    return _factory
+
+
+@pytest.fixture
+def auth_headers(jwt_factory: Callable[..., str]) -> dict[str, str]:
+    """Default JWT bearer headers wired to ``DEFAULT_DEV_TENANT_ID``."""
+    return {"Authorization": f"Bearer {jwt_factory()}"}
 
 
 @pytest.fixture
@@ -42,10 +91,19 @@ def lifecycle() -> Lifecycle:
 
 
 @pytest.fixture
-async def client(settings: Settings, lifecycle: Lifecycle) -> AsyncIterator[AsyncClient]:
-    app = create_app(settings=settings, lifecycle=lifecycle)
+async def client(
+    settings: Settings,
+    lifecycle: Lifecycle,
+    jwt_verifier: JWTVerifier,
+    auth_headers: dict[str, str],
+) -> AsyncIterator[AsyncClient]:
+    app = create_app(settings=settings, lifecycle=lifecycle, jwt_verifier=jwt_verifier)
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://control-plane.test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://control-plane.test",
+        headers=auth_headers,
+    ) as client:
         yield client
 
 
