@@ -1,0 +1,80 @@
+# Helix-Agent local dev / dogfood stack (Stream A.3).
+#
+# Brings up Postgres 16 with pgvector + pg_stat_statements behind PgBouncer
+# in transaction-pooling mode (per subsystems/23-postgres-scalability § 9 M0).
+#
+# Usage:
+#   cd infra && docker compose up -d
+#   # Application connects via PgBouncer on localhost:6432
+#   # Direct Postgres access (migrations, psql) on localhost:5432
+#
+# Credentials are placeholders. Override via .env or your secret store.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: helix-postgres
+    environment:
+      POSTGRES_USER: ${HELIX_DB_USER:-helix_agent}
+      POSTGRES_PASSWORD: ${HELIX_DB_PASSWORD:-helix_agent_dev}
+      POSTGRES_DB: ${HELIX_DB_NAME:-helix_agent_dev}
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=top"
+      - "-c"
+      - "pg_stat_statements.max=10000"
+      - "-c"
+      - "log_min_duration_statement=500"
+      - "-c"
+      - "log_line_prefix=%t [%p] %q%u@%d "
+      - "-c"
+      - "max_connections=100"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${HELIX_DB_USER:-helix_agent} -d ${HELIX_DB_NAME:-helix_agent_dev}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1
+    container_name: helix-pgbouncer
+    environment:
+      # edoburu/pgbouncer generates pgbouncer.ini from these env vars.
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${HELIX_DB_USER:-helix_agent}
+      DB_PASSWORD: ${HELIX_DB_PASSWORD:-helix_agent_dev}
+      DB_NAME: ${HELIX_DB_NAME:-helix_agent_dev}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "50"
+      RESERVE_POOL_SIZE: "10"
+      RESERVE_POOL_TIMEOUT: "3"
+      SERVER_RESET_QUERY: DISCARD ALL
+      # Required for transaction-mode + prepared statements (PgBouncer >= 1.21).
+      MAX_PREPARED_STATEMENTS: "100"
+      AUTH_TYPE: scram-sha-256
+      LISTEN_PORT: "6432"
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # edoburu/pgbouncer is alpine-based and doesn't ship pg_isready; use
+      # busybox nc to verify the listener is up.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432 || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:
