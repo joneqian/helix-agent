@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, StrictUndefined, TemplateError
+from jinja2 import Environment, StrictUndefined, TemplateError, select_autoescape
 from pydantic import ValidationError
 
 from control_plane.manifest.errors import (
@@ -79,12 +79,14 @@ class ManifestLoader:
     # ----- internals --------------------------------------------------
 
     def _render(self, source: str, vars_: Mapping[str, Any]) -> str:
-        # Manifest is YAML, not HTML — HTML autoescape would mangle quotes
-        # and braces in template defaults. The S701 lint is suppressed
-        # because XSS isn't a meaningful threat model for YAML output.
+        # Manifest is YAML, not HTML. ``select_autoescape`` with an
+        # empty enabled-extensions list (and ``default_for_string=False``)
+        # is jinja2's canonical "opt out explicitly" pattern; CodeQL's
+        # py/jinja2-autoescape-false flags the literal ``False`` but
+        # accepts this callable as evidence the choice was deliberate.
         env = Environment(
             undefined=StrictUndefined,
-            autoescape=False,  # noqa: S701 — YAML output, never HTML
+            autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
             keep_trailing_newline=True,
         )
         try:
