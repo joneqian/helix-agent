@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from jinja2 import Environment, StrictUndefined, TemplateError, select_autoescape
+from jinja2 import StrictUndefined, TemplateError, select_autoescape
+from jinja2.sandbox import SandboxedEnvironment
 from pydantic import ValidationError
 
 from control_plane.manifest.errors import (
@@ -84,7 +85,13 @@ class ManifestLoader:
         # is jinja2's canonical "opt out explicitly" pattern; CodeQL's
         # py/jinja2-autoescape-false flags the literal ``False`` but
         # accepts this callable as evidence the choice was deliberate.
-        env = Environment(
+        #
+        # ``SandboxedEnvironment`` blocks the ``__class__.__mro__`` /
+        # ``__subclasses__`` introspection chain that turns ordinary
+        # Jinja2 templates into a Python RCE primitive — required
+        # because the template source is user-supplied (CodeQL's
+        # py/template-injection rule).
+        env = SandboxedEnvironment(
             undefined=StrictUndefined,
             autoescape=select_autoescape(enabled_extensions=(), default_for_string=False),
             keep_trailing_newline=True,
