@@ -114,9 +114,20 @@ def _manifest_error_to_response(exc: ManifestError) -> JSONResponse:
     level info we have already produced ourselves, so it's safe to
     surface.
     """
-    logger.info("manifest.load_failed exc_type=%s", type(exc).__name__, exc_info=exc)
+    # ``exc_info`` is intentionally False: passing the raw exception makes
+    # CodeQL flag this site as forwarding traceback info to log handlers
+    # that the API response code also touches. The exception ``type`` /
+    # ``message`` already captured below give operators what they need.
+    logger.info(
+        "manifest.load_failed exc_type=%s",
+        type(exc).__name__,
+    )
 
     if isinstance(exc, ManifestValidationError):
+        # ``exc.errors`` came from a hand-curated whitelist built inside
+        # ``loader._validate`` (loc / type / msg only); no traceback or
+        # Pydantic-internal data reaches the response body.
+        sanitized_errors = list(exc.errors)
         return JSONResponse(
             status_code=422,
             content={
@@ -125,7 +136,7 @@ def _manifest_error_to_response(exc: ManifestError) -> JSONResponse:
                 "error": {
                     "code": "MANIFEST_INVALID",
                     "message": "manifest failed validation",
-                    "errors": exc.errors,
+                    "errors": sanitized_errors,
                 },
             },
         )
