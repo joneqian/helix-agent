@@ -2,6 +2,11 @@
 
 # Explicit `as` re-exports signal intentional public API to static analyzers
 # (mypy --strict, CodeQL py/unused-import).
+from helix_agent.persistence.audit_log import AuditLogStore as AuditLogStore
+from helix_agent.persistence.audit_log import (
+    InMemoryAuditLogStore as InMemoryAuditLogStore,
+)
+from helix_agent.persistence.audit_log import SqlAuditLogStore as SqlAuditLogStore
 from helix_agent.persistence.base import Base as Base
 from helix_agent.persistence.database import DatabaseConfig as DatabaseConfig
 from helix_agent.persistence.database import (
@@ -23,10 +28,13 @@ from helix_agent.persistence.thread_meta import ThreadMetaStore as ThreadMetaSto
 
 __all__ = [
     "AuditLogRow",
+    "AuditLogStore",
     "Base",
     "DatabaseConfig",
     "EventLogRow",
+    "InMemoryAuditLogStore",
     "InMemoryThreadMetaStore",
+    "SqlAuditLogStore",
     "SqlThreadMetaStore",
     "ThreadMetaRow",
     "ThreadMetaStore",
