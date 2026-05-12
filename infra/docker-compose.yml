@@ -97,20 +97,6 @@ services:
       timeout: 3s
       retries: 15
 
-  minio-init:
-    # One-shot helper: create the dev bucket once MinIO is healthy. Exits 0.
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
-    container_name: helix-minio-init
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        mc alias set local http://minio:9000 "${HELIX_MINIO_ROOT_USER:-helix_agent}" "${HELIX_MINIO_ROOT_PASSWORD:-helix_agent_dev_minio}" &&
-        mc mb --ignore-existing "local/${HELIX_MINIO_BUCKET:-helix-agent-dev}"
-
 volumes:
   postgres-data:
   minio-data:
