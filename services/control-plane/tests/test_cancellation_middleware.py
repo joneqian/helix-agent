@@ -90,9 +90,7 @@ async def test_poll_fires_on_cancel_callback() -> None:
         callback_fired = True
 
     await asyncio.wait_for(
-        _poll_disconnect(
-            _disconnect_source(flag), token, poll_interval_s=0.001, on_cancel=_cb
-        ),
+        _poll_disconnect(_disconnect_source(flag), token, poll_interval_s=0.001, on_cancel=_cb),
         timeout=0.5,
     )
     assert callback_fired
