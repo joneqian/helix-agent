@@ -59,12 +59,22 @@ async def test_track_in_flight_increments_and_decrements() -> None:
 @pytest.mark.asyncio
 async def test_track_in_flight_decrements_on_exception() -> None:
     """A handler that raises must still decrement the counter — otherwise
-    drain never reaches zero (subsystems/28 § 6: 'in-flight leak')."""
+    drain never reaches zero (subsystems/28 § 6: 'in-flight leak').
+
+    Use ``try`` / ``except`` rather than ``pytest.raises`` so CodeQL's
+    flow analysis sees the post-raise assertion as reachable.
+    """
     lc = Lifecycle()
-    with pytest.raises(RuntimeError, match="boom"):
+    caught: RuntimeError | None = None
+    try:
         async with lc.track_in_flight():
             assert lc.in_flight == 1
             raise RuntimeError("boom")
+    except RuntimeError as exc:
+        caught = exc
+
+    assert caught is not None
+    assert "boom" in str(caught)
     assert lc.in_flight == 0
 
 
