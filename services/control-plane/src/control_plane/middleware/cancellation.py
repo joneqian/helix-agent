@@ -30,7 +30,6 @@ deadline share one source of truth.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -46,11 +45,6 @@ logger = logging.getLogger("helix.control_plane.cancellation")
 #: Cancellation reason published on ``request.state.cancel_reason`` when
 #: the poll task observes ``http.disconnect``.
 CLIENT_DISCONNECTED = "client_disconnected"
-
-
-class _DisconnectSource(Awaitable[bool]):
-    """Protocol-like alias for ``Request.is_disconnected`` so tests can
-    inject a fake disconnect signal without spinning up an ASGI server."""
 
 
 async def _poll_disconnect(
@@ -113,5 +107,7 @@ class CancellationMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         finally:
             poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await poll_task
+            except asyncio.CancelledError:
+                pass
