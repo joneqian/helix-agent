@@ -40,6 +40,10 @@ from helix_agent.common.context import (
     get_current_tenant,
     get_current_trace_id,
 )
+from helix_agent.common.observability.propagation import (
+    current_span_id_hex,
+    current_trace_id_hex,
+)
 
 # Mandatory keys per § 5.3. Order is preserved in JSON output for
 # operator-friendly grep.
@@ -130,7 +134,11 @@ class HelixJsonFormatter(logging.Formatter):
             .replace("+00:00", "Z")
         )
         tenant = get_current_tenant()
-        trace_id = get_current_trace_id()
+        # Prefer the OTel active span (Stream A.8) over the contextvar
+        # fallback — the formatter sees both an init_tracing()'d process
+        # and a bare unit test cleanly.
+        trace_id = current_trace_id_hex() or get_current_trace_id()
+        span_id = current_span_id_hex()
 
         payload: dict[str, Any] = {
             "timestamp": timestamp,
@@ -141,7 +149,7 @@ class HelixJsonFormatter(logging.Formatter):
             "env": self._env,
             "tenant": str(tenant) if tenant is not None else None,
             "trace_id": trace_id,
-            "span_id": None,  # Stream A.8 wires OTel active-span lookup.
+            "span_id": span_id,
         }
 
         extras = self._collect_extras(record)

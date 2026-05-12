@@ -170,3 +170,40 @@ def test_uuid_in_extras_serializes_via_isoformat_fallback(
     get_logger("helix.test").info("evt", extra={"thread_id": other})
     record = _last_record(stream)
     assert record["thread_id"] == str(other)
+
+
+def test_span_id_populated_inside_helix_span(stream: io.StringIO) -> None:
+    """Stream A.8 — span_id flows from the active OTel span into the log."""
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from helix_agent.common.observability import (
+        HelixComponent,
+        helix_span,
+        init_tracing,
+    )
+
+    init_logging(service="cp", env="dev", stream=stream)
+    provider = init_tracing(
+        service_name="cp",
+        env="dev",
+        span_processor=SimpleSpanProcessor(InMemorySpanExporter()),
+    )
+    try:
+        with helix_span(HelixComponent.ORCHESTRATOR, "evt"):
+            get_logger("helix.test").info("inside_span")
+    finally:
+        provider.shutdown()
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if isinstance(h.formatter, HelixJsonFormatter):
+                root.removeHandler(h)
+
+    record = _last_record(stream)
+    # Both populated by OTel; lowercase hex of fixed lengths.
+    assert isinstance(record["trace_id"], str)
+    assert len(record["trace_id"]) == 32
+    assert isinstance(record["span_id"], str)
+    assert len(record["span_id"]) == 16
