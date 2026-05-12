@@ -8,7 +8,14 @@ license = "Apache-2.0"
 authors = [
     { name = "joneqian", email = "qian.qing0926@gmail.com" },
 ]
-dependencies = []
+dependencies = [
+    # Stream A.8 — OTel SDK + W3C Trace Context.
+    # The API + SDK split lets call sites depend on the stable API without
+    # pulling the gRPC exporter; init_tracing() lazy-imports the OTLP path.
+    "opentelemetry-api>=1.27,<2",
+    "opentelemetry-sdk>=1.27,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+]
 
 [build-system]
 requires = ["hatchling"]
