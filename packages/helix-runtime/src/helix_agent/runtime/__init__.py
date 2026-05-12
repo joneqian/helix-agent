@@ -9,6 +9,27 @@ from helix_agent.runtime.checkpointer import (
 from helix_agent.runtime.checkpointer import (
     make_checkpointer as make_checkpointer,
 )
+from helix_agent.runtime.context import (
+    get_current_tenant as get_current_tenant,
+)
+from helix_agent.runtime.context import (
+    get_current_trace_id as get_current_trace_id,
+)
+from helix_agent.runtime.context import (
+    require_current_tenant as require_current_tenant,
+)
+from helix_agent.runtime.context import (
+    reset_current_tenant as reset_current_tenant,
+)
+from helix_agent.runtime.context import (
+    reset_current_trace_id as reset_current_trace_id,
+)
+from helix_agent.runtime.context import (
+    set_current_tenant as set_current_tenant,
+)
+from helix_agent.runtime.context import (
+    set_current_trace_id as set_current_trace_id,
+)
 from helix_agent.runtime.event_log import (
     DbEventStore as DbEventStore,
 )
@@ -17,6 +38,18 @@ from helix_agent.runtime.event_log import (
 )
 from helix_agent.runtime.event_log import (
     InMemoryEventStore as InMemoryEventStore,
+)
+from helix_agent.runtime.runs import (
+    DisconnectMode as DisconnectMode,
+)
+from helix_agent.runtime.runs import (
+    RunManager as RunManager,
+)
+from helix_agent.runtime.runs import (
+    RunRecord as RunRecord,
+)
+from helix_agent.runtime.runs import (
+    RunStatus as RunStatus,
 )
 from helix_agent.runtime.store import StoreBackend as StoreBackend
 from helix_agent.runtime.store import make_store as make_store
@@ -47,14 +80,25 @@ __all__ = [
     "HEARTBEAT_SENTINEL",
     "CheckpointerBackend",
     "DbEventStore",
+    "DisconnectMode",
     "EventStore",
     "InMemoryEventStore",
     "InMemoryStreamBridge",
+    "RunManager",
+    "RunRecord",
+    "RunStatus",
     "StoreBackend",
     "StreamBridge",
     "StreamBridgeBackend",
     "StreamEvent",
+    "get_current_tenant",
+    "get_current_trace_id",
     "make_checkpointer",
     "make_store",
     "make_stream_bridge",
+    "require_current_tenant",
+    "reset_current_tenant",
+    "reset_current_trace_id",
+    "set_current_tenant",
+    "set_current_trace_id",
 ]
