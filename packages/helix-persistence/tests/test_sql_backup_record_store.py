@@ -74,6 +74,17 @@ def sql_store(postgres_container: PostgresContainer) -> Iterator[SqlStoreFixture
     cfg.set_main_option("sqlalchemy.url", _sync_dsn(postgres_container))
     command.upgrade(cfg, "head")
 
+    # The postgres_container fixture is session-scoped, so backup_record and
+    # dr_drill data accumulates across tests. ``latest()`` has no natural
+    # tenant scope (unlike audit_log) so we truncate to isolate each test.
+    sync_url = _sync_dsn(postgres_container)
+    from sqlalchemy import create_engine, text
+
+    sync_engine = create_engine(sync_url)
+    with sync_engine.begin() as conn:
+        conn.execute(text("TRUNCATE backup_record, dr_drill RESTART IDENTITY"))
+    sync_engine.dispose()
+
     engine = create_async_engine_from_config(DatabaseConfig(dsn=_async_dsn(postgres_container)))
     session_factory = create_async_session_factory(engine)
     yield SqlBackupRecordStore(session_factory), engine
