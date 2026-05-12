@@ -67,3 +67,8 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_burst: int = Field(default=60, gt=0)
     rate_limit_per_second: float = Field(default=20.0, gt=0)
+
+    # ------------------------------------------------------------------ cancellation (B.3)
+    # ADR B-2: 50 ms cadence + 50 ms scheduler drift + 100 ms handler
+    # deadline_check ≈ 200 ms detection budget (verification gate #3).
+    cancellation_poll_interval_s: float = Field(default=0.05, gt=0)

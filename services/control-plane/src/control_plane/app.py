@@ -29,6 +29,8 @@ from fastapi import FastAPI
 from control_plane.api import build_health_router, build_metrics_router
 from control_plane.middleware import (
     AuditContextMiddleware,
+    CancellationMiddleware,
+    DeadlineMiddleware,
     InFlightMiddleware,
     ObservabilityMiddleware,
     RateLimitMiddleware,
@@ -130,7 +132,21 @@ def create_app(
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
     # therefore register innermost first.
+    #
+    # Effective execution order (outermost → innermost):
+    #   1. ObservabilityMiddleware  — open span, record timing
+    #   2. AuditContextMiddleware   — set tenant / actor ctxvar
+    #   3. RateLimitMiddleware      — 429 short-circuit (B.2)
+    #   4. CancellationMiddleware   — mint CancelToken + disconnect poll
+    #   5. DeadlineMiddleware       — consume CancelToken + seed
+    #                                 DeadlineContext from header
+    #   6. InFlightMiddleware       — Lifecycle.track_in_flight (drain)
     app.add_middleware(InFlightMiddleware, lifecycle=resolved_lifecycle)
+    app.add_middleware(DeadlineMiddleware)
+    app.add_middleware(
+        CancellationMiddleware,
+        poll_interval_s=resolved_settings.cancellation_poll_interval_s,
+    )
     app.add_middleware(
         RateLimitMiddleware,
         limiter=resolved_limiter,
