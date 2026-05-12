@@ -114,3 +114,16 @@ class AuditQuery(BaseModel):
     to_ts: datetime | None = None
     limit: int = Field(default=100, le=1000)
     cursor: str | None = Field(default=None, description="Opaque base64 cursor")
+
+
+class AuditPage(BaseModel):
+    """One page of ``AuditEntry`` results plus an opaque next-cursor.
+
+    ``next_cursor`` is ``None`` when the result set is exhausted; otherwise
+    pass it back as :attr:`AuditQuery.cursor` to fetch the next page.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    entries: list[AuditEntry]
+    next_cursor: str | None = None
