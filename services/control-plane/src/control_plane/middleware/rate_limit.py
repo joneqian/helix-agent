@@ -19,9 +19,10 @@ plus a ``Retry-After`` header and the project-wide error envelope.
 
 from __future__ import annotations
 
-import hashlib
+import hmac
 import logging
 import math
+import secrets
 from collections.abc import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -42,15 +43,27 @@ _rate_limit_decisions = helix_counter(
     ("dimension", "decision"),
 )
 
+# Process-local HMAC key used to derive bucket identifiers from raw header
+# values. HMAC (rather than a bare hash) keeps the bucket map free of any
+# reversible secret material: if the process is dumped, an attacker cannot
+# recover the raw header without also recovering this key, and this key
+# never leaves the process. Rotated implicitly on every restart.
+_BUCKET_HMAC_KEY = secrets.token_bytes(32)
 
-def _hash_api_key(api_key: str) -> str:
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+
+def _derive_bucket_id(value: str) -> str:
+    """Return a stable, non-reversible 16-char id for a request-scoped value.
+
+    Not credential storage — this is purely a bucket-index derivation, so
+    HMAC-SHA-256 (fast + keyed) is the correct primitive over a slow KDF.
+    """
+    return hmac.new(_BUCKET_HMAC_KEY, value.encode("utf-8"), "sha256").hexdigest()[:16]
 
 
 def _resolve_bucket(request: Request) -> tuple[str, str]:
-    api_key = request.headers.get(API_KEY_HEADER)
-    if api_key:
-        return "apikey", _hash_api_key(api_key)
+    header_value = request.headers.get(API_KEY_HEADER)
+    if header_value:
+        return "apikey", _derive_bucket_id(header_value)
     host = request.client.host if request.client else "unknown"
     return "ip", host
 

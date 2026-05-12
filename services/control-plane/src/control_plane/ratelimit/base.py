@@ -39,4 +39,3 @@ class RateLimiter(Protocol):
 
     async def acquire(self, *, dimension: str, key: str) -> RateLimitDecision:
         """Return :class:`RateLimitDecision`; never raises on bucket miss."""
-        ...
