@@ -52,7 +52,8 @@ class AuditRedactor(Protocol):
     Implementations must be **pure**: same input → same output, no I/O.
     """
 
-    def redact(self, details: Mapping[str, Any]) -> RedactionResult: ...
+    def redact(self, details: Mapping[str, Any]) -> RedactionResult:
+        """Return a redacted copy of ``details`` plus per-pattern hit counts."""
 
 
 class DefaultSecretRedactor:

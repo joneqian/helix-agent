@@ -45,7 +45,8 @@ class AuditFallbackQueue(Protocol):
     part of the M0 contract — it lands with the reaper batch.
     """
 
-    async def enqueue(self, entry: AuditEntry, *, reason: str) -> None: ...
+    async def enqueue(self, entry: AuditEntry, *, reason: str) -> None:
+        """Append a failed entry to the queue."""
 
 
 class InMemoryAuditFallbackQueue:
