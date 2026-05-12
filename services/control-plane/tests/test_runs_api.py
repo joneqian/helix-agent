@@ -14,6 +14,12 @@ from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.common.deadline import CancelToken
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
 from helix_agent.protocol import AuditQuery
+from tests.auth_fixtures import (
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+    build_test_jwt_verifier,
+    make_test_jwt,
+)
 
 _DEFAULT_TENANT = DEFAULT_DEV_TENANT_ID
 
@@ -56,13 +62,21 @@ async def runs_client(audit_store: InMemoryAuditLogStore) -> AsyncIterator[Async
         rate_limit_per_second=10_000.0,
         # Deterministic, no inter-token sleep.
         run_fake_token_delay_s=0.0,
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
     )
     app = create_app(
         settings=settings,
         audit_logger=build_default_audit_logger(audit_store),
+        jwt_verifier=build_test_jwt_verifier(),
     )
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://control-plane.test") as client:
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_DEFAULT_TENANT)}"}
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://control-plane.test",
+        headers=headers,
+    ) as client:
         await client.post("/v1/agents", json={"manifest_yaml": _AGENT_YAML})
         yield client
 

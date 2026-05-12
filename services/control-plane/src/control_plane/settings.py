@@ -78,3 +78,37 @@ class Settings(BaseSettings):
     # this knob disappears; the field stays for now so tests can drive
     # the loop deterministically (``0.0`` = no delay).
     run_fake_token_delay_s: float = Field(default=0.005, ge=0)
+
+    # ------------------------------------------------------------------ auth (C.1)
+    # OIDC issuer used to validate the ``iss`` JWT claim and to derive
+    # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default
+    # points at the Keycloak service in ``infra/docker-compose.yml``.
+    oidc_issuer: str = "http://keycloak:8080/realms/helix-agent"
+
+    #: Accepted JWT ``aud`` values. Anthropic / Keycloak service-account
+    #: tokens typically carry the client id here.
+    oidc_audience: list[str] = Field(default_factory=lambda: ["helix-agent-api-internal"])
+
+    #: Optional explicit JWKS URI. ``None`` → derived from ``oidc_issuer``
+    #: + Keycloak's well-known ``/protocol/openid-connect/certs`` path.
+    oidc_jwks_uri: str | None = None
+
+    #: Per-process TTL for the JWKS cache (seconds). Keycloak default key
+    #: rotation cadence is daily; 300s gives bounded propagation delay
+    #: without hammering Keycloak.
+    oidc_jwks_cache_ttl_s: int = Field(default=300, gt=0)
+
+    #: Leeway when validating ``exp`` (seconds). Clock skew tolerance.
+    oidc_jwt_leeway_s: int = Field(default=30, ge=0)
+
+    #: Path-prefix exemption list. Health + metrics are always allowed
+    #: through; any other path requires a valid JWT in M0.
+    auth_exempt_path_prefixes: list[str] = Field(
+        default_factory=lambda: ["/healthz", "/metrics"],
+    )
+
+    def resolve_jwks_uri(self) -> str:
+        """Return the explicit JWKS URI or derive it from the issuer."""
+        if self.oidc_jwks_uri:
+            return self.oidc_jwks_uri
+        return self.oidc_issuer.rstrip("/") + "/protocol/openid-connect/certs"

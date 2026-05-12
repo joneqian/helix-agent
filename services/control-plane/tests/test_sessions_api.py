@@ -12,6 +12,12 @@ from control_plane.audit import build_default_audit_logger
 from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
 from helix_agent.protocol import AuditQuery
+from tests.auth_fixtures import (
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+    build_test_jwt_verifier,
+    make_test_jwt,
+)
 
 _DEFAULT_TENANT = DEFAULT_DEV_TENANT_ID
 
@@ -52,10 +58,21 @@ async def session_client(audit_store: InMemoryAuditLogStore) -> AsyncIterator[As
         auth_mode="dev",
         rate_limit_burst=10_000,
         rate_limit_per_second=10_000.0,
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
     )
-    app = create_app(settings=settings, audit_logger=build_default_audit_logger(audit_store))
+    app = create_app(
+        settings=settings,
+        audit_logger=build_default_audit_logger(audit_store),
+        jwt_verifier=build_test_jwt_verifier(),
+    )
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://control-plane.test") as client:
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_DEFAULT_TENANT)}"}
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://control-plane.test",
+        headers=headers,
+    ) as client:
         # Seed the agent so /v1/sessions can find it.
         await client.post("/v1/agents", json={"manifest_yaml": _AGENT_YAML})
         yield client
@@ -233,15 +250,17 @@ async def test_transition_404_for_unknown_thread(session_client: AsyncClient) ->
 
 @pytest.mark.asyncio
 async def test_other_tenant_cannot_see_session(session_client: AsyncClient) -> None:
+    from uuid import UUID
+
     create = await session_client.post(
         "/v1/sessions",
         json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
-        headers={"X-Helix-Tenant": str(_DEFAULT_TENANT)},
     )
     tid = create.json()["data"]["thread_id"]
-    other = "11111111-1111-1111-1111-111111111111"
+    other_tenant = UUID("11111111-1111-1111-1111-111111111111")
+    other_jwt = make_test_jwt(tenant_id=other_tenant)
     response = await session_client.get(
         f"/v1/sessions/{tid}",
-        headers={"X-Helix-Tenant": other},
+        headers={"Authorization": f"Bearer {other_jwt}"},
     )
     assert response.status_code == 404

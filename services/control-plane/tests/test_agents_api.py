@@ -12,6 +12,12 @@ from control_plane.audit import build_default_audit_logger
 from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
 from helix_agent.protocol import AuditQuery
+from tests.auth_fixtures import (
+    TEST_AUDIENCE,
+    TEST_ISSUER,
+    build_test_jwt_verifier,
+    make_test_jwt,
+)
 
 _DEFAULT_TENANT = DEFAULT_DEV_TENANT_ID
 
@@ -54,11 +60,22 @@ async def b5_client(audit_store: InMemoryAuditLogStore) -> AsyncIterator[AsyncCl
         auth_mode="dev",
         rate_limit_burst=10_000,
         rate_limit_per_second=10_000.0,
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
     )
     audit_logger = build_default_audit_logger(audit_store)
-    app = create_app(settings=settings, audit_logger=audit_logger)
+    app = create_app(
+        settings=settings,
+        audit_logger=audit_logger,
+        jwt_verifier=build_test_jwt_verifier(),
+    )
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://control-plane.test") as client:
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_DEFAULT_TENANT)}"}
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://control-plane.test",
+        headers=headers,
+    ) as client:
         yield client
 
 
@@ -222,14 +239,15 @@ async def test_delete_404_when_missing(b5_client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_other_tenant_cannot_see_agent(b5_client: AsyncClient) -> None:
-    await b5_client.post(
-        "/v1/agents",
-        json={"manifest_yaml": _VALID_YAML},
-        headers={"X-Helix-Tenant": str(_DEFAULT_TENANT)},
-    )
-    other_tenant = "11111111-1111-1111-1111-111111111111"
+    from uuid import UUID
+
+    # Default ``b5_client`` JWT is tied to ``_DEFAULT_TENANT``.
+    await b5_client.post("/v1/agents", json={"manifest_yaml": _VALID_YAML})
+
+    other_tenant = UUID("11111111-1111-1111-1111-111111111111")
+    other_jwt = make_test_jwt(tenant_id=other_tenant)
     response = await b5_client.get(
         "/v1/agents/code-reviewer/1.0.0",
-        headers={"X-Helix-Tenant": other_tenant},
+        headers={"Authorization": f"Bearer {other_jwt}"},
     )
     assert response.status_code == 404

@@ -34,9 +34,11 @@ from control_plane.api import (
     build_sessions_router,
 )
 from control_plane.audit import build_default_audit_logger
+from control_plane.auth import HTTPJWKSProvider, JWTVerifier
 from control_plane.manifest import ManifestLoader
 from control_plane.middleware import (
     AuditContextMiddleware,
+    AuthMiddleware,
     CancellationMiddleware,
     DeadlineMiddleware,
     InFlightMiddleware,
@@ -52,20 +54,11 @@ from helix_agent.persistence.agent_spec import AgentSpecStore, InMemoryAgentSpec
 from helix_agent.persistence.thread_meta import InMemoryThreadMetaStore, ThreadMetaStore
 from helix_agent.runtime.audit.logger import AuditLogger
 
-__all__ = ["ProdAuthModeNotReadyError", "create_app"]
+__all__ = ["create_app"]
 
 logger = logging.getLogger("helix.control_plane")
 
 _VERSION = "0.0.0"
-
-
-class ProdAuthModeNotReadyError(RuntimeError):
-    """Raised when ``HELIX_AGENT_AUTH_MODE=prod`` is requested before C.1 lands.
-
-    ADR B-5 — the prod path needs OIDC/JWT validation which Stream C.1
-    delivers. Until then we refuse to boot rather than serve traffic
-    with the dev header-trust middleware.
-    """
 
 
 def create_app(
@@ -77,6 +70,7 @@ def create_app(
     thread_meta_repo: ThreadMetaStore | None = None,
     audit_logger: AuditLogger | None = None,
     manifest_loader: ManifestLoader | None = None,
+    jwt_verifier: JWTVerifier | None = None,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
@@ -86,18 +80,11 @@ def create_app(
     :param rate_limiter: Optional pre-built limiter (tests inject a stub
         or a tuned bucket). Defaults to :class:`InProcessTokenBucketLimiter`
         sized from ``settings.rate_limit_*``.
-    :raises ProdAuthModeNotReadyError: if ``settings.auth_mode == "prod"``
-        (ADR B-5 — waits for C.1).
+    :param jwt_verifier: Optional pre-built JWT verifier. Tests provide a
+        :class:`StaticJWKSProvider`-backed verifier to avoid HTTP calls to
+        Keycloak; production wiring builds one from ``settings`` (C.1).
     """
     resolved_settings = settings or Settings()
-    if resolved_settings.auth_mode == "prod":
-        msg = (
-            "HELIX_AGENT_AUTH_MODE=prod is not yet supported; the prod "
-            "path requires C.1 OIDC middleware. Run with auth_mode=dev "
-            "until the C.1 PR lands."
-        )
-        raise ProdAuthModeNotReadyError(msg)
-
     resolved_lifecycle = lifecycle or Lifecycle()
     resolved_limiter = rate_limiter or InProcessTokenBucketLimiter(
         capacity=resolved_settings.rate_limit_burst,
@@ -107,6 +94,7 @@ def create_app(
     resolved_threads = thread_meta_repo or InMemoryThreadMetaStore()
     resolved_audit = audit_logger or build_default_audit_logger()
     resolved_loader = manifest_loader or ManifestLoader()
+    resolved_verifier = jwt_verifier or _build_default_jwt_verifier(resolved_settings)
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -151,6 +139,7 @@ def create_app(
     app.state.thread_meta_repo = resolved_threads
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader
+    app.state.jwt_verifier = resolved_verifier
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
@@ -158,12 +147,13 @@ def create_app(
     #
     # Effective execution order (outermost → innermost):
     #   1. ObservabilityMiddleware  — open span, record timing
-    #   2. AuditContextMiddleware   — set tenant / actor ctxvar
-    #   3. RateLimitMiddleware      — 429 short-circuit (B.2)
-    #   4. CancellationMiddleware   — mint CancelToken + disconnect poll
-    #   5. DeadlineMiddleware       — consume CancelToken + seed
+    #   2. AuthMiddleware           — verify JWT → request.state.principal (C.1)
+    #   3. AuditContextMiddleware   — project principal.tenant_id → ctxvar
+    #   4. RateLimitMiddleware      — 429 short-circuit (B.2)
+    #   5. CancellationMiddleware   — mint CancelToken + disconnect poll
+    #   6. DeadlineMiddleware       — consume CancelToken + seed
     #                                 DeadlineContext from header
-    #   6. InFlightMiddleware       — Lifecycle.track_in_flight (drain)
+    #   7. InFlightMiddleware       — Lifecycle.track_in_flight (drain)
     app.add_middleware(InFlightMiddleware, lifecycle=resolved_lifecycle)
     app.add_middleware(DeadlineMiddleware)
     app.add_middleware(
@@ -180,6 +170,12 @@ def create_app(
         default_tenant_id=resolved_settings.default_dev_tenant_id,
         default_actor_id=resolved_settings.default_dev_actor_id,
     )
+    app.add_middleware(
+        AuthMiddleware,
+        verifier=resolved_verifier,
+        exempt_path_prefixes=tuple(resolved_settings.auth_exempt_path_prefixes),
+        audit_logger=resolved_audit,
+    )
     app.add_middleware(ObservabilityMiddleware)
 
     app.include_router(build_health_router(health_provider))
@@ -189,3 +185,17 @@ def create_app(
     app.include_router(build_runs_router())
 
     return app
+
+
+def _build_default_jwt_verifier(settings: Settings) -> JWTVerifier:
+    """Construct a Keycloak-backed JWT verifier from settings (C.1)."""
+    provider = HTTPJWKSProvider(
+        settings.resolve_jwks_uri(),
+        cache_ttl_s=float(settings.oidc_jwks_cache_ttl_s),
+    )
+    return JWTVerifier(
+        jwks_provider=provider,
+        issuer=settings.oidc_issuer,
+        audience=settings.oidc_audience,
+        leeway_s=settings.oidc_jwt_leeway_s,
+    )

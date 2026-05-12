@@ -29,6 +29,12 @@ from helix_agent.protocol.audit import (
     AuditQuery,
     AuditResult,
 )
+from helix_agent.protocol.auth import (
+    AuthMethod,
+    JWTClaims,
+    Principal,
+    SubjectType,
+)
 from helix_agent.protocol.dr import (
     BackupAssetType,
     BackupRecord,
@@ -51,6 +57,7 @@ __all__ = [
     "AuditPage",
     "AuditQuery",
     "AuditResult",
+    "AuthMethod",
     "BackupAssetType",
     "BackupRecord",
     "BackupStatus",
@@ -63,14 +70,17 @@ __all__ = [
     "EventRecord",
     "EventType",
     "FilesystemSpec",
+    "JWTClaims",
     "MemorySpec",
     "ModelSpec",
     "MountSpec",
     "NetworkSpec",
     "ObservabilitySpec",
     "PolicySpec",
+    "Principal",
     "ResourceSpec",
     "SandboxSpec",
+    "SubjectType",
     "SystemPromptSpec",
     "TenantConfig",
     "ThreadMeta",

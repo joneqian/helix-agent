@@ -22,6 +22,10 @@ dependencies = [
     # Stream B.4 — YAML loader + Jinja2 template rendering.
     "pyyaml>=6.0,<7",
     "jinja2>=3.1,<4",
+    # Stream C.1 — OIDC + RS256 JWT verification.
+    "pyjwt[crypto]>=2.9,<3",
+    "cryptography>=43,<46",
+    "httpx>=0.27,<1",
 ]
 
 [build-system]
