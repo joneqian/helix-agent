@@ -30,6 +30,7 @@ from control_plane.api import (
     build_agents_router,
     build_health_router,
     build_metrics_router,
+    build_runs_router,
     build_sessions_router,
 )
 from control_plane.audit import build_default_audit_logger
@@ -185,5 +186,6 @@ def create_app(
     app.include_router(build_metrics_router())
     app.include_router(build_agents_router())
     app.include_router(build_sessions_router())
+    app.include_router(build_runs_router())
 
     return app
