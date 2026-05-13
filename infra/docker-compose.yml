@@ -76,6 +76,33 @@ services:
       timeout: 3s
       retries: 15
 
+  redis:
+    # Redis 7 — quota / rate-limit engine backing store (Stream C.5).
+    # AOF persistence with everysec fsync keeps a 1s RPO without the
+    # latency of always; 512 MB maxmemory matches subsystems/16 § 3.2.
+    # ``allkeys-lru`` keeps the hottest tenant buckets when memory is
+    # tight; budget keys are short-lived (per month) so eviction is a
+    # non-issue.
+    image: redis:7-alpine
+    container_name: helix-redis
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--appendfsync"
+      - "everysec"
+      - "--maxmemory"
+      - "512mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
   minio:
     # MinIO S3-compatible object storage (Stream A.5 / ADR-0004).
     # Local dev stand-in for Aliyun OSS — same protocol, zero code changes

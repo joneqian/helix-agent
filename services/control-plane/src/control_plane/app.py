@@ -31,10 +31,12 @@ from control_plane.api import (
     build_api_keys_router,
     build_health_router,
     build_metrics_router,
+    build_quota_router,
     build_role_bindings_router,
     build_runs_router,
     build_service_accounts_router,
     build_sessions_router,
+    build_tenant_quotas_router,
 )
 from control_plane.audit import build_default_audit_logger
 from control_plane.auth import (
@@ -55,6 +57,12 @@ from control_plane.middleware import (
     RateLimitMiddleware,
     RLSContextMiddleware,
 )
+from control_plane.quota import (
+    InMemoryQuotaService,
+    QuotaService,
+    RedisQuotaService,
+    ReservationReaper,
+)
 from control_plane.ratelimit import InProcessTokenBucketLimiter, RateLimiter
 from control_plane.settings import Settings
 from helix_agent.common.health import DefaultHealthProvider
@@ -68,6 +76,12 @@ from helix_agent.persistence.auth import (
     InMemoryServiceAccountStore,
     RoleBindingStore,
     ServiceAccountStore,
+)
+from helix_agent.persistence.quota import (
+    InMemoryTenantQuotaStore,
+    InMemoryTokenReservationStore,
+    TenantQuotaStore,
+    TokenReservationStore,
 )
 from helix_agent.persistence.thread_meta import InMemoryThreadMetaStore, ThreadMetaStore
 from helix_agent.runtime.audit.logger import AuditLogger
@@ -94,6 +108,10 @@ def create_app(
     api_key_repo: ApiKeyStore | None = None,
     role_binding_repo: RoleBindingStore | None = None,
     api_key_verifier: ApiKeyVerifier | None = None,
+    tenant_quota_repo: TenantQuotaStore | None = None,
+    token_reservation_repo: TokenReservationStore | None = None,
+    quota_service: QuotaService | None = None,
+    enable_reaper: bool = True,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
@@ -123,6 +141,23 @@ def create_app(
     resolved_api_keys = api_key_repo or InMemoryApiKeyStore()
     resolved_role_bindings = role_binding_repo or InMemoryRoleBindingStore()
     resolved_api_key_verifier = api_key_verifier or ApiKeyVerifier.from_store(resolved_api_keys)
+    resolved_tenant_quotas = tenant_quota_repo or InMemoryTenantQuotaStore()
+    resolved_reservations = token_reservation_repo or InMemoryTokenReservationStore()
+    resolved_quota = quota_service or _build_default_quota_service(
+        settings=resolved_settings,
+        quota_store=resolved_tenant_quotas,
+        reservation_store=resolved_reservations,
+    )
+    reaper: ReservationReaper | None = (
+        ReservationReaper(
+            reservation_store=resolved_reservations,
+            max_age_s=resolved_settings.quota_reservation_max_age_s,
+            interval_s=resolved_settings.quota_reaper_interval_s,
+            batch_size=resolved_settings.quota_reaper_batch_size,
+        )
+        if enable_reaper
+        else None
+    )
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -143,6 +178,8 @@ def create_app(
             env=resolved_settings.env,
             otlp_endpoint=resolved_settings.otlp_traces_endpoint,
         )
+        if reaper is not None:
+            reaper.start()
         resolved_lifecycle.mark_ready()
         logger.info(
             "control_plane.lifespan.ready",
@@ -151,6 +188,8 @@ def create_app(
         try:
             yield
         finally:
+            if reaper is not None:
+                await reaper.stop()
             await resolved_lifecycle.graceful_shutdown()
             logger.info("control_plane.lifespan.stopped")
 
@@ -173,6 +212,10 @@ def create_app(
     app.state.api_key_repo = resolved_api_keys
     app.state.role_binding_repo = resolved_role_bindings
     app.state.api_key_verifier = resolved_api_key_verifier
+    app.state.tenant_quota_repo = resolved_tenant_quotas
+    app.state.token_reservation_repo = resolved_reservations
+    app.state.quota_service = resolved_quota
+    app.state.quota_reaper = reaper
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
@@ -224,6 +267,8 @@ def create_app(
     app.include_router(build_service_accounts_router())
     app.include_router(build_api_keys_router())
     app.include_router(build_role_bindings_router())
+    app.include_router(build_quota_router())
+    app.include_router(build_tenant_quotas_router())
 
     return app
 
@@ -250,4 +295,41 @@ def _build_default_mtls_verifier(settings: Settings) -> MTLSVerifier | None:
         allowed_subjects=settings.mtls_allowed_service_subjects,
         system_tenant_id=settings.mtls_system_tenant_id,
         require_uri_san=settings.mtls_require_uri_san,
+    )
+
+
+def _build_default_quota_service(
+    *,
+    settings: Settings,
+    quota_store: TenantQuotaStore,
+    reservation_store: TokenReservationStore,
+) -> QuotaService:
+    """Pick the quota implementation based on Settings.quota_redis_url.
+
+    Tests + dev (no redis URL) get the InMemoryQuotaService. Prod
+    points ``HELIX_AGENT_QUOTA_REDIS_URL`` at the deployed Redis and
+    we wire the Lua-backed implementation.
+    """
+    if settings.quota_redis_url:
+        # Local import keeps redis-py off the import path for tests
+        # that never touch this branch.
+        import redis.asyncio as redis_async
+
+        client = redis_async.from_url(
+            settings.quota_redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+        return RedisQuotaService(
+            redis_client=client,
+            quota_store=quota_store,
+            reservation_store=reservation_store,
+            default_qps_limit=settings.quota_default_qps_limit,
+            default_qps_burst=settings.quota_default_qps_burst,
+        )
+    return InMemoryQuotaService(
+        quota_store=quota_store,
+        reservation_store=reservation_store,
+        default_qps_limit=settings.quota_default_qps_limit,
+        default_qps_burst=settings.quota_default_qps_burst,
     )

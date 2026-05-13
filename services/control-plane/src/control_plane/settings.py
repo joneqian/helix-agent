@@ -133,6 +133,36 @@ class Settings(BaseSettings):
     #: default — Keycloak / dev certs typically don't set one.
     mtls_require_uri_san: bool = False
 
+    # ------------------------------------------------------------------ quota (C.5)
+    #: Redis DSN for the quota engine (subsystems/16 § 3.2). When unset,
+    #: ``create_app`` falls back to the in-memory quota service so unit
+    #: tests stay fast. Set to ``redis://redis:6379/0`` in dev /
+    #: production.
+    quota_redis_url: str | None = None
+
+    #: Default per-tenant QPS limit applied when no ``tenant_quota`` row
+    #: exists for the ``qps`` dimension. ``None`` means "unlimited"
+    #: (M0 dev default — production sets a value through
+    #: ``tenant_quota``).
+    quota_default_qps_limit: int | None = None
+
+    #: Burst capacity for the default ``qps`` bucket. Ignored when
+    #: ``quota_default_qps_limit`` is None.
+    quota_default_qps_burst: int = Field(default=120, gt=0)
+
+    #: Reservation timeout (seconds). After this many seconds a
+    #: reservation in ``RESERVED`` state is auto-released by the reaper
+    #: (subsystems/16 § 5.4 — 30 minutes).
+    quota_reservation_max_age_s: int = Field(default=30 * 60, gt=0)
+
+    #: How often the reaper scans for expired reservations.
+    quota_reaper_interval_s: int = Field(default=10 * 60, gt=0)
+
+    #: Number of reservations to release per reaper cycle. Caps the
+    #: blast radius of a misconfiguration that leaks reservations en
+    #: masse.
+    quota_reaper_batch_size: int = Field(default=100, gt=0)
+
     def resolve_jwks_uri(self) -> str:
         """Return the explicit JWKS URI or derive it from the issuer."""
         if self.oidc_jwks_uri:

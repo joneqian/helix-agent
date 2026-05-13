@@ -364,6 +364,16 @@ async def get_admin_reader_session(request: Request, sm_admin) -> AsyncSession:
 
 ### 2.7 Quota 引擎（C.5/C.6）
 
+> **C.5 实施变更（2026-05-13）**：
+>
+> 1. **新增 RBAC action `check`**：服务级 mTLS principal 需要消费 quota 引擎（check / reserve / commit / release）但**不应**有改写 `tenant_quota` 配置的权限。把 `quota:write` 留给 ADMIN（配置 CRUD），新增 `quota:check` 给 OPERATOR（运行时调用）。VIEWER 仍只有 `quota:read`。
+> 2. **保留 admission wire 给 C.5b**：业务路由（`sessions:create` / `runs:create`）接 `quota.check()` 单独成一个后续 mini-PR，以保持 C.5 单点 review focus。当前 PR 提供 engine + endpoints + reaper 完整闭环，可直接被服务调用。
+> 3. **内部 + admin endpoints 分两组**：
+>    - `/v1/quota/{check,reserve,commit,release/{id}}` — service 调用，require `quota:check`
+>    - `/v1/tenants/{tenant_id}/quotas` GET/POST + `/v1/tenants/{tid}/quotas/{id}` DELETE — admin 调用，require `quota:read`/`write`/`delete`
+> 4. **CommitRequest 加 `tenant_id` 字段**：subsystems/16 § 3.3 仅描述 `reservation_id + actual_tokens`，但 Store 层校验需要 tenant_id。把 tenant_id 放在请求体上，前端从 JWT principal 投影 — 既能被 HTTP 调用也能被进程内 Python 调用使用同一个 DTO。
+> 5. **policy 写法**：3 张新表都用与 C.4 相同的 `NULLIF(current_setting('app.tenant_id', true), '')::uuid` 表达式，未设 GUC 时 fail-closed（NULL 比较返 NULL → 拒绝）而非抛 `InvalidTextRepresentation`。
+
 `docker-compose.yml` 新增 Redis（AOF + 512 MB maxmemory）。
 
 ```python
