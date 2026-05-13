@@ -34,7 +34,7 @@ from control_plane.api import (
     build_sessions_router,
 )
 from control_plane.audit import build_default_audit_logger
-from control_plane.auth import HTTPJWKSProvider, JWTVerifier
+from control_plane.auth import HTTPJWKSProvider, JWTVerifier, MTLSVerifier, build_mtls_verifier
 from control_plane.manifest import ManifestLoader
 from control_plane.middleware import (
     AuditContextMiddleware,
@@ -71,6 +71,7 @@ def create_app(
     audit_logger: AuditLogger | None = None,
     manifest_loader: ManifestLoader | None = None,
     jwt_verifier: JWTVerifier | None = None,
+    mtls_verifier: MTLSVerifier | None = None,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
@@ -95,6 +96,7 @@ def create_app(
     resolved_audit = audit_logger or build_default_audit_logger()
     resolved_loader = manifest_loader or ManifestLoader()
     resolved_verifier = jwt_verifier or _build_default_jwt_verifier(resolved_settings)
+    resolved_mtls = mtls_verifier or _build_default_mtls_verifier(resolved_settings)
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -140,6 +142,7 @@ def create_app(
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader
     app.state.jwt_verifier = resolved_verifier
+    app.state.mtls_verifier = resolved_mtls
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
@@ -175,6 +178,8 @@ def create_app(
         verifier=resolved_verifier,
         exempt_path_prefixes=tuple(resolved_settings.auth_exempt_path_prefixes),
         audit_logger=resolved_audit,
+        mtls_verifier=resolved_mtls,
+        mtls_header_name=resolved_settings.mtls_xfcc_header_name,
     )
     app.add_middleware(ObservabilityMiddleware)
 
@@ -198,4 +203,15 @@ def _build_default_jwt_verifier(settings: Settings) -> JWTVerifier:
         issuer=settings.oidc_issuer,
         audience=settings.oidc_audience,
         leeway_s=settings.oidc_jwt_leeway_s,
+    )
+
+
+def _build_default_mtls_verifier(settings: Settings) -> MTLSVerifier | None:
+    """Construct an mTLS verifier when the feature is enabled (C.2)."""
+    if not settings.mtls_enabled:
+        return None
+    return build_mtls_verifier(
+        allowed_subjects=settings.mtls_allowed_service_subjects,
+        system_tenant_id=settings.mtls_system_tenant_id,
+        require_uri_san=settings.mtls_require_uri_san,
     )

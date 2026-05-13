@@ -28,6 +28,12 @@ from control_plane.auth.jwt_verifier import (
     StaticJWKSProvider,
 )
 from control_plane.auth.middleware import AuthMiddleware
+from control_plane.auth.mtls import (
+    MTLSVerifier,
+    XfccElement,
+    build_mtls_verifier,
+    parse_xfcc_header,
+)
 
 __all__ = [
     "AuthBackendUnavailableError",
@@ -37,7 +43,11 @@ __all__ = [
     "InvalidTokenError",
     "JWKSProvider",
     "JWTVerifier",
+    "MTLSVerifier",
     "MissingCredentialsError",
     "StaticJWKSProvider",
     "TokenExpiredError",
+    "XfccElement",
+    "build_mtls_verifier",
+    "parse_xfcc_header",
 ]
