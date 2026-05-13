@@ -73,7 +73,11 @@ def test_async_factory_validates_paths(cert_triple: tuple[Path, Path, Path]) -> 
         ca_bundle_path=ca,
     )
     assert isinstance(client, httpx.AsyncClient)
-    assert str(client.base_url).startswith("https://control-plane.helix")
+    # Structured assert avoids ``str(...).startswith`` which CodeQL flags as
+    # ``py/incomplete-url-substring-sanitization`` (substring URL checks can
+    # be bypassed by attacker-controlled suffixes).
+    assert client.base_url.scheme == "https"
+    assert client.base_url.host == "control-plane.helix"
 
 
 def test_sync_factory_validates_paths(cert_triple: tuple[Path, Path, Path]) -> None:
