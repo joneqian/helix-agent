@@ -27,7 +27,6 @@ Failure modes (subsystems/16 § 6):
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import redis.asyncio as redis_async
@@ -139,7 +138,3 @@ class RedisTokenBucketLimiter:
 
 # Backwards-compat for code that imports the older suffix style.
 RedisRateLimiter = RedisTokenBucketLimiter
-
-# Internal alias so unit tests don't need to import a private name to
-# round-trip "did we use ceil on retry?"
-_ms_to_seconds_ceil = math.ceil

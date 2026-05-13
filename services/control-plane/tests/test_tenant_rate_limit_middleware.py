@@ -18,31 +18,6 @@ from tests.auth_fixtures import TEST_AUDIENCE, TEST_ISSUER, build_test_jwt_verif
 _TENANT = DEFAULT_DEV_TENANT_ID
 
 
-_AGENT_YAML = """\
-apiVersion: helix.io/v1
-kind: Agent
-metadata:
-  name: code-reviewer
-  version: "1.0.0"
-  tenant: platform-eng
-spec:
-  tenant_config: {}
-  model:
-    provider: anthropic
-    name: claude-sonnet-4-5
-  system_prompt:
-    template: "x"
-  sandbox:
-    resources: { cpu: "1.0", memory: "1Gi" }
-    network:
-      egress: proxy
-      allowlist: ["api.anthropic.com"]
-    filesystem:
-      readonly_root: true
-      writable: ["/workspace"]
-"""
-
-
 @pytest.fixture
 def audit_store() -> InMemoryAuditLogStore:
     return InMemoryAuditLogStore()
