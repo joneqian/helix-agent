@@ -48,6 +48,11 @@ Action = Literal[
     "sign",
     "approve",
     "force_destroy",
+    # ``check`` covers runtime quota operations (check / reserve /
+    # commit / release). Separating it from ``write`` lets us grant
+    # service principals (mTLS) the right to consume the quota engine
+    # without also letting them rewrite the tenant_quota config.
+    "check",
 ]
 
 
@@ -60,7 +65,7 @@ def _grants(role: Role) -> dict[Resource, set[Action]]:
             "sandbox": {"read", "force_destroy"},
             "secret": {"read", "write", "delete"},
             "audit": {"read"},
-            "quota": {"read", "write"},
+            "quota": {"read", "write", "delete", "check"},
             "user": {"read", "write"},
             "role_binding": {"read", "write", "delete"},
             "service_account": {"read", "write", "delete"},
@@ -73,7 +78,9 @@ def _grants(role: Role) -> dict[Resource, set[Action]]:
             "sandbox": {"read", "force_destroy"},
             "secret": {"read"},
             "audit": {"read"},
-            "quota": {"read"},
+            # Operators (mTLS service principals) consume the quota
+            # engine at runtime but cannot rewrite tenant_quota config.
+            "quota": {"read", "check"},
         }
     # VIEWER
     return {

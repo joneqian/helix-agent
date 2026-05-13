@@ -48,6 +48,11 @@ class AuditAction(StrEnum):
     SECRET_DELETE = "secret:delete"
     # quota
     QUOTA_RATE_LIMIT_DENIED = "quota:rate_limit_denied"
+    QUOTA_BUDGET_EXCEEDED = "quota:budget_exceeded"
+    QUOTA_CONFIG_READ = "quota:config_read"
+    QUOTA_CONFIG_WRITE = "quota:config_write"
+    QUOTA_CONFIG_DELETE = "quota:config_delete"
+    QUOTA_RESERVATION_EXPIRED = "quota:reservation_expired"
     # sandbox
     SANDBOX_FORCE_DESTROY = "sandbox:force_destroy"
     SANDBOX_QUOTA_DENIED = "sandbox:quota_denied"

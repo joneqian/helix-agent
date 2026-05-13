@@ -25,6 +25,24 @@ from helix_agent.persistence.models import BackupRecordRow as BackupRecordRow
 from helix_agent.persistence.models import DrDrillRow as DrDrillRow
 from helix_agent.persistence.models import EventLogRow as EventLogRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
+from helix_agent.persistence.quota import (
+    InMemoryTenantQuotaStore as InMemoryTenantQuotaStore,
+)
+from helix_agent.persistence.quota import (
+    InMemoryTokenReservationStore as InMemoryTokenReservationStore,
+)
+from helix_agent.persistence.quota import (
+    SqlTenantQuotaStore as SqlTenantQuotaStore,
+)
+from helix_agent.persistence.quota import (
+    SqlTokenReservationStore as SqlTokenReservationStore,
+)
+from helix_agent.persistence.quota import (
+    TenantQuotaStore as TenantQuotaStore,
+)
+from helix_agent.persistence.quota import (
+    TokenReservationStore as TokenReservationStore,
+)
 from helix_agent.persistence.rls import RLS_GUC_NAME as RLS_GUC_NAME
 from helix_agent.persistence.rls import build_rls_sessionmaker as build_rls_sessionmaker
 from helix_agent.persistence.rls import bypass_rls_var as bypass_rls_var
@@ -49,12 +67,18 @@ __all__ = [
     "EventLogRow",
     "InMemoryAuditLogStore",
     "InMemoryBackupRecordStore",
+    "InMemoryTenantQuotaStore",
     "InMemoryThreadMetaStore",
+    "InMemoryTokenReservationStore",
     "SqlAuditLogStore",
     "SqlBackupRecordStore",
+    "SqlTenantQuotaStore",
     "SqlThreadMetaStore",
+    "SqlTokenReservationStore",
+    "TenantQuotaStore",
     "ThreadMetaRow",
     "ThreadMetaStore",
+    "TokenReservationStore",
     "build_rls_sessionmaker",
     "bypass_rls_var",
     "create_async_engine_from_config",
