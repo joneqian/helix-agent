@@ -40,10 +40,14 @@ class BudgetExceededError(Exception):
 class QuotaService(Protocol):
     """Check / reserve / commit / release the per-tenant quota state."""
 
-    async def check(self, req: CheckRequest) -> CheckResult: ...
+    async def check(self, req: CheckRequest) -> CheckResult:
+        """Allow / deny a request against the per-tenant rate-limit dimensions."""
 
-    async def reserve_tokens(self, req: ReserveRequest) -> ReserveResult: ...
+    async def reserve_tokens(self, req: ReserveRequest) -> ReserveResult:
+        """Reserve ``estimated_tokens`` against the monthly budget."""
 
-    async def commit_tokens(self, req: CommitRequest) -> None: ...
+    async def commit_tokens(self, req: CommitRequest) -> None:
+        """Finalise a reservation with actual usage; refund the over-estimate."""
 
-    async def release_tokens(self, reservation_id: UUID, *, tenant_id: UUID) -> None: ...
+    async def release_tokens(self, reservation_id: UUID, *, tenant_id: UUID) -> None:
+        """Cancel a reservation; refund all reserved tokens."""

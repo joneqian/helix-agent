@@ -162,8 +162,12 @@ async def test_delete_returns_true_only_when_row_existed(
             patch=TenantQuotaPatch(dimension=QuotaDimension.QPS, scope={}, limit_value=1, burst=1),
             updated_by="admin",
         )
-        assert await quota_store.delete(quota_id=row.id, tenant_id=tenant) is True
-        assert await quota_store.delete(quota_id=row.id, tenant_id=tenant) is False
+        # Bind the await result before asserting — ``python -O`` strips
+        # ``assert`` and would drop the mutating ``delete`` call entirely.
+        first = await quota_store.delete(quota_id=row.id, tenant_id=tenant)
+        second = await quota_store.delete(quota_id=row.id, tenant_id=tenant)
+        assert first is True
+        assert second is False
     finally:
         await engine.dispose()
 
