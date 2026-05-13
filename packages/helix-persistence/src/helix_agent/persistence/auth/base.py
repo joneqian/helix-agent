@@ -73,7 +73,8 @@ class ServiceAccountStore(abc.ABC):
         """Raises :class:`DuplicateServiceAccountError` on ``(tenant_id, name)`` collision."""
 
     @abc.abstractmethod
-    async def get(self, *, tenant_id: UUID, service_account_id: UUID) -> ServiceAccount | None: ...
+    async def get(self, *, tenant_id: UUID, service_account_id: UUID) -> ServiceAccount | None:
+        """Fetch one row by id, scoped to ``tenant_id``."""
 
     @abc.abstractmethod
     async def list_by_tenant(
@@ -82,7 +83,8 @@ class ServiceAccountStore(abc.ABC):
         tenant_id: UUID,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[ServiceAccount]: ...
+    ) -> list[ServiceAccount]:
+        """Paginated list, newest first."""
 
     @abc.abstractmethod
     async def delete(self, *, tenant_id: UUID, service_account_id: UUID) -> bool:
@@ -122,7 +124,8 @@ class ApiKeyStore(abc.ABC):
         *,
         tenant_id: UUID,
         service_account_id: UUID,
-    ) -> list[ApiKey]: ...
+    ) -> list[ApiKey]:
+        """All keys for one service account; newest first."""
 
     @abc.abstractmethod
     async def revoke(self, *, tenant_id: UUID, api_key_id: UUID) -> bool:
@@ -149,7 +152,8 @@ class RoleBindingStore(abc.ABC):
         tenant_id: UUID,
         role: Role,
         granted_by: str,
-    ) -> RoleBinding: ...
+    ) -> RoleBinding:
+        """Raises :class:`DuplicateRoleBindingError` on conflict."""
 
     @abc.abstractmethod
     async def list_for_subject(
@@ -162,7 +166,9 @@ class RoleBindingStore(abc.ABC):
         """All role rows for a given subject; optionally filtered by tenant."""
 
     @abc.abstractmethod
-    async def list_for_tenant(self, *, tenant_id: UUID) -> list[RoleBinding]: ...
+    async def list_for_tenant(self, *, tenant_id: UUID) -> list[RoleBinding]:
+        """All role rows for the tenant — used by the admin UI."""
 
     @abc.abstractmethod
-    async def delete(self, *, tenant_id: UUID, role_binding_id: UUID) -> bool: ...
+    async def delete(self, *, tenant_id: UUID, role_binding_id: UUID) -> bool:
+        """Delete by id. Returns ``False`` if no row matched."""

@@ -60,12 +60,10 @@ def build_service_accounts_router() -> APIRouter:
                 created_by=principal.subject_id,
             )
         except DuplicateServiceAccountError as exc:
-            # ``name`` is a reserved LogRecord attribute — use a namespaced
-            # key so the structured-log formatter never trips a KeyError.
-            logger.info(
-                "service_account.create.duplicate",
-                extra={"sa_name": payload.name},
-            )
+            # Do not echo the user-supplied name into the log — CodeQL
+            # ``py/log-injection``. The tenant_id (from JWT) is logged by
+            # the ObservabilityMiddleware already; that's enough context.
+            logger.info("service_account.create.duplicate")
             raise HTTPException(
                 status_code=409,
                 detail={"code": "SERVICE_ACCOUNT_DUPLICATE", "message": "name already taken"},
