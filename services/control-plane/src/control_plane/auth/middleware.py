@@ -1,19 +1,19 @@
-"""``AuthMiddleware`` — JWT validation in front of the API surface.
+"""``AuthMiddleware`` — JWT + mTLS validation in front of the API surface.
 
-Stream C.1 only implements the **JWT branch**. The middleware exists in
-the request lifecycle between :class:`ObservabilityMiddleware` (outer) and
-:class:`AuditContextMiddleware` (inner) — Auth must run first so the
-downstream context-var publisher / rate limiter / handlers can read
-``request.state.principal``.
+Stream C.1 shipped the JWT branch; Stream C.2 added the mTLS branch.
+API Key (Stream C.3) will land as a third bearer-prefix recogniser. All
+three converge on the same :class:`Principal` envelope (ADR C-2 — single
+middleware, unified Principal).
 
-API key (Stream C.3) and mTLS (Stream C.2) branches will land as
-additional ``Authorization``-header / scope-based recognisers inside this
-same middleware (ADR C-2 — single middleware, unified Principal).
+Branch selection (first match wins):
 
-Endpoints exempt from authentication are matched by *prefix* — the
-defaults are ``/healthz`` and ``/metrics``. Exempt requests pass through
-without a principal; AuditContextMiddleware falls back to its dev defaults
-in that case.
+1. ``Authorization: Bearer <jwt>`` → :class:`JWTVerifier`
+2. ``X-Forwarded-Client-Cert: <XFCC>`` → :class:`MTLSVerifier`
+3. neither → ``401 AUTH_MISSING_CREDENTIALS``
+
+Endpoints exempt from authentication are matched by *prefix* — defaults
+are ``/healthz`` and ``/metrics``. Exempt requests pass through without a
+principal; AuditContextMiddleware falls back to its dev defaults.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from starlette.types import ASGIApp
 from control_plane.audit import emit
 from control_plane.auth.errors import AuthError, MissingCredentialsError
 from control_plane.auth.jwt_verifier import JWTVerifier
+from control_plane.auth.mtls import MTLSVerifier
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.protocol import AuditAction, AuditResult, Principal
 from helix_agent.runtime.audit.logger import AuditLogger
@@ -37,16 +38,16 @@ from helix_agent.runtime.audit.logger import AuditLogger
 logger = logging.getLogger("helix.control_plane.auth")
 
 _BEARER_PREFIX = "bearer "
+_DEFAULT_XFCC_HEADER = "x-forwarded-client-cert"
 
-# Audit failures are bucketed under a synthetic "system" tenant when we
-# couldn't extract one from the token. UUID is the nil-UUID for visibility
-# in dashboards (matches B-5's dev-default convention).
+# Audit failures are bucketed under a synthetic tenant when we couldn't
+# extract one from the credentials. Matches B-5's nil-UUID dev convention.
 _UNKNOWN_TENANT = UUID("00000000-0000-0000-0000-000000000000")
 _UNKNOWN_ACTOR = "unauthenticated"
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Verify the JWT and populate :attr:`Request.state.principal`."""
+    """Authenticate the request via JWT or mTLS, then populate ``request.state``."""
 
     def __init__(
         self,
@@ -55,12 +56,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         verifier: JWTVerifier,
         exempt_path_prefixes: Iterable[str] = ("/healthz", "/metrics"),
         audit_logger: AuditLogger | None = None,
+        mtls_verifier: MTLSVerifier | None = None,
+        mtls_header_name: str = _DEFAULT_XFCC_HEADER,
     ) -> None:
         super().__init__(app)
         self._verifier = verifier
         # Tuple so the prefix scan is O(n) but n is tiny (~2).
         self._exempt = tuple(p.rstrip("/") for p in exempt_path_prefixes)
         self._audit_logger = audit_logger
+        self._mtls_verifier = mtls_verifier
+        self._mtls_header = mtls_header_name
 
     async def dispatch(
         self,
@@ -70,29 +75,45 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if self._is_exempt(request.url.path):
             return await call_next(request)
 
-        token = _extract_bearer(request)
-        if token is None:
-            return await self._reject(request, MissingCredentialsError())
+        bearer = _extract_bearer(request)
+        if bearer is not None:
+            try:
+                claims = await self._verifier.verify(bearer)
+            except AuthError as exc:
+                return await self._reject(request, exc)
+            return await self._call_with_principal(
+                request, call_next, Principal.from_jwt_claims(claims)
+            )
 
-        try:
-            claims = await self._verifier.verify(token)
-        except AuthError as exc:
-            return await self._reject(request, exc)
+        if self._mtls_verifier is not None:
+            xfcc = request.headers.get(self._mtls_header)
+            if xfcc:
+                try:
+                    principal = self._mtls_verifier.verify(xfcc)
+                except AuthError as exc:
+                    return await self._reject(request, exc)
+                return await self._call_with_principal(request, call_next, principal)
 
-        principal = Principal.from_jwt_claims(claims)
-        request.state.principal = principal
-        # Legacy aliases — pre-C.1 handlers (audit emit, rate-limit key
-        # builder, runs.py) read these and continue to work unchanged.
-        request.state.tenant_id = principal.tenant_id
-        request.state.actor_id = principal.subject_id
-
-        return await call_next(request)
+        return await self._reject(request, MissingCredentialsError())
 
     def _is_exempt(self, path: str) -> bool:
         path_clean = path.rstrip("/")
         return any(
             path_clean == prefix or path_clean.startswith(prefix + "/") for prefix in self._exempt
         )
+
+    @staticmethod
+    async def _call_with_principal(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+        principal: Principal,
+    ) -> Response:
+        request.state.principal = principal
+        # Legacy aliases — pre-C.1 handlers (audit emit, rate-limit key
+        # builder, runs.py) read these and continue to work unchanged.
+        request.state.tenant_id = principal.tenant_id
+        request.state.actor_id = principal.subject_id
+        return await call_next(request)
 
     async def _reject(self, request: Request, error: AuthError) -> JSONResponse:
         # Server-side detail goes to the structured logger; the response

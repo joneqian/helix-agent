@@ -19,6 +19,8 @@ dependencies = [
     # exposition handler stays HTTP-framework-agnostic so Control Plane
     # (Stream B / FastAPI) can mount it however it likes.
     "prometheus-client>=0.21,<1",
+    # Stream C.2 — service-to-service HTTP with mTLS (internal_http).
+    "httpx>=0.27,<1",
 ]
 
 [build-system]

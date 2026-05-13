@@ -107,6 +107,32 @@ class Settings(BaseSettings):
         default_factory=lambda: ["/healthz", "/metrics"],
     )
 
+    # ------------------------------------------------------------------ mTLS (C.2)
+    #: Toggle the mTLS auth branch. When ``False``, ``AuthMiddleware``
+    #: only accepts JWTs. Useful for environments where the proxy hasn't
+    #: been configured to forward XFCC yet.
+    mtls_enabled: bool = True
+
+    #: Header forwarded by the reverse proxy (nginx / Envoy / Istio).
+    #: Lowercase per Starlette header normalisation.
+    mtls_xfcc_header_name: str = "x-forwarded-client-cert"
+
+    #: CN allowlist for service certificates. Empty list means **no
+    #: service is allowed in** — explicit opt-in only.
+    mtls_allowed_service_subjects: list[str] = Field(
+        default_factory=lambda: ["orchestrator", "sandbox-supervisor"],
+    )
+
+    #: Sentinel tenant id assigned to mTLS-authenticated principals.
+    #: Internal handlers (e.g. ``/v1/quota/*``) must read the *target*
+    #: tenant from the request body — mTLS only proves the caller, not
+    #: the tenant they are calling for.
+    mtls_system_tenant_id: UUID = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
+
+    #: Reject XFCC elements without a SPIFFE-style ``URI`` SAN. Off by
+    #: default — Keycloak / dev certs typically don't set one.
+    mtls_require_uri_san: bool = False
+
     def resolve_jwks_uri(self) -> str:
         """Return the explicit JWKS URI or derive it from the issuer."""
         if self.oidc_jwks_uri:
