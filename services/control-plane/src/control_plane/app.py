@@ -28,13 +28,22 @@ from fastapi import FastAPI
 
 from control_plane.api import (
     build_agents_router,
+    build_api_keys_router,
     build_health_router,
     build_metrics_router,
+    build_role_bindings_router,
     build_runs_router,
+    build_service_accounts_router,
     build_sessions_router,
 )
 from control_plane.audit import build_default_audit_logger
-from control_plane.auth import HTTPJWKSProvider, JWTVerifier, MTLSVerifier, build_mtls_verifier
+from control_plane.auth import (
+    ApiKeyVerifier,
+    HTTPJWKSProvider,
+    JWTVerifier,
+    MTLSVerifier,
+    build_mtls_verifier,
+)
 from control_plane.manifest import ManifestLoader
 from control_plane.middleware import (
     AuditContextMiddleware,
@@ -51,6 +60,14 @@ from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
 from helix_agent.common.observability import init_logging, init_tracing
 from helix_agent.persistence.agent_spec import AgentSpecStore, InMemoryAgentSpecStore
+from helix_agent.persistence.auth import (
+    ApiKeyStore,
+    InMemoryApiKeyStore,
+    InMemoryRoleBindingStore,
+    InMemoryServiceAccountStore,
+    RoleBindingStore,
+    ServiceAccountStore,
+)
 from helix_agent.persistence.thread_meta import InMemoryThreadMetaStore, ThreadMetaStore
 from helix_agent.runtime.audit.logger import AuditLogger
 
@@ -72,6 +89,10 @@ def create_app(
     manifest_loader: ManifestLoader | None = None,
     jwt_verifier: JWTVerifier | None = None,
     mtls_verifier: MTLSVerifier | None = None,
+    service_account_repo: ServiceAccountStore | None = None,
+    api_key_repo: ApiKeyStore | None = None,
+    role_binding_repo: RoleBindingStore | None = None,
+    api_key_verifier: ApiKeyVerifier | None = None,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
@@ -97,6 +118,10 @@ def create_app(
     resolved_loader = manifest_loader or ManifestLoader()
     resolved_verifier = jwt_verifier or _build_default_jwt_verifier(resolved_settings)
     resolved_mtls = mtls_verifier or _build_default_mtls_verifier(resolved_settings)
+    resolved_service_accounts = service_account_repo or InMemoryServiceAccountStore()
+    resolved_api_keys = api_key_repo or InMemoryApiKeyStore()
+    resolved_role_bindings = role_binding_repo or InMemoryRoleBindingStore()
+    resolved_api_key_verifier = api_key_verifier or ApiKeyVerifier.from_store(resolved_api_keys)
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -143,6 +168,10 @@ def create_app(
     app.state.manifest_loader = resolved_loader
     app.state.jwt_verifier = resolved_verifier
     app.state.mtls_verifier = resolved_mtls
+    app.state.service_account_repo = resolved_service_accounts
+    app.state.api_key_repo = resolved_api_keys
+    app.state.role_binding_repo = resolved_role_bindings
+    app.state.api_key_verifier = resolved_api_key_verifier
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
@@ -180,6 +209,7 @@ def create_app(
         audit_logger=resolved_audit,
         mtls_verifier=resolved_mtls,
         mtls_header_name=resolved_settings.mtls_xfcc_header_name,
+        api_key_verifier=resolved_api_key_verifier,
     )
     app.add_middleware(ObservabilityMiddleware)
 
@@ -188,6 +218,9 @@ def create_app(
     app.include_router(build_agents_router())
     app.include_router(build_sessions_router())
     app.include_router(build_runs_router())
+    app.include_router(build_service_accounts_router())
+    app.include_router(build_api_keys_router())
+    app.include_router(build_role_bindings_router())
 
     return app
 
