@@ -1,19 +1,28 @@
-"""Auth subsystem — Stream C.1 - C.3.
-
-C.1 ships the JWT path (this module) + ``AuthMiddleware``. API Key
-(:mod:`api_key_verifier`) and mTLS (:mod:`mtls`) branches arrive in C.2 / C.3.
+"""Auth subsystem — Stream C.1 (JWT) / C.2 (mTLS) / C.3 (API key + RBAC).
 
 Public surface:
 
-* :class:`JWTVerifier` — verifies RS256 JWTs against a :class:`JWKSProvider`
-* :class:`JWKSProvider` — Protocol for fetching keys by ``kid``
-* :class:`HTTPJWKSProvider` / :class:`StaticJWKSProvider` — production / test impls
-* :class:`AuthMiddleware` — sits between Observability and AuditContext;
-  produces ``request.state.principal`` (and the legacy ``tenant_id`` /
-  ``actor_id`` aliases used by handlers and the audit emitter).
+* :class:`JWTVerifier` / :class:`HTTPJWKSProvider` / :class:`StaticJWKSProvider`
+  (C.1)
+* :class:`MTLSVerifier` / :func:`parse_xfcc_header` (C.2)
+* :class:`ApiKeyVerifier` / :func:`mint_api_key` / :data:`API_KEY_SENTINEL`
+  (C.3)
+* :class:`AuthMiddleware` — single middleware that fans out to all
+  three branches and produces a unified :class:`Principal`
+* :mod:`control_plane.auth.rbac` — pure ``is_allowed(...)`` decision
+  matrix (C.3 follow-ups will narrow by tenant)
 * :class:`AuthError` and subclasses — typed failure modes.
 """
 
+from control_plane.auth.api_key_verifier import (
+    API_KEY_PREFIX_LEN,
+    API_KEY_SENTINEL,
+    ApiKeyVerifier,
+    GeneratedApiKey,
+    is_api_key_bearer,
+    mint_api_key,
+    supports_scope,
+)
 from control_plane.auth.errors import (
     AuthBackendUnavailableError,
     AuthError,
@@ -34,11 +43,16 @@ from control_plane.auth.mtls import (
     build_mtls_verifier,
     parse_xfcc_header,
 )
+from control_plane.auth.rbac import is_allowed
 
 __all__ = [
+    "API_KEY_PREFIX_LEN",
+    "API_KEY_SENTINEL",
+    "ApiKeyVerifier",
     "AuthBackendUnavailableError",
     "AuthError",
     "AuthMiddleware",
+    "GeneratedApiKey",
     "HTTPJWKSProvider",
     "InvalidTokenError",
     "JWKSProvider",
@@ -49,5 +63,9 @@ __all__ = [
     "TokenExpiredError",
     "XfccElement",
     "build_mtls_verifier",
+    "is_allowed",
+    "is_api_key_bearer",
+    "mint_api_key",
     "parse_xfcc_header",
+    "supports_scope",
 ]

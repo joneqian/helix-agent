@@ -44,14 +44,27 @@ from helix_agent.protocol.dr import (
     DrillType,
 )
 from helix_agent.protocol.event import EventRecord, EventType
+from helix_agent.protocol.service_account import (
+    API_KEY_STORED_PREFIX_LEN,
+    ApiKey,
+    ApiKeyCreated,
+    ApiKeyScope,
+    Role,
+    RoleBinding,
+    ServiceAccount,
+)
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
 
 __all__ = [
+    "API_KEY_STORED_PREFIX_LEN",
     "AgentMetadata",
     "AgentSpec",
     "AgentSpecBody",
     "AgentSpecRecord",
     "AgentSpecStatus",
+    "ApiKey",
+    "ApiKeyCreated",
+    "ApiKeyScope",
     "AuditAction",
     "AuditEntry",
     "AuditPage",
@@ -79,7 +92,10 @@ __all__ = [
     "PolicySpec",
     "Principal",
     "ResourceSpec",
+    "Role",
+    "RoleBinding",
     "SandboxSpec",
+    "ServiceAccount",
     "SubjectType",
     "SystemPromptSpec",
     "TenantConfig",

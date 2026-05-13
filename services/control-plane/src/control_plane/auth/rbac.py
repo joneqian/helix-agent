@@ -1,0 +1,126 @@
+"""Role-based access control decision matrix — Stream C.3.
+
+Single source of truth for the ``(role, resource, action)`` → ``bool``
+table from ``subsystems/15-authn-authz.md`` § 3.3. Used by route-level
+``authorize()`` dependencies.
+
+Design notes
+------------
+
+* Decisions are **deny by default** — only explicit matrix entries grant.
+* mTLS service principals get a synthetic ``service`` role with read+write
+  over internal resources (``quota``); they cannot touch admin resources
+  (``user`` / ``role_binding``).
+* API-key service-account principals carry their assigned role via
+  :class:`helix_agent.persistence.auth.RoleBindingStore` (resolved
+  lazily — pulled in C.3 follow-ups). For this PR, scopes from the key
+  itself stand in for roles in :func:`_collect_roles`.
+* :func:`authorize` is a **pure** function (no IO, no audit) so it can
+  be unit-tested in isolation. The audit write happens at the FastAPI
+  dependency layer (``require_role``) so denials still leave a trace.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Literal
+
+from helix_agent.protocol import Principal, Role
+
+Resource = Literal[
+    "manifest",
+    "session",
+    "sandbox",
+    "secret",
+    "audit",
+    "quota",
+    "user",
+    "role_binding",
+    "service_account",
+    "api_key",
+]
+
+Action = Literal[
+    "read",
+    "write",
+    "delete",
+    "debug",
+    "sign",
+    "approve",
+    "force_destroy",
+]
+
+
+def _grants(role: Role) -> dict[Resource, set[Action]]:
+    """Return the (resource → allowed actions) map for one role."""
+    if role is Role.ADMIN:
+        return {
+            "manifest": {"read", "write", "delete", "sign", "approve"},
+            "session": {"read", "write", "delete", "debug"},
+            "sandbox": {"read", "force_destroy"},
+            "secret": {"read", "write", "delete"},
+            "audit": {"read"},
+            "quota": {"read", "write"},
+            "user": {"read", "write"},
+            "role_binding": {"read", "write", "delete"},
+            "service_account": {"read", "write", "delete"},
+            "api_key": {"read", "write", "delete"},
+        }
+    if role is Role.OPERATOR:
+        return {
+            "manifest": {"read", "write"},
+            "session": {"read", "write", "debug"},
+            "sandbox": {"read", "force_destroy"},
+            "secret": {"read"},
+            "audit": {"read"},
+            "quota": {"read"},
+        }
+    # VIEWER
+    return {
+        "manifest": {"read"},
+        "session": {"read"},
+        "sandbox": {"read"},
+        "audit": {"read"},
+        "quota": {"read"},
+    }
+
+
+def _collect_roles(principal: Principal) -> set[Role]:
+    """Translate principal-level role hints into the typed :class:`Role`."""
+    out: set[Role] = set()
+    # JWT path: roles claim is a flat list of strings.
+    for raw in principal.roles:
+        try:
+            out.add(Role(raw))
+        except ValueError:
+            continue
+    # mTLS path: subject_type=service → grant operator-equivalent access
+    # to ``quota`` and read on session/manifest. Modelled as OPERATOR.
+    if principal.subject_type == "service":
+        out.add(Role.OPERATOR)
+    # API-key path: roles came from the role_binding store at verify
+    # time (future enrichment). Without that wiring the scopes column
+    # acts as a fallback: ``admin`` scope → ADMIN role, ``write`` → OPERATOR,
+    # ``read`` → VIEWER.
+    if principal.subject_type == "service_account":
+        scope_set = set(principal.scopes)
+        if "admin" in scope_set:
+            out.add(Role.ADMIN)
+        elif "write" in scope_set:
+            out.add(Role.OPERATOR)
+        elif "read" in scope_set:
+            out.add(Role.VIEWER)
+    return out
+
+
+def is_allowed(principal: Principal, *, resource: Resource, action: Action) -> bool:
+    """``True`` if any of ``principal``'s roles grants ``(resource, action)``."""
+    for role in _collect_roles(principal):
+        if action in _grants(role).get(resource, set()):
+            return True
+    return False
+
+
+def collect_roles_for_audit(principal: Principal) -> Iterable[str]:
+    """Stable role list for audit details payloads."""
+    return sorted(role.value for role in _collect_roles(principal))

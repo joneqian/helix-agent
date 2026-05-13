@@ -54,6 +54,14 @@ class AuditAction(StrEnum):
     # api_key
     API_KEY_CREATE = "api_key:create"
     API_KEY_REVOKE = "api_key:revoke"
+    # service_account
+    SERVICE_ACCOUNT_CREATE = "service_account:create"
+    SERVICE_ACCOUNT_DELETE = "service_account:delete"
+    SERVICE_ACCOUNT_READ = "service_account:read"
+    # role_binding
+    ROLE_BINDING_CREATE = "role_binding:create"
+    ROLE_BINDING_DELETE = "role_binding:delete"
+    ROLE_BINDING_READ = "role_binding:read"
     # audit (meta)
     AUDIT_READ = "audit:read"
     AUDIT_EXPORT = "audit:export"
@@ -84,6 +92,7 @@ class AuditEntry(BaseModel):
         "user",
         "role_binding",
         "api_key",
+        "service_account",
     ]
     resource_id: str | None = None
     result: AuditResult

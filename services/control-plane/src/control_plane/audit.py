@@ -41,6 +41,7 @@ ResourceType = Literal[
     "user",
     "role_binding",
     "api_key",
+    "service_account",
 ]
 
 

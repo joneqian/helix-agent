@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
 from control_plane.audit import emit
+from control_plane.auth.api_key_verifier import ApiKeyVerifier, is_api_key_bearer
 from control_plane.auth.errors import AuthError, MissingCredentialsError
 from control_plane.auth.jwt_verifier import JWTVerifier
 from control_plane.auth.mtls import MTLSVerifier
@@ -58,6 +59,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         audit_logger: AuditLogger | None = None,
         mtls_verifier: MTLSVerifier | None = None,
         mtls_header_name: str = _DEFAULT_XFCC_HEADER,
+        api_key_verifier: ApiKeyVerifier | None = None,
     ) -> None:
         super().__init__(app)
         self._verifier = verifier
@@ -66,6 +68,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self._audit_logger = audit_logger
         self._mtls_verifier = mtls_verifier
         self._mtls_header = mtls_header_name
+        self._api_key_verifier = api_key_verifier
 
     async def dispatch(
         self,
@@ -77,6 +80,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         bearer = _extract_bearer(request)
         if bearer is not None:
+            # Pre-dispatch on bearer prefix so API keys never run through
+            # the JWT verifier (saves a JWKS lookup; matches ADR C-2).
+            if self._api_key_verifier is not None and is_api_key_bearer(bearer):
+                try:
+                    principal = await self._api_key_verifier.verify(bearer)
+                except AuthError as exc:
+                    return await self._reject(request, exc)
+                return await self._call_with_principal(request, call_next, principal)
             try:
                 claims = await self._verifier.verify(bearer)
             except AuthError as exc:
