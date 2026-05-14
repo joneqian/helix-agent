@@ -184,7 +184,7 @@ class RetentionCleanupJob:
                     text(
                         "DELETE FROM event_log "
                         "WHERE tenant_id = :t "
-                        "  AND created_at < now() - (:d || ' days')::interval "
+                        "  AND created_at < now() - make_interval(days => :d) "
                         "RETURNING id"
                     ),
                     {"t": tenant_id, "d": days},
@@ -205,16 +205,23 @@ class RetentionCleanupJob:
         return rows
 
     async def _delete_expired_jwt_blacklist(self) -> int:
-        """``jwt_blacklist`` is global — no tenant_id, expire_at-driven.
-
-        Flat ``DELETE … WHERE expires_at < now()`` for the same reason
-        ``_delete_event_log`` does: the ctid-subquery form intermittently
-        trips a "permission denied for table jwt_blacklist" in CI even
-        with the right grants. Expired-JWT rows are bounded by token
-        churn — flat DELETE is fine at M0 scale.
-        """
+        """``jwt_blacklist`` is global — no tenant_id, expire_at-driven."""
         async with self._sf() as session:
             await session.execute(_SET_RETENTION_WORKER_ROLE)
+            diag = (
+                await session.execute(
+                    text(
+                        "SELECT current_user, "
+                        "has_table_privilege(current_user, 'jwt_blacklist', 'DELETE') as can_del, "
+                        "has_table_privilege(current_user, 'jwt_blacklist', 'SELECT') as can_sel"
+                    )
+                )
+            ).first()
+            if diag is not None:
+                print(
+                    f"[D.3 DIAG] jwt_blacklist user={diag[0]} "
+                    f"can_delete={diag[1]} can_select={diag[2]}"
+                )
             result = await session.execute(
                 text("DELETE FROM jwt_blacklist WHERE expires_at < now() RETURNING jti")
             )
