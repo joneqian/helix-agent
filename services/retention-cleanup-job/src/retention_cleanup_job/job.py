@@ -160,61 +160,63 @@ class RetentionCleanupJob:
         return count
 
     async def _delete_event_log(self) -> int:
+        """Two-step: read retentions, then per-tenant flat DELETE.
+
+        Investigation in CI showed that ``DELETE FROM event_log WHERE
+        ctid IN (SELECT … LIMIT N)`` consistently raises ``permission
+        denied for table event_log`` even though ``has_table_privilege``
+        + a trivial probe ``DELETE FROM event_log WHERE id = -999999``
+        both succeed for the same role in the same session. The
+        ``ctid``-subquery + ``LIMIT`` form is the only thing that
+        differs from the audit_log path that *does* work — and rather
+        than chase the asyncpg/SQLAlchemy quirk further, the flat
+        ``DELETE … WHERE tenant_id = :t AND created_at < :cutoff``
+        form is plenty for M0 retention volumes. M1 can add ``LIMIT``
+        back if the table grows large enough to need batching, by
+        which time we'll have partitioning anyway.
+        """
+        retentions = await self._read_event_retentions()
+        total = 0
+        for tenant_id, days in retentions:
+            async with self._sf() as session:
+                await session.execute(_SET_RETENTION_WORKER_ROLE)
+                result = await session.execute(
+                    text(
+                        "DELETE FROM event_log "
+                        "WHERE tenant_id = :t "
+                        "  AND created_at < now() - (:d || ' days')::interval "
+                        "RETURNING id"
+                    ),
+                    {"t": tenant_id, "d": days},
+                )
+                total += len(result.fetchall())
+                await session.commit()
+        return total
+
+    async def _read_event_retentions(self) -> list[tuple[str, int]]:
+        """Return ``(tenant_id, event_log_retention_days)`` for every tenant."""
         async with self._sf() as session:
             await session.execute(_SET_RETENTION_WORKER_ROLE)
-            # DIAG probe (D.3 investigation): trivial DELETE with no
-            # match. If THIS fails too, the role truly lacks DELETE
-            # despite has_table_privilege showing True (a more
-            # fundamental bug). If it succeeds, the JOIN/subquery DELETE
-            # has its own quirk.
-            try:
-                probe = await session.execute(
-                    text("DELETE FROM event_log WHERE id = -999999 RETURNING id")
-                )
-                probe_rows = probe.fetchall()
-                print(f"[D.3 PROBE] trivial event_log DELETE succeeded rows={len(probe_rows)}")
-            except Exception as exc:
-                print(f"[D.3 PROBE] trivial event_log DELETE FAILED: {type(exc).__name__}: {exc}")
-                raise
-
             result = await session.execute(
-                text(
-                    """
-                    DELETE FROM event_log
-                    WHERE ctid IN (
-                        SELECT e.ctid
-                        FROM event_log e
-                        JOIN tenant_config c ON c.tenant_id = e.tenant_id
-                        WHERE e.created_at <
-                              now() - (c.event_log_retention_days || ' days')::interval
-                        LIMIT :batch
-                    )
-                    RETURNING id
-                    """
-                ),
-                {"batch": self._batch_size},
+                text("SELECT tenant_id::text, event_log_retention_days FROM tenant_config")
             )
-            rows = result.fetchall()
+            rows = [(str(r[0]), int(r[1])) for r in result.fetchall()]
             await session.commit()
-        return len(rows)
+        return rows
 
     async def _delete_expired_jwt_blacklist(self) -> int:
-        """``jwt_blacklist`` is global — no tenant_id, expire_at-driven."""
+        """``jwt_blacklist`` is global — no tenant_id, expire_at-driven.
+
+        Flat ``DELETE … WHERE expires_at < now()`` for the same reason
+        ``_delete_event_log`` does: the ctid-subquery form intermittently
+        trips a "permission denied for table jwt_blacklist" in CI even
+        with the right grants. Expired-JWT rows are bounded by token
+        churn — flat DELETE is fine at M0 scale.
+        """
         async with self._sf() as session:
             await session.execute(_SET_RETENTION_WORKER_ROLE)
             result = await session.execute(
-                text(
-                    """
-                    DELETE FROM jwt_blacklist
-                    WHERE ctid IN (
-                        SELECT ctid FROM jwt_blacklist
-                        WHERE expires_at < now()
-                        LIMIT :batch
-                    )
-                    RETURNING jti
-                    """
-                ),
-                {"batch": self._batch_size},
+                text("DELETE FROM jwt_blacklist WHERE expires_at < now() RETURNING jti")
             )
             rows = result.fetchall()
             await session.commit()
