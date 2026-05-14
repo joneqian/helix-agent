@@ -69,4 +69,7 @@ class Middleware(Protocol):
     after: tuple[str, ...]
     before: tuple[str, ...]
 
-    async def __call__(self, ctx: MiddlewareContext, call_next: CallNext) -> None: ...
+    async def __call__(self, ctx: MiddlewareContext, call_next: CallNext) -> None:
+        """Run the middleware body; call ``call_next(ctx)`` once to continue
+        the chain. Pre-``call_next`` logic runs before downstream middlewares
+        and the terminal; post-``call_next`` logic runs after they unwind."""
