@@ -48,6 +48,7 @@ ALEMBIC_INI = Path(__file__).resolve().parents[3] / "packages/helix-persistence/
 
 APP_ROLE = "helix_app_d3_retention"
 APP_PASSWORD = "helix_app_d3_retention_pw"  # test-only fixture password
+WORKER_PASSWORD = "retention_cleanup_worker_test_pw"  # test-only fixture password
 
 
 def _sync_dsn(container: PostgresContainer) -> str:
@@ -100,6 +101,12 @@ def _provision_app_role(sync_dsn: str) -> None:
             # app role doesn't inherit privileges; it must SET ROLE).
             conn.execute(text(f"GRANT audit_writer TO {APP_ROLE}"))
             conn.execute(text(f"GRANT retention_cleanup_worker TO {APP_ROLE}"))
+            # Give retention_cleanup_worker the LOGIN attribute so the
+            # cleanup job can connect *as* that role directly (avoids
+            # the SET-LOCAL-ROLE / asyncpg quirk described in job.py).
+            conn.execute(
+                text(f"ALTER ROLE retention_cleanup_worker WITH LOGIN PASSWORD '{WORKER_PASSWORD}'")
+            )
     finally:
         admin.dispose()
 
@@ -107,7 +114,18 @@ def _provision_app_role(sync_dsn: str) -> None:
 @pytest.fixture
 def db_fixture(
     postgres_container: PostgresContainer,
-) -> Iterator[tuple[AsyncEngine, str]]:
+) -> Iterator[tuple[AsyncEngine, AsyncEngine, str]]:
+    """Yield ``(app_engine, worker_engine, sync_admin_dsn)``.
+
+    * ``app_engine`` — connects as ``helix_app_d3_retention``. Used by
+      ``SqlAuditLogStore`` to seed audit_log rows the way production
+      code does.
+    * ``worker_engine`` — connects directly as ``retention_cleanup_worker``.
+      The cleanup job uses this. Avoids the ``SET LOCAL ROLE`` +
+      asyncpg quirk that bit us in earlier iterations.
+    * ``sync_admin_dsn`` — bootstrap superuser DSN for the test's own
+      direct INSERT seeds (event_log, jwt_blacklist, tenant_config).
+    """
     sync_admin_dsn = _sync_dsn(postgres_container)
     cfg = Config(str(ALEMBIC_INI))
     cfg.set_main_option("sqlalchemy.url", sync_admin_dsn)
@@ -130,8 +148,12 @@ def db_fixture(
         admin.dispose()
 
     app_dsn = _rewrite(_async_dsn(postgres_container), APP_ROLE, APP_PASSWORD)
-    engine = create_async_engine_from_config(DatabaseConfig(dsn=app_dsn))
-    yield engine, sync_admin_dsn
+    app_engine = create_async_engine_from_config(DatabaseConfig(dsn=app_dsn))
+    worker_dsn = _rewrite(
+        _async_dsn(postgres_container), "retention_cleanup_worker", WORKER_PASSWORD
+    )
+    worker_engine = create_async_engine_from_config(DatabaseConfig(dsn=worker_dsn))
+    yield app_engine, worker_engine, sync_admin_dsn
 
 
 def _seed_tenant_config(
@@ -208,16 +230,17 @@ def _set_audit_row_age(
 
 @pytest.mark.asyncio
 async def test_audit_log_acked_old_rows_deleted_unacked_skipped(
-    db_fixture: tuple[AsyncEngine, str],
+    db_fixture: tuple[AsyncEngine, AsyncEngine, str],
 ) -> None:
     """Acked + past-retention → deleted. Unacked + past-retention → preserved + counted."""
-    engine, sync_admin = db_fixture
+    app_engine, worker_engine, sync_admin = db_fixture
     try:
         tenant = uuid4()
         _seed_tenant_config(sync_admin, tenant_id=tenant, audit_days=30, event_days=30)
 
-        sf = create_async_session_factory(engine)
-        store = SqlAuditLogStore(sf)
+        sf_app = create_async_session_factory(app_engine)
+        sf_worker = create_async_session_factory(worker_engine)
+        store = SqlAuditLogStore(sf_app)
         ids: list[int] = []
         for i in range(3):
             written = await store.append(_audit_entry(tenant, suffix=str(i)))
@@ -231,7 +254,7 @@ async def test_audit_log_acked_old_rows_deleted_unacked_skipped(
         # Row 2: acked + recent → not eligible
         _set_audit_row_age(sync_admin, audit_id=ids[2], days_ago=1, backup_acked=True)
 
-        job = RetentionCleanupJob(db_session_factory=sf, batch_size=10000)
+        job = RetentionCleanupJob(db_session_factory=sf_worker, batch_size=10000)
         report = await job.run_once()
 
         assert report.audit_deleted == 1
@@ -239,7 +262,7 @@ async def test_audit_log_acked_old_rows_deleted_unacked_skipped(
         assert report.audit_deleted_by_tenant == {str(tenant): 1}
 
         # Spot-check the surviving rows.
-        async with engine.begin() as conn:
+        async with app_engine.begin() as conn:
             await conn.execute(text("SET LOCAL ROLE audit_writer"))
             still_there = (
                 await conn.execute(
@@ -252,23 +275,25 @@ async def test_audit_log_acked_old_rows_deleted_unacked_skipped(
         assert ids[1] in surviving  # unacked → kept
         assert ids[2] in surviving  # recent → kept
     finally:
-        await engine.dispose()
+        await app_engine.dispose()
+        await worker_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_per_tenant_retention_isolated(
-    db_fixture: tuple[AsyncEngine, str],
+    db_fixture: tuple[AsyncEngine, AsyncEngine, str],
 ) -> None:
     """Tenant A's 7-day TTL deletes its acked-old rows; tenant B's 90-day keeps theirs."""
-    engine, sync_admin = db_fixture
+    app_engine, worker_engine, sync_admin = db_fixture
     try:
         tenant_a = uuid4()
         tenant_b = uuid4()
         _seed_tenant_config(sync_admin, tenant_id=tenant_a, audit_days=7, event_days=30)
         _seed_tenant_config(sync_admin, tenant_id=tenant_b, audit_days=90, event_days=30)
 
-        sf = create_async_session_factory(engine)
-        store = SqlAuditLogStore(sf)
+        sf_app = create_async_session_factory(app_engine)
+        sf_worker = create_async_session_factory(worker_engine)
+        store = SqlAuditLogStore(sf_app)
         a_row = await store.append(_audit_entry(tenant_a, suffix="A"))
         b_row = await store.append(_audit_entry(tenant_b, suffix="B"))
         assert a_row.id is not None and b_row.id is not None
@@ -277,27 +302,28 @@ async def test_per_tenant_retention_isolated(
         _set_audit_row_age(sync_admin, audit_id=a_row.id, days_ago=30, backup_acked=True)
         _set_audit_row_age(sync_admin, audit_id=b_row.id, days_ago=30, backup_acked=True)
 
-        job = RetentionCleanupJob(db_session_factory=sf, batch_size=10000)
+        job = RetentionCleanupJob(db_session_factory=sf_worker, batch_size=10000)
         report = await job.run_once()
 
         assert report.audit_deleted == 1
         assert report.audit_deleted_by_tenant == {str(tenant_a): 1}
 
-        async with engine.begin() as conn:
+        async with app_engine.begin() as conn:
             await conn.execute(text("SET LOCAL ROLE audit_writer"))
             survivors = {r[0] for r in (await conn.execute(text("SELECT id FROM audit_log"))).all()}
         assert a_row.id not in survivors
         assert b_row.id in survivors
     finally:
-        await engine.dispose()
+        await app_engine.dispose()
+        await worker_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_event_log_retention_deletes_old_rows(
-    db_fixture: tuple[AsyncEngine, str],
+    db_fixture: tuple[AsyncEngine, AsyncEngine, str],
 ) -> None:
     """event_log uses ``event_log_retention_days``; no backup gate."""
-    engine, sync_admin = db_fixture
+    app_engine, worker_engine, sync_admin = db_fixture
     try:
         tenant = uuid4()
         _seed_tenant_config(sync_admin, tenant_id=tenant, audit_days=90, event_days=7)
@@ -325,12 +351,12 @@ async def test_event_log_retention_deletes_old_rows(
         finally:
             admin.dispose()
 
-        sf = create_async_session_factory(engine)
+        sf = create_async_session_factory(worker_engine)
         job = RetentionCleanupJob(db_session_factory=sf, batch_size=10000)
         report = await job.run_once()
         assert report.event_deleted == 1
 
-        async with engine.begin() as conn:
+        async with app_engine.begin() as conn:
             await conn.execute(text("SET LOCAL ROLE audit_writer"))
             remaining = (
                 await conn.execute(
@@ -340,15 +366,16 @@ async def test_event_log_retention_deletes_old_rows(
             ).scalar()
         assert remaining == 1
     finally:
-        await engine.dispose()
+        await app_engine.dispose()
+        await worker_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_jwt_blacklist_expired_rows_deleted(
-    db_fixture: tuple[AsyncEngine, str],
+    db_fixture: tuple[AsyncEngine, AsyncEngine, str],
 ) -> None:
     """jwt_blacklist is global; ``expires_at < now()`` rows are pruned."""
-    engine, sync_admin = db_fixture
+    app_engine, worker_engine, sync_admin = db_fixture
     try:
         # Seed one expired + one future row directly.
         expired_jti = "jti-expired"
@@ -375,12 +402,12 @@ async def test_jwt_blacklist_expired_rows_deleted(
         finally:
             admin.dispose()
 
-        sf = create_async_session_factory(engine)
+        sf = create_async_session_factory(worker_engine)
         job = RetentionCleanupJob(db_session_factory=sf, batch_size=10000)
         report = await job.run_once()
         assert report.jwt_blacklist_deleted == 1
 
-        async with engine.begin() as conn:
+        async with app_engine.begin() as conn:
             await conn.execute(text("SET LOCAL ROLE audit_writer"))
             remaining_jtis = {
                 r[0] for r in (await conn.execute(text("SELECT jti FROM jwt_blacklist"))).all()
@@ -388,24 +415,26 @@ async def test_jwt_blacklist_expired_rows_deleted(
         assert expired_jti not in remaining_jtis
         assert future_jti in remaining_jtis
     finally:
-        await engine.dispose()
+        await app_engine.dispose()
+        await worker_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_run_once_idempotent_on_empty_state(
-    db_fixture: tuple[AsyncEngine, str],
+    db_fixture: tuple[AsyncEngine, AsyncEngine, str],
 ) -> None:
     """No old rows → all-zero report; safe to run repeatedly."""
-    engine, sync_admin = db_fixture
+    app_engine, worker_engine, sync_admin = db_fixture
     try:
         tenant = uuid4()
         _seed_tenant_config(sync_admin, tenant_id=tenant, audit_days=90, event_days=30)
 
-        sf = create_async_session_factory(engine)
+        sf = create_async_session_factory(worker_engine)
         job = RetentionCleanupJob(db_session_factory=sf, batch_size=10000)
         report = await job.run_once()
         assert report.audit_deleted == 0
         assert report.event_deleted == 0
         assert report.audit_skipped_unacked == 0
     finally:
-        await engine.dispose()
+        await app_engine.dispose()
+        await worker_engine.dispose()

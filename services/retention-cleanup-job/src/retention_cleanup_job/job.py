@@ -24,18 +24,22 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Final
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# The cleanup runs as the dedicated worker role; this is the only
-# place outside the audit-backup worker that holds DELETE on these
-# tables.
-_RETENTION_WORKER_ROLE: Final[str] = "retention_cleanup_worker"
-_SET_RETENTION_WORKER_ROLE = text(f"SET LOCAL ROLE {_RETENTION_WORKER_ROLE}")
+# The cleanup runs against a DB connection that's already authenticated
+# as a role with DELETE privilege on the target tables — typically
+# ``retention_cleanup_worker`` (NOLOGIN role from migration 0010;
+# operators ``ALTER ROLE ... WITH LOGIN`` for the cron user, or assign
+# the role to a separate LOGIN account that's a member). We deliberately
+# do NOT issue ``SET LOCAL ROLE`` in this code path: under asyncpg +
+# SQLAlchemy 2.0, a ``SET LOCAL ROLE`` followed by a DELETE that
+# actually matches rows intermittently returns "permission denied"
+# even when ``has_table_privilege`` confirms the GRANT. Connecting
+# directly as the worker role sidesteps the issue entirely.
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,6 @@ class RetentionCleanupJob:
         by ``_count_unacked_past_retention``.
         """
         async with self._sf() as session:
-            await session.execute(_SET_RETENTION_WORKER_ROLE)
             result = await session.execute(
                 text(
                     """
@@ -143,7 +146,6 @@ class RetentionCleanupJob:
         we surface it on the report but never delete those rows.
         """
         async with self._sf() as session:
-            await session.execute(_SET_RETENTION_WORKER_ROLE)
             result = await session.execute(
                 text(
                     """
@@ -179,7 +181,6 @@ class RetentionCleanupJob:
         total = 0
         for tenant_id, days in retentions:
             async with self._sf() as session:
-                await session.execute(_SET_RETENTION_WORKER_ROLE)
                 result = await session.execute(
                     text(
                         "DELETE FROM event_log "
@@ -196,7 +197,6 @@ class RetentionCleanupJob:
     async def _read_event_retentions(self) -> list[tuple[str, int]]:
         """Return ``(tenant_id, event_log_retention_days)`` for every tenant."""
         async with self._sf() as session:
-            await session.execute(_SET_RETENTION_WORKER_ROLE)
             result = await session.execute(
                 text("SELECT tenant_id::text, event_log_retention_days FROM tenant_config")
             )
@@ -207,21 +207,6 @@ class RetentionCleanupJob:
     async def _delete_expired_jwt_blacklist(self) -> int:
         """``jwt_blacklist`` is global — no tenant_id, expire_at-driven."""
         async with self._sf() as session:
-            await session.execute(_SET_RETENTION_WORKER_ROLE)
-            diag = (
-                await session.execute(
-                    text(
-                        "SELECT current_user, "
-                        "has_table_privilege(current_user, 'jwt_blacklist', 'DELETE') as can_del, "
-                        "has_table_privilege(current_user, 'jwt_blacklist', 'SELECT') as can_sel"
-                    )
-                )
-            ).first()
-            if diag is not None:
-                print(
-                    f"[D.3 DIAG] jwt_blacklist user={diag[0]} "
-                    f"can_delete={diag[1]} can_select={diag[2]}"
-                )
             result = await session.execute(
                 text("DELETE FROM jwt_blacklist WHERE expires_at < now() RETURNING jti")
             )
