@@ -32,7 +32,6 @@ from testcontainers.postgres import PostgresContainer
 from helix_agent.persistence import (
     DatabaseConfig,
     SqlAuditLogStore,
-    SqlTenantConfigStore,
     create_async_engine_from_config,
     create_async_session_factory,
 )
@@ -40,7 +39,6 @@ from helix_agent.protocol import (
     AuditAction,
     AuditEntry,
     AuditResult,
-    TenantConfigPatch,
 )
 from retention_cleanup_job.job import RetentionCleanupJob
 
@@ -127,18 +125,29 @@ async def _seed_tenant_config(
     audit_days: int,
     event_days: int,
 ) -> None:
-    """Use the SQL store so we exercise the real C.7 / D.3 write path."""
-    sf = create_async_session_factory(engine)
-    store = SqlTenantConfigStore(sf)
-    await store.upsert(
-        tenant_id=tenant_id,
-        patch=TenantConfigPatch(
-            display_name="acme",
-            audit_retention_days=audit_days,
-            event_log_retention_days=event_days,
-        ),
-        actor_id="admin",
-    )
+    """Direct INSERT as the bootstrap superuser.
+
+    Bypasses ``SqlTenantConfigStore.upsert`` because that path opens a
+    fresh session without setting ``app.tenant_id``, which the
+    ``tenant_config`` RLS policy needs. Production goes through
+    ``TenantConfigService`` (admin endpoint middleware sets the GUC);
+    this test exercises the cleanup job, not the seeding path.
+    """
+    sync_admin = _sync_dsn_from_engine(engine)
+    admin = create_engine(sync_admin, isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tenant_config "
+                    "(tenant_id, display_name, plan, "
+                    " audit_retention_days, event_log_retention_days, updated_by) "
+                    "VALUES (:t, 'acme', 'free', :a, :e, 'test')"
+                ),
+                {"t": str(tenant_id), "a": audit_days, "e": event_days},
+            )
+    finally:
+        admin.dispose()
 
 
 def _audit_entry(tenant_id: UUID, *, suffix: str) -> AuditEntry:
