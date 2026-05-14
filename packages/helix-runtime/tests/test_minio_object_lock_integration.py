@@ -19,7 +19,6 @@ from testcontainers.compose import DockerCompose
 
 from helix_agent.runtime.storage import (
     ObjectStore,
-    ObjectStoreError,
     S3CompatibleConfig,
     make_object_store,
 )
@@ -87,13 +86,17 @@ async def test_put_with_compliance_lock_round_trip(worm_store: ObjectStore) -> N
 
 
 @pytest.mark.asyncio
-async def test_compliance_lock_rejects_overwrite(worm_store: ObjectStore) -> None:
-    """Re-putting a compliance-locked key inside retention is denied.
+async def test_compliance_lock_blocks_version_deletion(worm_store: ObjectStore) -> None:
+    """A compliance-locked version cannot be deleted before retention elapses.
 
-    MinIO returns 403 AccessDenied; the S3CompatibleObjectStore wraps
-    botocore's ``ClientError`` as :class:`ObjectStoreError`.
+    This is the **real** WORM guarantee: S3 / MinIO Object Lock pins
+    individual *versions* against delete-before-expiry. Same-key
+    re-puts are allowed (each one is a new version), so we don't
+    test for those — the WORM-backup worker (D.1c) keys by audit row
+    id, which is monotonic, and retries on the same id are guarded
+    by ``backup_acked`` rather than by S3 put-side rejection.
     """
-    key = f"d1b/overwrite-blocked/{datetime.now(tz=UTC).timestamp()}.bin"
+    key = f"d1b/delete-blocked/{datetime.now(tz=UTC).timestamp()}.bin"
     retain_until = _retain_until(120)
     await worm_store.put(
         key,
@@ -101,14 +104,19 @@ async def test_compliance_lock_rejects_overwrite(worm_store: ObjectStore) -> Non
         retain_until=retain_until,
         lock_mode="compliance",
     )
-    with pytest.raises(ObjectStoreError):
-        await worm_store.put(
-            key,
-            b"tampered",
-            retain_until=retain_until,
-            lock_mode="compliance",
-        )
-    # Original payload preserved.
+
+    raw = worm_store._client  # type: ignore[attr-defined]
+    bucket = worm_store._bucket  # type: ignore[attr-defined]
+    head = await raw.head_object(Bucket=bucket, Key=key)
+    version_id = head["VersionId"]
+
+    # Attempting to delete the locked version inside the retention
+    # window is the protected operation. MinIO returns 403
+    # AccessDenied; botocore surfaces that as ClientError.
+    with pytest.raises(raw.exceptions.ClientError):
+        await raw.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+
+    # Original payload is still readable.
     assert await worm_store.get(key) == b"original"
 
 
