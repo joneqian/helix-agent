@@ -12,6 +12,9 @@
 设计先行规则（[memory:feedback_design_first_iteration.md](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_design_first_iteration.md)）：
 所有架构 / 接口 / mini-ADR 必须在编码前就锁定，E.1 – E.15 PR 仅执行本文档。
 
+> **上下文管理 ↔ deer-flow 对照**：本文档覆盖 M0 阶段；后续 Stream 启动前的 deer-flow 18-middleware 对照与 M1/M2 待锁条款，见
+> [docs/decisions/deer-flow-context-mgmt-alignment.md](../decisions/deer-flow-context-mgmt-alignment.md)。
+
 > **顺序硬性要求**：E 内部按"中间件链先建 → ReAct → 工具 → Fallback/Cache → SSE → Cancellation 末端"
 > 做 bottom-up。任何"先做 ReAct 再补中间件"的捷径都会触发返工，因为 dynamic_context / 断路器 / Langfuse 一旦在
 > 首次 LLM 调用之后才接入，前期所有调用都浪费 10x token + 没断路器开发期被限流爆 + trace 缺数据。
@@ -29,16 +32,17 @@
 | **E.3 `dynamic_context_middleware`** | 注册于 anchor `before=["llm_call"]`。从 thread_meta / event_log 拉本会话最近 N=20 条 user/assistant turn，截断到 token budget（先固定 `max_context_tokens=8000`），注入 `state["messages"]`。**绕过等于 10x token 开销** — 测试矩阵 #6 守门。 | 01-system §"动态上下文"；research/05 §"动态 context" |
 | **E.4 `llm_error_handling_middleware`** | 注册于 anchor `after=["dynamic_context"]`、`before=["llm_call"]`。包 LLM 调用：断路器 + 指数退避重试 + 4xx 不重试 / 5xx + 429 重试。状态机：CLOSED → OPEN (5 连失败) → HALF_OPEN (cooldown 30s) → CLOSED。per provider key 维度。 | GAPS § n/a；研发期防限流爆 |
 | **E.5 Langfuse middleware** | 注册于 anchor `after=["llm_call"]`（也兼 hook before/after 都触发）。把每次 LLM 调用的 prompt / completion / token usage / latency / cost 发到 Langfuse；trace_id 与 W3C traceparent（A.8）打通；失败 fail-soft（Langfuse 离线不阻塞主路径）。**同 PR 顺带把 D.2 TenantAwareRedactor 注册到 `before=["llm_call"]` anchor**，与 audit 写路径共享同一 redactor 实例。 | ADR-0005；GAPS § 5 #15；D.2 cross-stream |
-| **E.6 ReAct mode**（单 agent，无 sub-agent） | LangGraph `StateGraph`：节点 `agent`（LLM）→ 条件边到 `tools` 或 `END`；`tools` 节点 dispatch 到工具注册表；`AgentState` 含 `messages: list[Message]` + `step_count` + `cancellation_token`。硬上限 `max_steps=20` 防止 runaway。 | 01-system §"ReAct"；research/04 § ReAct |
-| **E.7 工具：builtin `web_search`** | Tavily 或 SerpAPI 适配器（M0 单 provider 即可）；通过 SecretStore（F.6 占位 / dev memory store）拿 API key；通用 `Tool` Protocol：`async def call(args: dict) -> ToolResult`。`web_search` 也是端到端首个 LLM-→-tool-→-LLM 回路的 smoke test。 | research/05 § builtin |
-| **E.8 工具：HTTP** | 通用 HTTP 调用工具；M0 直连（**不**经 Credential Proxy；F.5 完成后切换）；schema 限制 `method + url + headers + body`；URL 白名单兜底（per-tenant `http_tool_allowlist`，从 tenant_config 拉，默认 `[]` = 禁用）；audit 每次调用。 | GAPS § n/a；M0 占位以备 F.5 切换 |
-| **E.9 工具：MCP** | 单 MCP server 接入（Anthropic 官方 `mcp` SDK）；M0 通过本地 stdio transport；per-tenant `mcp_servers` 白名单（tenant_config）；连接池 1 connection per server；list_tools / call_tool 包装。 | research/05 § MCP；01-system § MCP |
+| **E.6 ReAct mode**（单 agent，无 sub-agent） | LangGraph `StateGraph`：节点 `agent`（LLM）→ 条件边到 `tools` 或 `END`；`tools` 节点 dispatch 到工具注册表；`AgentState` 含 `messages: list[Message]` + `step_count` + `cancellation_token`。硬上限 `max_steps=20` 防止 runaway。**ToolErrorHandling 内置**：`tools` 节点 dispatch 用统一 try/except 包裹每个 Tool.call；任何未捕获异常（含连接错误、超时、第三方库 raise）一律转 `ToolMessage(content=f"[tool error] {type(e).__name__}: {summary}", tool_call_id=...)` 注入 messages，**不向上抛**。让 LLM 在下一轮 reason 出"换 args 重试"或"final answer"，避免 run 崩 + messages 列表不合法。对照 deer-flow `tool_error_handling_middleware.py`。 | 01-system §"ReAct"；research/04 § ReAct；deer-flow tool_error_handling |
+| **E.7 工具：builtin `web_search`** | Tavily 或 SerpAPI 适配器（M0 单 provider 即可）；通过 SecretStore（F.6 占位 / dev memory store）拿 API key；通用 `Tool` Protocol：`async def call(args: dict) -> ToolResult`。`web_search` 也是端到端首个 LLM-→-tool-→-LLM 回路的 smoke test。**输出 truncation**：默认 `max_results=5`；每条结果 `content[:4096]` 字符截断（超出标 `ToolResult.meta.truncated=true`），与 deer-flow `community/tavily/tools.py` 截断对齐。 | research/05 § builtin |
+| **E.8 工具：HTTP** | 通用 HTTP 调用工具；M0 直连（**不**经 Credential Proxy；F.5 完成后切换）；schema 限制 `method + url + headers + body`；URL 白名单兜底（per-tenant `http_tool_allowlist`，从 tenant_config 拉，默认 `[]` = 禁用）；audit 每次调用。**输出 truncation**：response body 硬上限 20k chars（tail 截断 + 保 status code + `meta.truncated=true`）；response headers 单独上限 4k chars。 | GAPS § n/a；M0 占位以备 F.5 切换 |
+| **E.9 工具：MCP** | 单 MCP server 接入（Anthropic 官方 `mcp` SDK）；M0 通过本地 stdio transport；per-tenant `mcp_servers` 白名单（tenant_config）；连接池 1 connection per server；list_tools / call_tool 包装。**输出 truncation**：`call_tool` 结果统一 cap 20k chars（中间截断保头尾各 50%，便于 LLM 看到 'tail' 收敛标记）；超过 → `ToolResult.meta.truncated=true`。 | research/05 § MCP；01-system § MCP |
 | **E.10 `sandbox_audit_middleware`** | 注册于 anchor `before=["tool_dispatch"]`（仅 sandbox / exec_python 工具触发；HTTP / MCP / web_search 跳过）。校验 LLM 生成的 Python / shell 命令是否在白名单 AST 节点 / 命令前缀内；命中黑名单（`rm -rf`、`curl 169.254.169.254`、`os.system`） → 拒绝 + audit。**Stream F.4 接入 `exec_python` 前装好这层；F 完成前空跑无害**。 | research/05 § sandbox_audit；F cross-stream |
+| **E.10.5 `loop_detection_middleware`** | 注册于 anchor `after_llm_call`。维护 sliding window，记录最近 N=3 次 LLM 返回的 `(tool_name, normalized_args_hash)` 元组；若全相同 → 视为循环：清空 AIMessage 的 `tool_calls`（用 `clone_ai_message_with_tool_calls` helper 同 ID 重写，保留 LangGraph add_messages reducer 不引入新消息位）+ 注入 `<system-reminder>检测到工具循环，请给出 final answer 或换不同参数</system-reminder>` HumanMessage。**与 `max_steps=20` 互补**：前者是步数硬上限（兜底），本中间件是循环早期 abort（防 20 次同一 buggy 调用烧 token）。设计灵感：deer-flow `agents/middlewares/loop_detection_middleware.py`。 | research/04 § loop_detection；deer-flow loop_detection_middleware |
 | **E.11 LLM Provider Fallback Chain** | `LLMRouter`：声明 primary / fallback 列表（per agent manifest），按 health 状态选；5xx + 429 + circuit-open → 尝试下一个；4xx 不 fallback（请求错）；fallback 链跨 provider（Anthropic → OpenAI 等），prompt 不变（model 名映射在适配器内部）。 | 01-system § Fallback；GAPS § n/a |
 | **E.12 提供商层限流** | per-API-key token bucket（refill rate 来自 manifest `llm.rate_limit_rpm` / `rate_limit_tpm`）；超过即等待（不直接 429 给上游）；与 E.4 断路器协作（限流时不算"失败"，不开断路器）。 | GAPS § 9 #27 第 3 层 |
 | **E.13 LLM response cache** | 精确匹配 cache：key = `sha256(tenant_id || model || normalize(messages) || temperature || max_tokens)`；Redis backend（基础设施已建）；`cache_ttl` 默认 3600s，per-agent 可覆盖；**per-tenant 命名空间**（无 cross-tenant 命中风险）；非 deterministic 调用（temperature > 0.1）默认绕过；命中 `cache_hit` audit + metric `helix_llm_cache_hit_total{tenant,model,result}`。 | GAPS § 10 #28 |
 | **E.14 SSE 流式输出 + backpressure** | `services/orchestrator/sse.py`：SSE event 由 LangGraph stream API 中转；client 断开 → cancellation token cancel；backpressure 用 `asyncio.Queue(maxsize=128)`；slow consumer 队满 = 触发 cancellation（drop session 比 drop oldest 安全 — 防 client 看到不一致状态）；和 A.2 vendor 的 `stream_bridge`（last-event-id 重连）配合。 | 01-system § Streaming；research/04 § stream |
-| **E.15 cancellation engine 节点传播** | `CancellationToken` 注入 `AgentState.cancellation_token`；每个 LangGraph 节点入口 `if token.cancelled(): raise CancelledError`；in-flight LLM call 用 anyio `cancel_scope` 中断；tool 调用同样支持；API 层 (B.3) cancel → orchestrator 在 ≤200ms 内 surface 到 LLM/工具调用层。 | GAPS § 8 #25 第 2 段 |
+| **E.15 cancellation engine 节点传播** | `CancellationToken` 注入 `AgentState.cancellation_token`；每个 LangGraph 节点入口 `if token.cancelled(): raise CancelledError`；in-flight LLM call 用 anyio `cancel_scope` 中断；tool 调用同样支持；API 层 (B.3) cancel → orchestrator 在 ≤200ms 内 surface 到 LLM/工具调用层。**Resume sanitize**：`GraphRunner.run` 在 resume 路径上 scan checkpoint messages — 若 AIMessage 有 `tool_calls` 但下一条不是 ToolMessage（cancel 打断 [LLM 完 → tool 派遣] 的窗口造成的 orphan），为每个缺失的 `tool_call_id` 注入 placeholder `ToolMessage(content="[cancelled before dispatch]")`，保证 messages 列表对 LLM 合法、可继续执行。**不上独立 middleware**（场景太小、~20 行 guard 在 runner 内即可）。对照 deer-flow `dangling_tool_call_middleware.py`。 | GAPS § 8 #25 第 2 段；deer-flow dangling_tool_call |
 
 ### 1.2 Out-of-scope（明确推迟）
 
@@ -367,6 +371,27 @@ class LLMResponseCache:
 - **理由**：(1) Python asyncio 模型本身就是协作式；(2) 强 kill 会留 inconsistent state（半写的 checkpoint、半发的 SSE event）；(3) 100ms 内 surface 足够 — 远小于人感 200ms；(4) sandbox 进程 kill 由 F.7 sandbox-supervisor 做（那里有强 kill）。
 - **代价**：blocking 调用（同步 IO）无法中断 — 但 orchestrator 全 async 栈，不存在此问题。
 
+### E-10：tool output truncation 走"每工具自管"而非中间件统一拦
+
+- **替代**：写一个 `output_truncation_middleware`，在 `after_tool_dispatch` anchor 统一拦 ToolResult。
+- **选择**：每个工具的适配器内部 truncate；通过 `helix_agent.runtime.tools.truncation` 共享 helper（≈30 LOC）复用 head-only / tail-only / middle-bias 三种策略。
+- **理由**：(1) 不同工具的 truncate 策略不一样 — bash 要中间截（保头尾命令 + exit code），read_file 要头部截（提示 start_line/end_line），HTTP 要尾部截（保 status code）；统一中间件做不到细分。(2) 测试边界清晰 — truncation bug 出在 web_search 就只看 web_search.py。(3) deer-flow 也是 per-tool 各自 `_truncate_*_output` helper，证明 pattern 在生产环境跑得通。
+- **代价**：每个工具 PR 都要写一份 truncate；helper 共享降低重复代码。
+
+### E-11：LoopDetectionMiddleware 用 normalized_args hash 而非完整 args 比较
+
+- **替代**：用 `json.dumps(args, sort_keys=True)` 全量字符串比较。
+- **选择**：normalize（lower-case + strip whitespace + sort keys）后 sha256 前 16 字节做 fingerprint。
+- **理由**：(1) LLM 会在重试时改大小写、加空格 — 全量比较漏检。(2) 短 hash 比较 O(1)，sliding window 内存占用可控（每条 record 24 字节）。(3) hash 碰撞概率忽略不计（16 字节 = 2^128 命名空间，N=3 检测撞不到）。
+- **代价**：normalize 规则要文档化；LLM 故意改 args 但语义不变（如 `{a:1, b:2}` vs `{b:2, a:1}`）会被判断为循环 — 这是合理的（同语义重复 = 循环），不是 bug。
+
+### E-12：tool 异常转 `ToolMessage(error)` 而非向上 raise
+
+- **替代**：tool 抛异常 → orchestrator 捕获 → run 标 FAILED → 返回 client。
+- **选择**：tool 抛异常 → wrap 成 `ToolMessage(content="[tool error] ...", tool_call_id=...)` 注入 messages → 让 LLM 在下一轮 reason 出 retry / 换 args / final answer。
+- **理由**：(1) deer-flow / Anthropic SDK 推荐做法 — tool 错是 LLM 自己处理的 reasoning 信号，不是系统故障。(2) raise 会让 messages 列表卡在"AIMessage(tool_calls=[X]) 无 ToolMessage"的非法状态（同 E.15 resume sanitize 同类问题）。(3) LLM 见到 error message 通常能换种方式做（GitHub stars 工具失败 → 换 web_search）。
+- **代价**：tool 错本身被吞 → 不会立即触发告警；通过 audit log + Langfuse span error 字段定位。区分"业务 error 应让 LLM 处理"（→ ToolMessage）vs"基础设施 error 应告警"（→ Langfuse 高严重度 span）：连接超时 / 鉴权失败 / quota 耗尽 仍然 ToolMessage，但 audit `severity=high`。
+
 ---
 
 ## 4. 接口
@@ -587,6 +612,14 @@ op.add_column(
 | 31 | cancellation tool 中 | E.15 | integration | tool mock sleep 5s → 1s 后 cancel → tool task 取消 + audit |
 | 32 | cancellation 重启不传染 | E.15 | unit | 一次 run cancel 后开启新 run → 新 run cancellation_token 默认未取消 |
 | 33 | manifest schema 兼容 | E.* | unit | manifest 无 `fallback` 字段 → primary-only 正常工作；无 `cache` 字段 → 默认启用 |
+| 34 | web_search 输出截断 | E.7 | unit | mock Tavily 返回单条 8000 字符 → `ToolResult.content` 4096 字符 + `meta.truncated=true` |
+| 35 | HTTP body 截断 | E.8 | unit | mock 30k chars JSON 响应 → 截到 20k（尾部截）+ meta 标记；status code 保留 |
+| 36 | MCP 结果中间截 | E.9 | unit | mock 100k chars 返回 → 截到 20k（中间截：5k 头 + 占位符 + 5k 尾）+ meta 标记 |
+| 37 | LoopDetection 触发 | E.10.5 | unit | mock LLM 连发 3 次 `read_file("/etc/passwd")` → 第 3 次后 AIMessage 的 `tool_calls` 被清 + `<system-reminder>` HumanMessage 注入 |
+| 38 | LoopDetection 不误报 | E.10.5 | unit | 3 次不同工具 / 3 次同工具不同 args / 中间夹 1 个不同 tool_call → 均不触发 |
+| 39 | LoopDetection args normalize | E.10.5 | unit | `{a:1, b:2}` vs `{b:2, a:1}` 判同；`{path: "/etc"}` vs `{path: "/etc "}` 判同 |
+| 40 | tool 异常转 ToolMessage | E.6 | unit + integration | mock Tavily raise `httpx.ConnectError` → tools 节点不向上抛；messages 末尾追加 `ToolMessage(content="[tool error] ConnectError: ...", tool_call_id=t1)`；step_count +1；audit `TOOL_ERROR` 行 |
+| 41 | resume sanitize dangling tool_calls | E.15 | integration | checkpoint 内 messages: `[Human, AIMessage(tool_calls=[T1, T2])]`（无 ToolMessage）→ GraphRunner.run resume → 自动注入 2 条 `ToolMessage(content="[cancelled before dispatch]", tool_call_id=T1/T2)` → LLM 下一轮正常继续 |
 
 **覆盖目标**：单元 ≥ 90%；integration 覆盖每个 anchor / 每条 PR 至少 1 个 happy path + 1 个 failure path。
 
@@ -605,7 +638,10 @@ op.add_column(
 | Langfuse 队列堆积阻塞主路径 | LLM 调用超时 | client 用独立 task + bounded queue（max 1000）；满即 drop trace + warn log；不阻塞主调用 |
 | Redis 缓存击穿 | 重 LLM 调用 | M0 单实例 acceptable；M1 上 Redis HA |
 | cancellation 协作式 → 卡 sync 调用 | 取消不生效 | orchestrator 全 async；如有 sync 调用必须包 `asyncio.to_thread`；CI lint 检 `time.sleep` / blocking io 调用 |
-| ReAct 无限循环 | token 烧光 | `max_steps=20` 默认 + audit `RUN_FAILED` |
+| ReAct 无限循环 | token 烧光 | `max_steps=20` 兜底 + **`loop_detection_middleware` (E.10.5)** 检测 N=3 同 tool_call 早期 abort（清 tool_calls + 注入 system-reminder）+ audit `RUN_FAILED` |
+| 单次 tool 输出过大（HTTP 大响应 / MCP 大文件 / sandbox bash dump）→ 后续 LLM 调用爆 token budget | 1MB 工具返回直接打爆 8000 token 预算 | 每工具内置 truncate 上限（web 4k / HTTP 20k / MCP 20k 中间截 / sandbox 20k-50k 走 F.4）+ `meta.truncated=true` 让 LLM 知道可换 args 重查或读分段 |
+| tool 抛未捕获异常 → run 标 FAILED / messages 不合法 | dogfood 期连接抖动 / 第三方 SDK bug 直接 kill run | E.6 内置 tool error wrapper：任何 tool 异常 → `ToolMessage(content="[tool error] ...", tool_call_id=...)` 注入 messages → LLM 下一轮自己 reason 出 retry / 换 args / final answer；不向上抛 |
+| cancel + resume 后 messages 不合法（orphan tool_calls）→ LLM API 报 invalid_request | 罕见但真实：cancel 打断 [LLM 完 → tool 派遣] ~100ms 窗口 + 用户尝试 resume | E.15 GraphRunner.run resume 路径 sanitize：scan messages，缺失 ToolMessage 注入 `[cancelled before dispatch]` placeholder（per tool_call_id） |
 | MCP server 行为不可控（第三方 server）| 风险输出 | M0 仅白名单 `fs` / 自家 server；M1 加 MCP 输出 schema 校验 |
 | token bucket 等待时间过长被误判为挂起 | UX 差 | bucket 等待超 30s → emit progress event `event: limiter_wait` 让前端可视化 |
 
@@ -650,10 +686,12 @@ E.5  feat(e-5): langfuse middleware + D.2 redactor anchor 注册
      - environments/dev.yaml 配 Langfuse self-hosted endpoint
      - integration test：trace 全 span 可见
 
-E.6  feat(e-6): ReAct mode + AgentState
+E.6  feat(e-6): ReAct mode + AgentState + tool error wrapper
      - state.py 完善 + graph_builder/builder.py
      - max_steps 守门
+     - tools 节点 dispatch 统一 try/except → ToolMessage(error) 注入（不向上抛）
      - integration：mock LLM 跑 1-step / 3-step / max-step 三种 case
+     - integration：mock tool raise → ToolMessage 注入 → LLM 下一轮继续
 
 E.7  feat(e-7): tool: web_search
      - tools/web_search.py（Tavily 适配器）
@@ -676,6 +714,14 @@ E.10 feat(e-10): sandbox_audit_middleware
      - AST / 命令前缀黑白名单
      - 仅 `exec_python` / `shell` 工具触发；其他 pass through
      - 与 F.4 接入预留（F 阶段挂上 sandbox 工具即生效）
+
+E.10.5 feat(e-10-5): loop_detection_middleware
+       - packages/helix-runtime/.../middleware/loop_detection.py
+       - normalize args + sha256 fingerprint helper（~40 LOC）
+       - clone_ai_message_with_tool_calls helper（重写同 ID AIMessage）
+       - 注册到 after_llm_call anchor
+       - unit tests：触发 / 不误报 / args normalize
+       - tool output truncation 不另起 PR（走 E.7/E.8/E.9 各自 PR 内含 truncate impl + unit）
 
 E.11 feat(e-11): LLMRouter + provider fallback chain
      - llm/router.py + llm/providers/{anthropic,openai}.py
@@ -700,15 +746,17 @@ E.14 feat(e-14): SSE streaming + backpressure
      - heartbeat + cancel on slow consumer
      - control-plane API 桥接（B.7 已存 fake stream，本 PR 切真）
 
-E.15 feat(e-15): cancellation 全链路传播
+E.15 feat(e-15): cancellation 全链路传播 + resume sanitize
      - runtime/cancellation.py（CancellationToken + anyio scope）
      - GraphRunner 节点入口 check
      - LLM / tool 调用包 scope
      - control-plane POST /runs/{id}/cancel 联通 orchestrator
+     - GraphRunner.run resume 路径：scan checkpoint messages，orphan tool_calls 注入 placeholder ToolMessage
      - integration：≤200ms surface
+     - integration：cancel + resume → messages 合法 + LLM 继续
 ```
 
-**预期总 PR 数**：1 设计 + 15 实施 = 16 PR；累计 ~7-9 周（含 review / CI 重跑）。
+**预期总 PR 数**：1 设计 + 15 + 1 (E.10.5) = 17 PR；累计 ~7-9 周（含 review / CI 重跑）。E.10.5 是对照 deer-flow 上下文管理分析后补的 compaction 防御（详见 § 9）。
 
 ---
 
@@ -752,10 +800,11 @@ E.15 feat(e-15): cancellation 全链路传播
 | E.8 HTTP via Credential Proxy | E.8 | M0 直连 + 白名单；F.5 完成后切 |
 | E.9 MCP (单 server 接入) | E.9 | stdio transport M0 |
 | E.10 sandbox_audit_middleware | E.10 | F.4 接入后真实触发 |
+| **E.10.5 loop_detection_middleware** | E.10.5 | 对照 deer-flow `loop_detection_middleware`；ITERATION-PLAN E 段原未列，作为 Stream E 设计细化新增；tool truncation 不另列条目（散在 E.7/E.8/E.9 PR 内执行）|
 | E.11 LLM Provider Fallback Chain | E.11 | per provider key 断路器 + 4xx 不 fallback |
 | E.12 提供商层限流 | E.12 | P0 #27 第 3 层；与 E.11 一起 |
 | E.13 LLM response cache | E.13 | P0 #28；Redis；per-tenant 命名空间 |
 | E.14 SSE 流式输出 + backpressure | E.14 | stream_bridge 配合；满即 cancel |
 | E.15 请求取消的 engine 节点传播 | E.15 | P0 #25 第 2 段；协作式 anyio scope |
 
-完成后 Stream E 15/15 + D.2 anchor 注册完成、24 P0 中 #15 / #25 / #27 / #28 全部勾选。
+完成后 Stream E 16/16（含 E.10.5）+ D.2 anchor 注册完成、24 P0 中 #15 / #25 / #27 / #28 全部勾选。
