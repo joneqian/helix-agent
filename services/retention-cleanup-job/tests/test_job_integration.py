@@ -107,6 +107,21 @@ def _provision_app_role(sync_dsn: str) -> None:
             conn.execute(
                 text(f"ALTER ROLE retention_cleanup_worker WITH LOGIN PASSWORD '{WORKER_PASSWORD}'")
             )
+            # Defensive re-GRANT + relacl dump. We've seen permission
+            # denied on event_log + jwt_blacklist despite migration
+            # 0010 granting + has_table_privilege confirming True.
+            conn.execute(text("GRANT DELETE ON TABLE audit_log TO retention_cleanup_worker"))
+            conn.execute(text("GRANT DELETE ON TABLE event_log TO retention_cleanup_worker"))
+            conn.execute(text("GRANT DELETE ON TABLE jwt_blacklist TO retention_cleanup_worker"))
+            acl = conn.execute(
+                text(
+                    "SELECT relname, relacl::text FROM pg_class "
+                    "WHERE relname IN ('audit_log','event_log','jwt_blacklist') "
+                    "ORDER BY relname"
+                )
+            ).fetchall()
+            for row in acl:
+                print(f"[D.3 ACL] {row[0]} relacl={row[1]}")
     finally:
         admin.dispose()
 
