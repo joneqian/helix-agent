@@ -91,25 +91,26 @@ def upgrade() -> None:
         """
     )
     op.execute("GRANT USAGE ON SCHEMA public TO retention_cleanup_worker;")
-    # Reads: per-tenant retention + the rows to delete.
-    op.execute(
-        "GRANT SELECT ON TABLE tenant_config, audit_log, event_log, jwt_blacklist "
-        "TO retention_cleanup_worker;"
-    )
-    # Deletes: only the tables that have a defined expiry contract.
-    op.execute(
-        "GRANT DELETE ON TABLE audit_log, event_log, jwt_blacklist TO retention_cleanup_worker;"
-    )
+    # Per-table grants (multi-table forms have surprised us in CI;
+    # splitting keeps the intent unambiguous + each statement gets its
+    # own ACL update). Reads first, then the narrow DELETE set.
+    op.execute("GRANT SELECT ON TABLE tenant_config TO retention_cleanup_worker;")
+    op.execute("GRANT SELECT ON TABLE audit_log TO retention_cleanup_worker;")
+    op.execute("GRANT SELECT ON TABLE event_log TO retention_cleanup_worker;")
+    op.execute("GRANT SELECT ON TABLE jwt_blacklist TO retention_cleanup_worker;")
+    op.execute("GRANT DELETE ON TABLE audit_log TO retention_cleanup_worker;")
+    op.execute("GRANT DELETE ON TABLE event_log TO retention_cleanup_worker;")
+    op.execute("GRANT DELETE ON TABLE jwt_blacklist TO retention_cleanup_worker;")
 
 
 def downgrade() -> None:
-    op.execute(
-        "REVOKE DELETE ON TABLE audit_log, event_log, jwt_blacklist FROM retention_cleanup_worker;"
-    )
-    op.execute(
-        "REVOKE SELECT ON TABLE tenant_config, audit_log, event_log, jwt_blacklist "
-        "FROM retention_cleanup_worker;"
-    )
+    op.execute("REVOKE DELETE ON TABLE audit_log FROM retention_cleanup_worker;")
+    op.execute("REVOKE DELETE ON TABLE event_log FROM retention_cleanup_worker;")
+    op.execute("REVOKE DELETE ON TABLE jwt_blacklist FROM retention_cleanup_worker;")
+    op.execute("REVOKE SELECT ON TABLE tenant_config FROM retention_cleanup_worker;")
+    op.execute("REVOKE SELECT ON TABLE audit_log FROM retention_cleanup_worker;")
+    op.execute("REVOKE SELECT ON TABLE event_log FROM retention_cleanup_worker;")
+    op.execute("REVOKE SELECT ON TABLE jwt_blacklist FROM retention_cleanup_worker;")
     op.execute("REVOKE USAGE ON SCHEMA public FROM retention_cleanup_worker;")
     op.execute("DROP ROLE IF EXISTS retention_cleanup_worker;")
 
