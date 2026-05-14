@@ -160,15 +160,23 @@ class RetentionCleanupJob:
         return count
 
     async def _delete_event_log(self) -> int:
-        # Uses ``RETURNING id`` like ``_delete_audit_log`` does — without
-        # RETURNING, asyncpg/SQLAlchemy 2.0 takes a different execution
-        # path on DELETE that silently loses the ``SET LOCAL ROLE``
-        # state and yields ``permission denied`` even when
-        # ``has_table_privilege`` confirms the GRANT. RETURNING forces
-        # the prepared/portal path which preserves the role. We use
-        # ``RETURNING id`` (cheap, indexed) and count rows.
         async with self._sf() as session:
             await session.execute(_SET_RETENTION_WORKER_ROLE)
+            # DIAG probe (D.3 investigation): trivial DELETE with no
+            # match. If THIS fails too, the role truly lacks DELETE
+            # despite has_table_privilege showing True (a more
+            # fundamental bug). If it succeeds, the JOIN/subquery DELETE
+            # has its own quirk.
+            try:
+                probe = await session.execute(
+                    text("DELETE FROM event_log WHERE id = -999999 RETURNING id")
+                )
+                probe_rows = probe.fetchall()
+                print(f"[D.3 PROBE] trivial event_log DELETE succeeded rows={len(probe_rows)}")
+            except Exception as exc:
+                print(f"[D.3 PROBE] trivial event_log DELETE FAILED: {type(exc).__name__}: {exc}")
+                raise
+
             result = await session.execute(
                 text(
                     """
