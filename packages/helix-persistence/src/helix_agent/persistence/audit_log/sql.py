@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+from typing import Final
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.audit_log.base import AuditLogStore
 from helix_agent.persistence.audit_log.cursor import decode_cursor, encode_cursor
 from helix_agent.persistence.models import AuditLogRow
 from helix_agent.protocol import AuditAction, AuditEntry, AuditPage, AuditQuery, AuditResult
+
+# Per migration 0008 + STREAM-D-DESIGN § 2.2 / Mini-ADR D-1: the
+# application's main connection role does not hold ``INSERT`` on
+# ``audit_log``. The append path must temporarily ``SET LOCAL ROLE``
+# to the dedicated ``audit_writer`` (NOLOGIN, INSERT + SELECT only)
+# inside the transaction. ``SET LOCAL`` is scoped to the current
+# transaction, so commit / rollback automatically resets it.
+_AUDIT_WRITER_ROLE: Final[str] = "audit_writer"
+_SET_AUDIT_WRITER_ROLE = text(f"SET LOCAL ROLE {_AUDIT_WRITER_ROLE}")
 
 
 def _row_to_entry(row: AuditLogRow) -> AuditEntry:
@@ -58,10 +68,25 @@ class SqlAuditLogStore(AuditLogStore):
             details=entry.details,
         )
         async with self._sf() as session:
+            # ``SET LOCAL`` must run *inside* the open transaction; the
+            # first ``execute`` here also implicitly begins it. The
+            # role lifts on commit/rollback, so subsequent statements
+            # outside this block use the connection's default role.
+            await session.execute(_SET_AUDIT_WRITER_ROLE)
             session.add(row)
-            await session.commit()
+            # Flush so RETURNING populates the autoincrement ``id``,
+            # then refresh so server defaults (``occurred_at``,
+            # ``backup_acked``) load — both happen while the
+            # ``audit_writer`` role is still active (BYPASSRLS, has
+            # SELECT). Snapshot into a Pydantic entry BEFORE commit;
+            # otherwise ``expire_on_commit`` re-fires SELECTs under
+            # the connection's default role which can't see the row
+            # under RLS.
+            await session.flush()
             await session.refresh(row)
-            return _row_to_entry(row)
+            entry = _row_to_entry(row)
+            await session.commit()
+            return entry
 
     async def get_by_id(self, audit_id: int, *, tenant_id: UUID) -> AuditEntry | None:
         async with self._sf() as session:

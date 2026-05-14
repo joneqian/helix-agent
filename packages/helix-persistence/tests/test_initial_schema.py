@@ -149,11 +149,23 @@ async def test_thread_meta_and_audit_log_round_trip(postgres_container: Postgres
             await session.commit()
 
         async with session_factory() as session:
-            thread: ThreadMetaRow = (await session.execute(sa.select(ThreadMetaRow))).scalar_one()
+            # Filter by ``tenant_id`` so this test is order-independent
+            # — the ``postgres_container`` fixture is session-scoped
+            # and other integration tests in the same session may
+            # insert their own rows into ``thread_meta`` / ``audit_log``.
+            thread: ThreadMetaRow = (
+                await session.execute(
+                    sa.select(ThreadMetaRow).where(ThreadMetaRow.tenant_id == tenant_id)
+                )
+            ).scalar_one()
             assert thread.status == "active"
             assert thread.agent_version == "0.1.0"
 
-            audit: AuditLogRow = (await session.execute(sa.select(AuditLogRow))).scalar_one()
+            audit: AuditLogRow = (
+                await session.execute(
+                    sa.select(AuditLogRow).where(AuditLogRow.tenant_id == tenant_id)
+                )
+            ).scalar_one()
             assert UUID(str(audit.request_id)) == request_id
             assert audit.details == {"client": "admin-ui"}
             assert audit.occurred_at < datetime.now(UTC).astimezone(audit.occurred_at.tzinfo)
