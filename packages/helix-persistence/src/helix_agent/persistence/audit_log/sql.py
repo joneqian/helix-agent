@@ -74,9 +74,19 @@ class SqlAuditLogStore(AuditLogStore):
             # outside this block use the connection's default role.
             await session.execute(_SET_AUDIT_WRITER_ROLE)
             session.add(row)
-            await session.commit()
+            # Flush so RETURNING populates the autoincrement ``id``,
+            # then refresh so server defaults (``occurred_at``,
+            # ``backup_acked``) load — both happen while the
+            # ``audit_writer`` role is still active (BYPASSRLS, has
+            # SELECT). Snapshot into a Pydantic entry BEFORE commit;
+            # otherwise ``expire_on_commit`` re-fires SELECTs under
+            # the connection's default role which can't see the row
+            # under RLS.
+            await session.flush()
             await session.refresh(row)
-            return _row_to_entry(row)
+            entry = _row_to_entry(row)
+            await session.commit()
+            return entry
 
     async def get_by_id(self, audit_id: int, *, tenant_id: UUID) -> AuditEntry | None:
         async with self._sf() as session:

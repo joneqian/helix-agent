@@ -85,12 +85,17 @@ def _provision_app_role(sync_dsn: str) -> None:
     Steps (idempotent — the same Postgres container is reused across
     integration tests in one session):
 
-    * CREATE ROLE LOGIN if missing
+    * CREATE ROLE LOGIN **NOINHERIT** if missing. ``NOINHERIT`` is the
+      crucial bit: role membership lets us ``SET ROLE`` to
+      ``audit_writer`` but does NOT silently inherit its INSERT
+      privileges. Without ``NOINHERIT`` a raw INSERT would pass the
+      table-level permission check (via inheritance) and then fail
+      with an RLS-policy violation instead of the cleaner
+      ``permission denied`` we want to surface. Production deployments
+      should provision their app role the same way.
     * GRANT USAGE on schema
     * GRANT SELECT on ``audit_log`` (so reads / verification still work)
-    * GRANT INSERT on the other tables it might write through other
-      D-stream paths (none in this PR; placeholder kept narrow)
-    * GRANT ``audit_writer`` TO the app role — the membership is what
+    * GRANT ``audit_writer`` TO the app role — membership is what
       lets ``SET LOCAL ROLE audit_writer`` succeed.
     """
     admin = create_engine(sync_dsn, isolation_level="AUTOCOMMIT")
@@ -103,7 +108,9 @@ def _provision_app_role(sync_dsn: str) -> None:
             if exists is None:
                 # ``APP_ROLE`` and ``APP_PASSWORD`` are local constants
                 # under test-author control — safe to interpolate.
-                conn.execute(text(f"CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{APP_PASSWORD}'"))
+                conn.execute(
+                    text(f"CREATE ROLE {APP_ROLE} LOGIN NOINHERIT PASSWORD '{APP_PASSWORD}'")
+                )
             conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}"))
             conn.execute(text(f"GRANT SELECT ON TABLE audit_log TO {APP_ROLE}"))
             conn.execute(text(f"GRANT audit_writer TO {APP_ROLE}"))
