@@ -34,6 +34,14 @@ class TenantConfigRow(Base):
     pii_fields: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    # E.8 / E.9: per-tenant tool gates. Both default to ``[]`` ↔
+    # deny-all; admins explicitly open endpoints.
+    http_tool_allowlist: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    mcp_servers: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     # D.3 retention: per-tenant TTL for the two largest tables that
     # actually need pruning. CHECK constraints in migration 0010
     # bound both to (0, 3650] days.

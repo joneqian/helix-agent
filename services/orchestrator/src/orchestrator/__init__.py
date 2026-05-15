@@ -20,6 +20,9 @@ from orchestrator.tools import (
     Tool as Tool,
 )
 from orchestrator.tools import (
+    ToolContext as ToolContext,
+)
+from orchestrator.tools import (
     ToolNotFoundError as ToolNotFoundError,
 )
 from orchestrator.tools import (
@@ -40,6 +43,7 @@ __all__ = [
     "MaxStepsExceededError",
     "OrchestratorError",
     "Tool",
+    "ToolContext",
     "ToolNotFoundError",
     "ToolRegistry",
     "ToolResult",

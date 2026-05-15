@@ -56,6 +56,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                     "mcp_allowlist": patch.mcp_allowlist or [],
                     "rate_limit_override": patch.rate_limit_override or {},
                     "pii_fields": patch.pii_fields or [],
+                    "http_tool_allowlist": patch.http_tool_allowlist or [],
+                    "mcp_servers": patch.mcp_servers or [],
                     "created_at": now,
                     "updated_at": now,
                     "updated_by": actor_id,
@@ -76,6 +78,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                             "mcp_allowlist": patch.mcp_allowlist,
                             "rate_limit_override": patch.rate_limit_override,
                             "pii_fields": patch.pii_fields,
+                            "http_tool_allowlist": patch.http_tool_allowlist,
+                            "mcp_servers": patch.mcp_servers,
                             "audit_retention_days": patch.audit_retention_days,
                             "event_log_retention_days": patch.event_log_retention_days,
                         }.items()

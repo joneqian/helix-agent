@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator import Tool
+from orchestrator import Tool, ToolContext
 from orchestrator.tools import (
     DEFAULT_CONTENT_CHAR_CAP,
     DEFAULT_MAX_RESULTS,
@@ -12,6 +12,10 @@ from orchestrator.tools import (
     TavilyClient,
     WebSearchTool,
 )
+
+#: All web_search tests run as the same anonymous tenant; ToolContext is
+#: required by the post-E.8 Tool protocol but web_search ignores it.
+_CTX = ToolContext()
 
 
 def _result(title: str = "T", url: str = "https://example.com", content: str = "body") -> dict:
@@ -40,7 +44,7 @@ async def test_basic_search_returns_formatted_results() -> None:
         ]
     )
     tool = WebSearchTool(client=client)
-    result = await tool.call({"query": "helix-agent"})
+    result = await tool.call({"query": "helix-agent"}, ctx=_CTX)
 
     assert result.meta == {"truncated": False, "n_results": 2}
     assert "Helix on GitHub" in result.content
@@ -54,7 +58,7 @@ async def test_basic_search_returns_formatted_results() -> None:
 async def test_max_results_caps_request_and_response() -> None:
     client = _client([_result(content=f"r{i}") for i in range(10)])
     tool = WebSearchTool(client=client)
-    result = await tool.call({"query": "x", "max_results": 3})
+    result = await tool.call({"query": "x", "max_results": 3}, ctx=_CTX)
 
     assert client.last_max_results == 3
     # Even if the API returns more, the tool truncates to max_results.
@@ -65,7 +69,7 @@ async def test_max_results_caps_request_and_response() -> None:
 async def test_max_results_above_cap_is_clamped_to_ten() -> None:
     client = _client()
     tool = WebSearchTool(client=client)
-    await tool.call({"query": "x", "max_results": 999})
+    await tool.call({"query": "x", "max_results": 999}, ctx=_CTX)
     assert client.last_max_results == 10
 
 
@@ -73,7 +77,7 @@ async def test_max_results_above_cap_is_clamped_to_ten() -> None:
 async def test_max_results_below_one_is_clamped_to_one() -> None:
     client = _client()
     tool = WebSearchTool(client=client)
-    await tool.call({"query": "x", "max_results": 0})
+    await tool.call({"query": "x", "max_results": 0}, ctx=_CTX)
     assert client.last_max_results == 1
 
 
@@ -82,7 +86,7 @@ async def test_max_results_bool_is_rejected_and_uses_default() -> None:
     """``bool`` is a subclass of ``int`` — guard against LLM-supplied ``True``."""
     client = _client()
     tool = WebSearchTool(client=client)
-    await tool.call({"query": "x", "max_results": True})
+    await tool.call({"query": "x", "max_results": True}, ctx=_CTX)
     assert client.last_max_results == DEFAULT_MAX_RESULTS
 
 
@@ -96,7 +100,7 @@ async def test_long_content_truncated_with_marker() -> None:
     long = "a" * (DEFAULT_CONTENT_CHAR_CAP + 5000)
     client = _client([_result(content=long)])
     tool = WebSearchTool(client=client)
-    result = await tool.call({"query": "x"})
+    result = await tool.call({"query": "x"}, ctx=_CTX)
 
     assert result.meta["truncated"] is True
     assert "...[truncated]" in result.content
@@ -108,7 +112,7 @@ async def test_long_content_truncated_with_marker() -> None:
 async def test_short_content_not_marked_truncated() -> None:
     client = _client([_result(content="short body")])
     tool = WebSearchTool(client=client)
-    result = await tool.call({"query": "x"})
+    result = await tool.call({"query": "x"}, ctx=_CTX)
 
     assert result.meta["truncated"] is False
     assert "[truncated]" not in result.content
@@ -125,7 +129,7 @@ async def test_mixed_truncation_marks_meta_true() -> None:
         ]
     )
     tool = WebSearchTool(client=client)
-    result = await tool.call({"query": "x"})
+    result = await tool.call({"query": "x"}, ctx=_CTX)
     assert result.meta["truncated"] is True
     assert result.meta["n_results"] == 2
 
@@ -138,7 +142,7 @@ async def test_mixed_truncation_marks_meta_true() -> None:
 @pytest.mark.asyncio
 async def test_empty_results_returns_no_results_marker() -> None:
     tool = WebSearchTool(client=_client([]))
-    result = await tool.call({"query": "no hits"})
+    result = await tool.call({"query": "no hits"}, ctx=_CTX)
     assert result.content == "(no results)"
     assert result.meta == {"truncated": False, "n_results": 0}
 
@@ -150,7 +154,7 @@ async def test_payload_without_results_key_handled_safely() -> None:
             return {}
 
     tool = WebSearchTool(client=_BareClient())
-    result = await tool.call({"query": "x"})
+    result = await tool.call({"query": "x"}, ctx=_CTX)
     assert result.content == "(no results)"
     assert result.meta == {"truncated": False, "n_results": 0}
 
@@ -170,7 +174,7 @@ async def test_non_mapping_entries_skipped() -> None:
             }
 
     tool = WebSearchTool(client=_MalformedClient())
-    result = await tool.call({"query": "x"})
+    result = await tool.call({"query": "x"}, ctx=_CTX)
     # 2 valid entries; the string is silently skipped.
     assert result.meta["n_results"] == 2
 
@@ -184,14 +188,14 @@ async def test_non_mapping_entries_skipped() -> None:
 async def test_missing_query_raises_value_error() -> None:
     tool = WebSearchTool(client=_client())
     with pytest.raises(ValueError, match="query"):
-        await tool.call({})
+        await tool.call({}, ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_blank_query_raises_value_error() -> None:
     tool = WebSearchTool(client=_client())
     with pytest.raises(ValueError, match="query"):
-        await tool.call({"query": "   "})
+        await tool.call({"query": "   "}, ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -202,7 +206,7 @@ async def test_client_exception_propagates_to_caller() -> None:
     client = RecordingTavilyClient(raise_on_search=RuntimeError("api down"))
     tool = WebSearchTool(client=client)
     with pytest.raises(RuntimeError, match="api down"):
-        await tool.call({"query": "x"})
+        await tool.call({"query": "x"}, ctx=_CTX)
 
 
 # ---------------------------------------------------------------------------

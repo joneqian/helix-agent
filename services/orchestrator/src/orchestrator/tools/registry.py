@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+from uuid import UUID
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,20 @@ class ToolSpec:
     description: str
     #: JSON Schema for the tool's ``args`` parameter.
     parameters: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """Per-invocation context threaded from the ReAct ``tools`` node.
+
+    Most fields are optional because E.6 / E.7 tools didn't need any
+    of them; E.8 HTTPTool is the first to require ``tenant_id`` (for
+    the per-tenant allowlist lookup). Future tools read ``run_id`` for
+    audit attribution; E.15 will retrofit ``cancellation_token``.
+    """
+
+    tenant_id: UUID | None = None
+    run_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -50,9 +65,11 @@ class Tool(Protocol):
 
     spec: ToolSpec
 
-    async def call(self, args: Mapping[str, Any]) -> ToolResult:
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
         """Dispatch the tool with the given args and return a
-        :class:`ToolResult`. Implementations may raise; the ReAct graph's
+        :class:`ToolResult`. ``ctx`` carries tenant binding etc. so
+        per-tenant policies (E.8 allowlist, F.6 secret resolution) can
+        run inside the tool. Implementations may raise; the ReAct graph's
         tools node wraps any exception into a ``ToolMessage(status='error')``
         (Mini-ADR E-12) — never let it propagate to the runner."""
 
@@ -61,6 +78,14 @@ class ToolNotFoundError(KeyError):
     """Raised by :meth:`ToolRegistry.get_required` when ``name`` isn't
     registered. The graph's ``tools`` node turns this into a
     ``ToolMessage(error=...)`` rather than propagating."""
+
+
+class ToolBlockedError(RuntimeError):
+    """Raised when a tool's policy denies the call (e.g. URL not in
+    the per-tenant HTTP allowlist; tenant_id missing for a
+    tenant-scoped tool). The graph's ``tools`` node wraps it into a
+    ``ToolMessage(status='error')`` per Mini-ADR E-12 and the
+    surrounding orchestrator writes a ``tool:blocked`` audit row."""
 
 
 class ToolRegistry:

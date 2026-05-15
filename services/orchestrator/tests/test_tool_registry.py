@@ -8,14 +8,22 @@ from typing import Any
 
 import pytest
 
-from orchestrator import Tool, ToolNotFoundError, ToolRegistry, ToolResult, ToolSpec
+from orchestrator import (
+    Tool,
+    ToolContext,
+    ToolNotFoundError,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+)
 
 
 @dataclass
 class _DummyTool:
     spec: ToolSpec
 
-    async def call(self, args: Mapping[str, Any]) -> ToolResult:
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        del ctx
         return ToolResult(content=f"called with {dict(args)}")
 
 
