@@ -32,7 +32,7 @@
 | **E.3 `dynamic_context_middleware`** | 注册于 anchor `before=["llm_call"]`。从 thread_meta / event_log 拉本会话最近 N=20 条 user/assistant turn，截断到 token budget（先固定 `max_context_tokens=8000`），注入 `state["messages"]`。**绕过等于 10x token 开销** — 测试矩阵 #6 守门。 | 01-system §"动态上下文"；research/05 §"动态 context" |
 | **E.4 `llm_error_handling_middleware`** | 注册于 anchor `after=["dynamic_context"]`、`before=["llm_call"]`。包 LLM 调用：断路器 + 指数退避重试 + 4xx 不重试 / 5xx + 429 重试。状态机：CLOSED → OPEN (5 连失败) → HALF_OPEN (cooldown 30s) → CLOSED。per provider key 维度。 | GAPS § n/a；研发期防限流爆 |
 | **E.5 Langfuse middleware** | 注册于 anchor `after=["llm_call"]`（也兼 hook before/after 都触发）。把每次 LLM 调用的 prompt / completion / token usage / latency / cost 发到 Langfuse；trace_id 与 W3C traceparent（A.8）打通；失败 fail-soft（Langfuse 离线不阻塞主路径）。**同 PR 顺带把 D.2 TenantAwareRedactor 注册到 `before=["llm_call"]` anchor**，与 audit 写路径共享同一 redactor 实例。 | ADR-0005；GAPS § 5 #15；D.2 cross-stream |
-| **E.6 ReAct mode**（单 agent，无 sub-agent） | LangGraph `StateGraph`：节点 `agent`（LLM）→ 条件边到 `tools` 或 `END`；`tools` 节点 dispatch 到工具注册表；`AgentState` 含 `messages: list[Message]` + `step_count` + `cancellation_token`。硬上限 `max_steps=20` 防止 runaway。**ToolErrorHandling 内置**：`tools` 节点 dispatch 用统一 try/except 包裹每个 Tool.call；任何未捕获异常（含连接错误、超时、第三方库 raise）一律转 `ToolMessage(content=f"[tool error] {type(e).__name__}: {summary}", tool_call_id=...)` 注入 messages，**不向上抛**。让 LLM 在下一轮 reason 出"换 args 重试"或"final answer"，避免 run 崩 + messages 列表不合法。对照 deer-flow `tool_error_handling_middleware.py`。 | 01-system §"ReAct"；research/04 § ReAct；deer-flow tool_error_handling |
+| **E.6 ReAct mode**（单 agent，无 sub-agent） | LangGraph `StateGraph`：节点 `agent`（LLM）→ 条件边到 `tools` 或 `END`；`tools` 节点 dispatch 到工具注册表；`AgentState` 含 `messages: list[Message]` + `step_count` + `max_steps`（`cancellation_token` 走 `config` 通道，见 § 2.3 / § 2.7）。硬上限 `max_steps=20` 防止 runaway。**ToolErrorHandling 内置**：`tools` 节点 dispatch 用统一 try/except 包裹每个 Tool.call；任何未捕获异常（含连接错误、超时、第三方库 raise）一律转 `ToolMessage(content=f"[tool error] {type(e).__name__}: {summary}", tool_call_id=...)` 注入 messages，**不向上抛**。让 LLM 在下一轮 reason 出"换 args 重试"或"final answer"，避免 run 崩 + messages 列表不合法。对照 deer-flow `tool_error_handling_middleware.py`。 | 01-system §"ReAct"；research/04 § ReAct；deer-flow tool_error_handling |
 | **E.7 工具：builtin `web_search`** | Tavily 或 SerpAPI 适配器（M0 单 provider 即可）；通过 SecretStore（F.6 占位 / dev memory store）拿 API key；通用 `Tool` Protocol：`async def call(args: dict) -> ToolResult`。`web_search` 也是端到端首个 LLM-→-tool-→-LLM 回路的 smoke test。**输出 truncation**：默认 `max_results=5`；每条结果 `content[:4096]` 字符截断（超出标 `ToolResult.meta.truncated=true`），与 deer-flow `community/tavily/tools.py` 截断对齐。 | research/05 § builtin |
 | **E.8 工具：HTTP** | 通用 HTTP 调用工具；M0 直连（**不**经 Credential Proxy；F.5 完成后切换）；schema 限制 `method + url + headers + body`；URL 白名单兜底（per-tenant `http_tool_allowlist`，从 tenant_config 拉，默认 `[]` = 禁用）；audit 每次调用。**输出 truncation**：response body 硬上限 20k chars（tail 截断 + 保 status code + `meta.truncated=true`）；response headers 单独上限 4k chars。 | GAPS § n/a；M0 占位以备 F.5 切换 |
 | **E.9 工具：MCP** | 单 MCP server 接入（Anthropic 官方 `mcp` SDK）；M0 通过本地 stdio transport；per-tenant `mcp_servers` 白名单（tenant_config）；连接池 1 connection per server；list_tools / call_tool 包装。**输出 truncation**：`call_tool` 结果统一 cap 20k chars（中间截断保头尾各 50%，便于 LLM 看到 'tail' 收敛标记）；超过 → `ToolResult.meta.truncated=true`。 | research/05 § MCP；01-system § MCP |
@@ -43,7 +43,7 @@
 | **E.12.5 middleware chain wiring** | E.6 graph_builder 注释明确："This PR deliberately does not wire the E.3/E.4/E.5 middleware chains into the agent node. That wiring happens when E.11 LLMRouter lands." — 但 E.11 PR scope 已较大（router + 2 adapter + wire-format mapping），wiring **从 E.11 推后**。本 PR 把所有已实现但未激活的中间件接入：`agent_node` 串 `before_llm_call → around_llm_call → after_llm_call` 三个 anchor；`tools_node` 串 `before_tool_dispatch`；`LLMRouter` 加 `chain: MiddlewareChain` 参数，**每次 provider 调用单独包 `around_llm_call`**（Mini-ADR E-13：per-upstream-key 隔离，让 E.4 断路器能 per-key 计数而非 per-router 累加）。落地后 6 个中间件（E.3 / E.4 / E.5 langfuse / E.5 pii_redact / E.10 sandbox_audit / E.10.5 loop_detection）全部首次"真跑"。 | 自我补全：E.11 推后造成的 wiring 缺口；对照 ITERATION-PLAN E 段未单列 |
 | **E.13 LLM response cache** | 精确匹配 cache：key = `sha256(tenant_id || model || normalize(messages) || temperature || max_tokens)`；Redis backend（基础设施已建）；`cache_ttl` 默认 3600s，per-agent 可覆盖；**per-tenant 命名空间**（无 cross-tenant 命中风险）；非 deterministic 调用（temperature > 0.1）默认绕过；命中 `cache_hit` audit + metric `helix_llm_cache_hit_total{tenant,model,result}`。 | GAPS § 10 #28 |
 | **E.14 SSE 流式输出 + backpressure** | `services/orchestrator/sse.py`：`run_agent` worker（后台 `asyncio.Task`，`graph.astream()` 逐 chunk → `StreamBridge.publish`）+ `sse_consumer`（`bridge.subscribe` → SSE frame；client 断开 → `run_manager.cancel`）。**in-process 单体**（control-plane import orchestrator 库，非独立服务 — 见 § 2.6 架构修正）。backpressure：`StreamBridge` bounded buffer + drop-oldest（Mini-ADR E-8 修正）；和 A.2 `stream_bridge`（last-event-id 重连）+ `RunManager` 配合。control-plane `runs.py` 切掉 B.7 fake stream。worker graph 注入式；manifest→graph agent factory 是独立后续 PR。 | 01-system § Streaming；research/04 § stream；deer-flow `gateway/services.py` + `runtime/runs/worker.py` |
-| **E.15 cancellation engine 节点传播** | `CancellationToken` 注入 `AgentState.cancellation_token`；每个 LangGraph 节点入口 `if token.cancelled(): raise CancelledError`；in-flight LLM call 用 anyio `cancel_scope` 中断；tool 调用同样支持；API 层 (B.3) cancel → orchestrator 在 ≤200ms 内 surface 到 LLM/工具调用层。**Resume sanitize**：`GraphRunner.run` 在 resume 路径上 scan checkpoint messages — 若 AIMessage 有 `tool_calls` 但下一条不是 ToolMessage（cancel 打断 [LLM 完 → tool 派遣] 的窗口造成的 orphan），为每个缺失的 `tool_call_id` 注入 placeholder `ToolMessage(content="[cancelled before dispatch]")`，保证 messages 列表对 LLM 合法、可继续执行。**不上独立 middleware**（场景太小、~20 行 guard 在 runner 内即可）。对照 deer-flow `dangling_tool_call_middleware.py`。 | GAPS § 8 #25 第 2 段；deer-flow dangling_tool_call |
+| **E.15 cancellation engine 节点传播** | `CancellationToken`（背后 `asyncio.Event`）经 `config["configurable"]` 注入（非 `AgentState` — 见 § 2.7 实现修正）；每个 LangGraph 节点入口 `token.raise_if_cancelled()` → 抛 `RunCancelledError`；in-flight LLM / tool call 用 `token.run_cancellable(coro)` 包（`asyncio.wait` 竞速，取消即中断 await）；`run_manager.cancel` → set abort_event → token 即取消，≤200ms 内 surface。**Resume sanitize**：`GraphRunner.sanitize_thread` 在 resume 前 scan checkpoint messages — 若 AIMessage 有 `tool_calls` 但无匹配 ToolMessage（cancel 打断 [LLM 完 → tool 派遣] 窗口造成的 orphan），为每个缺失 `tool_call_id` 注入 placeholder `ToolMessage(content="[cancelled before dispatch]", status="error")`（`aupdate_state(as_node="tools")` 写入，让 resume 流向 agent 重推理）。**不上独立 middleware**（场景罕见，纯函数 + runner 方法即可）。对照 deer-flow `dangling_tool_call_middleware.py`。 | GAPS § 8 #25 第 2 段；deer-flow dangling_tool_call |
 
 ### 1.2 Out-of-scope（明确推迟）
 
@@ -157,21 +157,15 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]   # langgraph reducer
     step_count: int
     max_steps: int
-
-    # cancellation
-    cancellation_token: CancellationToken  # 不参与 checkpoint（runtime-only）
-
-    # tenant binding
-    tenant_id: UUID
-    session_id: UUID
-    run_id: UUID
-
-    # LLM routing state
-    provider_chain: list[str]
-    current_provider_idx: int
 ```
 
-**checkpoint 策略**：`cancellation_token` 标 `__skip_checkpoint__`（用 reducer 模式过滤），其他字段全 checkpoint。重启 resume 时 `cancellation_token` 重新创建（resume 默认未取消）。
+**实际落地的 `AgentState`**（E.6 + E.13 后）只有 `messages` / `step_count` / `max_steps` 三个字段 —— TypedDict 的每个 channel 都被 checkpoint，所以**不可序列化的运行时对象一律不进 AgentState**：
+
+- `cancellation_token`（E.15）：背后是 live `asyncio.Event`，走 `config["configurable"]`（见 § 2.7 实现修正）。
+- `tenant_id` / `session_id` / `run_id`：走 `config["configurable"]`（LangGraph 惯用法，§ 2.3 开头已说明）。
+- `provider_chain` / `current_provider_idx`：E.11 `LLMRouter` 自己持有 provider 列表 + fallback 状态，不进 state。
+
+**checkpoint 策略**：`AgentState` 三个字段全 checkpoint（dill）。运行时对象（token / router / registry）经 `config` 通道传入，天然不参与 checkpoint，resume 时由 `run_agent` worker 重新注入。
 
 ### 2.4 LLMRouter / Provider Fallback（E.11 + E.12 + E.12.5）
 
@@ -287,21 +281,31 @@ class ToolRegistry:
 
 ```python
 # packages/helix-runtime/src/helix_agent/runtime/cancellation.py
+class RunCancelledError(Exception):
+    """协作取消在 checkpoint 处抛出 — 普通领域异常（非 asyncio.CancelledError）。"""
+
 class CancellationToken:
-    """协作式取消令牌。所有节点 / 中间件 / LLM / tool 入口 check 一次。"""
+    """协作式取消令牌。背后是一个 asyncio.Event。"""
+    @classmethod
+    def from_event(cls, event: asyncio.Event) -> Self: ...   # 绑定到 RunRecord.abort_event
     def cancel(self) -> None: ...
     def cancelled(self) -> bool: ...
-    @asynccontextmanager
-    async def scope(self) -> AsyncIterator[anyio.CancelScope]:
-        """anyio cancel_scope；token.cancel() 即触发 scope.cancel()."""
+    def raise_if_cancelled(self) -> None: ...                # 同步 checkpoint（节点入口）
+    async def run_cancellable(self, coro) -> T: ...          # 包一个 await，cancel 即中断
 ```
 
+**实现修正（E.15 落地）**：
+
+1. **token 走 `config["configurable"]` 而非 `AgentState`**：原 § 2.3 设想把 `cancellation_token` 放进 `AgentState` 并标 `__skip_checkpoint__`。但 `AgentState` 是 TypedDict、每个 channel 都被 checkpoint，且 LangGraph 没有"单 channel 跳过"的公开 API；而 token 背后是个 live `asyncio.Event`，**不可序列化**。改走 `config["configurable"]`（per-invocation、不 checkpoint，与 `tenant_id` / `run_id` 同一通道）。`run_agent` worker 用 `CancellationToken.from_event(record.abort_event)` 把 token 绑到 run 的 abort_event 上再注入 config。
+2. **取消用 `asyncio.wait(FIRST_COMPLETED)` 竞速，而非 anyio `CancelScope`**：`run_cancellable(coro)` 把 coro 与"取消事件 wait"竞速；取消先到 → cancel coro 的 task → 抛 `RunCancelledError`。纯 stdlib，无需 anyio 依赖，语义更易推理。
+3. **抛 `RunCancelledError` 而非 `asyncio.CancelledError`**：自定义领域异常，`run_agent` 可用普通 `except` 接住并把 run 收为 `INTERRUPTED`，不与 task 级 asyncio 取消混淆。
+
 **信号链**：
-1. FastAPI `request.is_disconnected()` → control-plane 调 orchestrator `POST /runs/{run_id}/cancel` → 设置 token
-2. orchestrator main loop 每个 LangGraph 节点入口 check `token.cancelled()` → raise `asyncio.CancelledError`
-3. LLM call 用 `async with token.scope() as cs: await llm.stream(...)` → token 触发即 `cs.cancel()`
-4. tool call 同样用 `token.scope()` 包裹
-5. SSE 流：上面任一环节 `CancelledError` → 流终止 → audit `RUN_CANCELLED`
+1. FastAPI `request.is_disconnected()`（E.14 `sse_consumer`）→ `run_manager.cancel(run_id)` → set `record.abort_event`
+2. token（`from_event(abort_event)`）即 `cancelled()` → 每个 LangGraph 节点入口 `token.raise_if_cancelled()` → 抛 `RunCancelledError`
+3. LLM call 用 `await token.run_cancellable(llm_caller(...))` → 取消即中断 in-flight await
+4. tool call 同样 `await token.run_cancellable(_dispatch_tool(...))`（取消在 `_dispatch_tool` 内表现为 `asyncio.CancelledError` — 非 `Exception`，不会被工具自己的 `except Exception` 吞成 ToolMessage）
+5. `run_agent` worker 接 `RunCancelledError` → run 收为 `INTERRUPTED`；`StreamBridge` 照常 `publish_end`
 
 **关键不变量**：cancellation **协作式**（每个 await 点至少 100ms 内 surface）；**不**用 SIGKILL（那是 F.7 sandbox 端做的）。
 
@@ -395,7 +399,7 @@ class LLMResponseCache:
 ### E-9：cancellation 协作式而非抢占式
 
 - **替代**：每个 task 装 watchdog 线程强 kill；或 OS signal。
-- **选择**：协作式（asyncio cancel + anyio cancel_scope）。
+- **选择**：协作式 —— 节点入口同步 checkpoint（`raise_if_cancelled`）+ in-flight await 用 `asyncio.wait(FIRST_COMPLETED)` 竞速中断（`run_cancellable`）。E.15 落地时弃用了原计划的 anyio `CancelScope`：纯 stdlib `asyncio` 竞速已够、语义更易推理、不引入 anyio 直接依赖。
 - **理由**：(1) Python asyncio 模型本身就是协作式；(2) 强 kill 会留 inconsistent state（半写的 checkpoint、半发的 SSE event）；(3) 100ms 内 surface 足够 — 远小于人感 200ms；(4) sandbox 进程 kill 由 F.7 sandbox-supervisor 做（那里有强 kill）。
 - **代价**：blocking 调用（同步 IO）无法中断 — 但 orchestrator 全 async 栈，不存在此问题。
 
@@ -659,8 +663,8 @@ op.add_column(
 | 28 | SSE backpressure drop-oldest | E.14 | unit | `StreamBridge` buffer=8，publish 20 条；慢订阅者从头 subscribe → 收到尾部保留段 + `subscriber_fell_behind` warning（Mini-ADR E-8：M0 drop-oldest 不 cancel）|
 | 29 | SSE heartbeat | E.14 | integration | `heartbeat_interval` 缩到 0.1s + 静置 worker → `sse_consumer` 至少 yield 1 个 `: heartbeat` 注释帧 |
 | 28b | SSE client 断开 → cancel run | E.14 | integration | `request.is_disconnected()` 返回 True → `sse_consumer` finally 段调 `run_manager.cancel`，worker task 收 `CancelledError` 终止 |
-| 30 | cancellation in-flight LLM | E.15 | integration | LLM mock stream 50 tokens（each 100ms）→ token.cancel() → ≤200ms 后停止 |
-| 31 | cancellation tool 中 | E.15 | integration | tool mock sleep 5s → 1s 后 cancel → tool task 取消 + audit |
+| 30 | cancellation in-flight LLM | E.15 | integration | LLM mock sleep 5s → token.cancel() → run 在 ≤1.5s 内抛 `RunCancelledError`（LLM 未跑完）|
+| 31 | cancellation tool 中 | E.15 | integration | tool mock sleep 5s → tool 启动后 cancel → `run_cancellable` 中断 tool task + 抛 `RunCancelledError`（取消不被吞成 ToolMessage）|
 | 32 | cancellation 重启不传染 | E.15 | unit | 一次 run cancel 后开启新 run → 新 run cancellation_token 默认未取消 |
 | 33 | manifest schema 兼容 | E.* | unit | manifest 无 `fallback` 字段 → primary-only 正常工作；无 `cache` 字段 → 默认启用 |
 | 34 | web_search 输出截断 | E.7 | unit | mock Tavily 返回单条 8000 字符 → `ToolResult.content` 4096 字符 + `meta.truncated=true` |
@@ -818,7 +822,7 @@ E.14 feat(e-14): SSE streaming + backpressure（in-process 单体）
      - control-plane 启动时按 agent 注册；E.14 的 worker 消费它产出的 graph
 
 E.15 feat(e-15): cancellation 全链路传播 + resume sanitize
-     - runtime/cancellation.py（CancellationToken + anyio scope）
+     - runtime/cancellation.py（CancellationToken + run_cancellable，纯 asyncio 竞速）
      - GraphRunner 节点入口 check
      - LLM / tool 调用包 scope
      - control-plane POST /runs/{id}/cancel 联通 orchestrator
@@ -878,6 +882,6 @@ E.15 feat(e-15): cancellation 全链路传播 + resume sanitize
 | E.13 LLM response cache | E.13 | P0 #28；Redis；per-tenant 命名空间 |
 | E.14 SSE 流式输出 + backpressure | E.14 | in-process 单体（非独立服务）；run_agent worker + sse_consumer + RunManager；drop-oldest backpressure（Mini-ADR E-8 修正）|
 | agent factory（manifest→graph 装配）| E.14 后续独立 PR | E.14 worker graph 注入式所致；manifest→编译 graph 的装配单列；ITERATION-PLAN E 段原未列 |
-| E.15 请求取消的 engine 节点传播 | E.15 | P0 #25 第 2 段；协作式 anyio scope |
+| E.15 请求取消的 engine 节点传播 | E.15 | P0 #25 第 2 段；协作式（raise_if_cancelled + run_cancellable 竞速）+ resume sanitize |
 
 完成后 Stream E 17/17（含 E.10.5 + E.12.5）+ D.2 anchor 注册完成、24 P0 中 #15 / #25 / #27 / #28 全部勾选。agent factory 作为 E.14 拆分出的后续 PR 单独跟踪。

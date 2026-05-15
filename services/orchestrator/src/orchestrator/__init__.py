@@ -33,6 +33,12 @@ from orchestrator.llm import (
 from orchestrator.llm import (
     ProviderHandle as ProviderHandle,
 )
+from orchestrator.resume import (
+    PLACEHOLDER_CONTENT as PLACEHOLDER_CONTENT,
+)
+from orchestrator.resume import (
+    sanitize_dangling_tool_calls as sanitize_dangling_tool_calls,
+)
 from orchestrator.runner import GraphRunner as GraphRunner
 from orchestrator.sse import (
     DEFAULT_STREAM_MODE as DEFAULT_STREAM_MODE,
@@ -73,6 +79,7 @@ from orchestrator.tools import (
 __all__ = [
     "DEFAULT_MAX_STEPS",
     "DEFAULT_STREAM_MODE",
+    "PLACEHOLDER_CONTENT",
     "AgentState",
     "AllProvidersExhaustedError",
     "AnthropicProvider",
@@ -94,5 +101,6 @@ __all__ = [
     "build_react_graph",
     "format_sse",
     "run_agent",
+    "sanitize_dangling_tool_calls",
     "sse_consumer",
 ]

@@ -43,6 +43,11 @@ from uuid import UUID
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
+from helix_agent.runtime.cancellation import (
+    CANCELLATION_TOKEN_KEY,
+    CancellationToken,
+    RunCancelledError,
+)
 from helix_agent.runtime.runs import RunManager, RunRecord, RunStatus
 from helix_agent.runtime.stream_bridge import (
     END_SENTINEL,
@@ -109,6 +114,18 @@ async def run_agent(
        the run finished.
     """
     run_id = record.run_id
+    # Bind a cancellation token to the run's abort_event and thread it
+    # to graph nodes via config["configurable"] (E.15). RunManager.cancel
+    # sets abort_event → the token reports cancelled → nodes surface
+    # RunCancelledError at their next checkpoint.
+    token = CancellationToken.from_event(record.abort_event)
+    effective_config: RunnableConfig = {
+        **config,
+        "configurable": {
+            **(config.get("configurable") or {}),
+            CANCELLATION_TOKEN_KEY: token,
+        },
+    }
     try:
         await run_manager.set_status(run_id, RunStatus.RUNNING)
         await bridge.publish(
@@ -117,7 +134,7 @@ async def run_agent(
             {"run_id": str(run_id), "thread_id": str(record.thread_id)},
         )
 
-        async for chunk in graph.astream(graph_input, config, stream_mode=stream_mode):
+        async for chunk in graph.astream(graph_input, effective_config, stream_mode=stream_mode):
             if record.abort_event.is_set():
                 logger.info("run_agent.abort_requested run_id=%s", run_id)
                 break
@@ -126,6 +143,11 @@ async def run_agent(
         final = RunStatus.INTERRUPTED if record.abort_event.is_set() else RunStatus.SUCCESS
         await run_manager.set_status(run_id, final)
 
+    except RunCancelledError:
+        # A node surfaced cooperative cancellation mid-step (E.15) — a
+        # normal interrupted finish, not a failure.
+        await run_manager.set_status(run_id, RunStatus.INTERRUPTED)
+        logger.info("run_agent.cancelled_cooperatively run_id=%s", run_id)
     except asyncio.CancelledError:
         # Task-level cancellation (event-loop shutdown / explicit
         # task.cancel()). The cooperative abort_event path above is the

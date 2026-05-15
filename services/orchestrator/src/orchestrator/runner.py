@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
+
+from orchestrator.resume import sanitize_dangling_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +63,43 @@ class GraphRunner:
             type(self._checkpointer).__name__,
         )
         return compiled
+
+    async def sanitize_thread(
+        self,
+        graph: CompiledStateGraph[Any, Any, Any, Any],
+        config: RunnableConfig,
+        *,
+        as_node: str = "tools",
+    ) -> int:
+        """Repair orphan ``tool_calls`` in a thread's checkpoint (E.15).
+
+        Call before resuming a thread that may have been cancelled
+        mid-tool-dispatch. Reads the thread's current state, computes
+        placeholder ``ToolMessage``s for any unanswered ``tool_calls``
+        (see :func:`orchestrator.resume.sanitize_dangling_tool_calls`),
+        and — if any — appends them via ``aupdate_state``.
+
+        The placeholders are written ``as_node="tools"`` (the ReAct
+        graph's tool node): LangGraph then positions the thread as
+        "tools just finished", so the resumed run flows ``tools →
+        agent`` and the agent re-reasons over the now-valid history.
+        Writing them as the agent node instead would route the
+        conditional edge to ``END`` (the last message is no longer an
+        AIMessage with tool_calls) and the run would not resume.
+
+        Returns the number of placeholders injected (``0`` when the
+        thread's history is already valid, including a fresh thread
+        with no checkpoint).
+        """
+        snapshot = await graph.aget_state(config)
+        values = snapshot.values if isinstance(snapshot.values, dict) else {}
+        messages = values.get("messages") or []
+        placeholders = sanitize_dangling_tool_calls(messages)
+        if placeholders:
+            await graph.aupdate_state(config, {"messages": placeholders}, as_node=as_node)
+            logger.info(
+                "orchestrator.resume.sanitized count=%d thread=%s",
+                len(placeholders),
+                (config.get("configurable") or {}).get("thread_id"),
+            )
+        return len(placeholders)
