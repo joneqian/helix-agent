@@ -18,6 +18,42 @@ from orchestrator.tools.http import (
 from orchestrator.tools.http import (
     HTTPTool as HTTPTool,
 )
+from orchestrator.tools.mcp import (
+    DEFAULT_MAX_SERVERS as DEFAULT_MAX_SERVERS,
+)
+from orchestrator.tools.mcp import (
+    DEFAULT_MCP_CHAR_CAP as DEFAULT_MCP_CHAR_CAP,
+)
+from orchestrator.tools.mcp import (
+    MCPCallResult as MCPCallResult,
+)
+from orchestrator.tools.mcp import (
+    MCPClient as MCPClient,
+)
+from orchestrator.tools.mcp import (
+    MCPServerConfig as MCPServerConfig,
+)
+from orchestrator.tools.mcp import (
+    MCPServerPool as MCPServerPool,
+)
+from orchestrator.tools.mcp import (
+    MCPServerPoolLimitError as MCPServerPoolLimitError,
+)
+from orchestrator.tools.mcp import (
+    MCPTool as MCPTool,
+)
+from orchestrator.tools.mcp import (
+    MCPToolDef as MCPToolDef,
+)
+from orchestrator.tools.mcp import (
+    RecordingMCPClient as RecordingMCPClient,
+)
+from orchestrator.tools.mcp import (
+    StdioMCPClient as StdioMCPClient,
+)
+from orchestrator.tools.mcp import (
+    register_mcp_tools as register_mcp_tools,
+)
 from orchestrator.tools.registry import (
     Tool as Tool,
 )
@@ -63,10 +99,21 @@ __all__ = [
     "DEFAULT_CONTENT_CHAR_CAP",
     "DEFAULT_HEADER_CHAR_CAP",
     "DEFAULT_MAX_RESULTS",
+    "DEFAULT_MAX_SERVERS",
+    "DEFAULT_MCP_CHAR_CAP",
     "AllowlistProvider",
     "HTTPTavilyClient",
     "HTTPTool",
+    "MCPCallResult",
+    "MCPClient",
+    "MCPServerConfig",
+    "MCPServerPool",
+    "MCPServerPoolLimitError",
+    "MCPTool",
+    "MCPToolDef",
+    "RecordingMCPClient",
     "RecordingTavilyClient",
+    "StdioMCPClient",
     "TavilyClient",
     "Tool",
     "ToolBlockedError",
@@ -76,4 +123,5 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "WebSearchTool",
+    "register_mcp_tools",
 ]
