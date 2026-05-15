@@ -60,6 +60,7 @@ from orchestrator.tools.registry import ToolSpec
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "https://api.openai.com"
+DEFAULT_CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 _DEFAULT_TIMEOUT_S = 60.0
 _ERROR_BODY_CHAR_CAP = 500
 
@@ -90,12 +91,21 @@ class HTTPOpenAIClient:
     ``transport`` is an optional injection point for tests; see
     :class:`~orchestrator.llm.providers.anthropic.HTTPAnthropicClient`
     for the rationale.
+
+    ``chat_completions_path`` lets OpenAI-compatible vendors override the
+    default ``/v1/chat/completions`` suffix — most (DeepSeek, Moonshot,
+    DashScope compatible-mode) keep ``/v1/chat/completions``, but Zhipu
+    GLM uses ``/api/paas/v4/chat/completions`` and Volcengine ARK
+    (Doubao) uses ``/api/v3/chat/completions``. See
+    :mod:`orchestrator.llm.providers.openai_compatible` for the
+    pre-configured factory functions.
     """
 
     api_key: str
     base_url: str = _DEFAULT_BASE_URL
     timeout_s: float = _DEFAULT_TIMEOUT_S
     transport: httpx.AsyncBaseTransport | None = None
+    chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH
 
     async def chat_completions(
         self,
@@ -113,7 +123,7 @@ class HTTPOpenAIClient:
                 timeout=self.timeout_s, transport=self.transport
             ) as client:
                 response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
+                    f"{self.base_url}{self.chat_completions_path}",
                     headers={
                         "authorization": f"Bearer {self.api_key}",
                         "content-type": "application/json",

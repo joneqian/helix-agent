@@ -187,3 +187,20 @@ def test_model_spec_validate_directly() -> None:
     model = ModelSpec.model_validate({"provider": "openai", "name": "gpt-4o"})
     assert model.temperature == 0.2
     assert model.max_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "provider",
+    ["kimi", "glm", "deepseek", "qwen", "doubao"],
+)
+def test_openai_compatible_providers_accepted(provider: str) -> None:
+    """E.11.5 — five domestic OpenAI-compatible vendors must validate."""
+    model = ModelSpec.model_validate({"provider": provider, "name": "test-model"})
+    assert model.provider == provider
+
+
+def test_unknown_provider_rejected() -> None:
+    """Schema regression guard: unknown providers must still fail validation
+    even after the E.11.5 Literal extension."""
+    with pytest.raises(ValidationError):
+        ModelSpec.model_validate({"provider": "bedrock", "name": "claude"})
