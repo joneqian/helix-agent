@@ -36,14 +36,16 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Literal, cast
+from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from orchestrator.errors import MaxStepsExceededError
 from orchestrator.llm import LLMCaller
 from orchestrator.state import AgentState
-from orchestrator.tools.registry import Tool, ToolNotFoundError, ToolRegistry
+from orchestrator.tools.registry import Tool, ToolContext, ToolNotFoundError, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +78,16 @@ def build_react_graph(
         )
         return {"messages": [response], "step_count": step_count + 1}
 
-    async def tools_node(state: AgentState) -> dict[str, Any]:
+    async def tools_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         last = state["messages"][-1]
         tool_calls = _extract_tool_calls(last)
         if not tool_calls:
             return {}
 
+        ctx = _build_tool_context(config)
         new_messages: list[BaseMessage] = []
         for tc in tool_calls:
-            new_messages.append(await _dispatch_tool(tc, tool_registry))
+            new_messages.append(await _dispatch_tool(tc, tool_registry, ctx))
         return {"messages": new_messages}
 
     graph: StateGraph[AgentState, None, AgentState, AgentState] = StateGraph(AgentState)
@@ -117,14 +120,18 @@ def _extract_tool_calls(message: BaseMessage) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], raw)
 
 
-async def _dispatch_tool(tool_call: dict[str, Any], registry: ToolRegistry) -> ToolMessage:
+async def _dispatch_tool(
+    tool_call: dict[str, Any],
+    registry: ToolRegistry,
+    ctx: ToolContext,
+) -> ToolMessage:
     name = str(tool_call.get("name", ""))
     call_id = str(tool_call.get("id", ""))
     args = tool_call.get("args") or {}
 
     try:
         tool = registry.get_required(name)
-        return await _invoke_tool(tool, args, call_id)
+        return await _invoke_tool(tool, args, call_id, ctx)
     except ToolNotFoundError as exc:
         logger.warning("tools.unknown_tool name=%s call_id=%s", name, call_id)
         return ToolMessage(
@@ -134,13 +141,36 @@ async def _dispatch_tool(tool_call: dict[str, Any], registry: ToolRegistry) -> T
         )
 
 
+def _build_tool_context(config: RunnableConfig) -> ToolContext:
+    """Lift tenant binding out of ``config["configurable"]`` into a
+    :class:`ToolContext`. Missing values fall through as ``None`` —
+    M0 dev / unit tests rarely supply tenant_id, and per-tenant tools
+    (E.8 HTTP, E.9 MCP) handle the ``None`` case explicitly (deny-all)."""
+    configurable = config.get("configurable") or {}
+    tenant_id = _parse_uuid(configurable.get("tenant_id"))
+    run_id = _parse_uuid(configurable.get("run_id"))
+    return ToolContext(tenant_id=tenant_id, run_id=run_id)
+
+
+def _parse_uuid(raw: object) -> UUID | None:
+    if isinstance(raw, UUID):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return UUID(raw)
+        except ValueError:
+            return None
+    return None
+
+
 async def _invoke_tool(
     tool: Tool,
     args: dict[str, Any],
     call_id: str,
+    ctx: ToolContext,
 ) -> ToolMessage:
     try:
-        result = await tool.call(args)
+        result = await tool.call(args, ctx=ctx)
     except Exception as exc:
         logger.warning(
             "tools.dispatch_failed name=%s call_id=%s err=%s",

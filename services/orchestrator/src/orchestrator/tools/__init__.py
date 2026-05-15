@@ -6,8 +6,26 @@ Concrete tool adapters land in their own modules (``web_search`` E.7,
 :class:`ToolRegistry` at orchestrator startup.
 """
 
+from orchestrator.tools.http import (
+    DEFAULT_BODY_CHAR_CAP as DEFAULT_BODY_CHAR_CAP,
+)
+from orchestrator.tools.http import (
+    DEFAULT_HEADER_CHAR_CAP as DEFAULT_HEADER_CHAR_CAP,
+)
+from orchestrator.tools.http import (
+    AllowlistProvider as AllowlistProvider,
+)
+from orchestrator.tools.http import (
+    HTTPTool as HTTPTool,
+)
 from orchestrator.tools.registry import (
     Tool as Tool,
+)
+from orchestrator.tools.registry import (
+    ToolBlockedError as ToolBlockedError,
+)
+from orchestrator.tools.registry import (
+    ToolContext as ToolContext,
 )
 from orchestrator.tools.registry import (
     ToolNotFoundError as ToolNotFoundError,
@@ -41,12 +59,18 @@ from orchestrator.tools.web_search import (
 )
 
 __all__ = [
+    "DEFAULT_BODY_CHAR_CAP",
     "DEFAULT_CONTENT_CHAR_CAP",
+    "DEFAULT_HEADER_CHAR_CAP",
     "DEFAULT_MAX_RESULTS",
+    "AllowlistProvider",
     "HTTPTavilyClient",
+    "HTTPTool",
     "RecordingTavilyClient",
     "TavilyClient",
     "Tool",
+    "ToolBlockedError",
+    "ToolContext",
     "ToolNotFoundError",
     "ToolRegistry",
     "ToolResult",

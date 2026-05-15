@@ -26,7 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from orchestrator.tools.registry import ToolResult, ToolSpec
+from orchestrator.tools.registry import ToolContext, ToolResult, ToolSpec
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,10 @@ class WebSearchTool:
             },
         )
 
-    async def call(self, args: Mapping[str, Any]) -> ToolResult:
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        # ``ctx`` is unused — web_search has no per-tenant policy in M0.
+        # Future per-tenant API-key resolution (F.6) reads ``ctx.tenant_id`` here.
+        del ctx
         query = self._require_query(args)
         max_results = self._coerce_max_results(args.get("max_results"))
         raw = await self.client.search(query=query, max_results=max_results)

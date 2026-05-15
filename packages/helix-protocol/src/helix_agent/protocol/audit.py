@@ -59,6 +59,9 @@ class AuditAction(StrEnum):
     # sandbox
     SANDBOX_FORCE_DESTROY = "sandbox:force_destroy"
     SANDBOX_QUOTA_DENIED = "sandbox:quota_denied"
+    # tools (Stream E.6 + E.8 + onwards)
+    TOOL_CALL = "tool:call"
+    TOOL_BLOCKED = "tool:blocked"
     # api_key
     API_KEY_CREATE = "api_key:create"
     API_KEY_REVOKE = "api_key:revoke"

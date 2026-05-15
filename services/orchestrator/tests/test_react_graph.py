@@ -21,6 +21,7 @@ from orchestrator import (
     AgentState,
     GraphRunner,
     MaxStepsExceededError,
+    ToolContext,
     ToolRegistry,
     ToolResult,
     ToolSpec,
@@ -64,7 +65,8 @@ class _ScriptedTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(name=self.name, description=f"scripted {self.name}")
 
-    async def call(self, args: Mapping[str, Any]) -> ToolResult:
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        del ctx
         if self.exc is not None:
             raise self.exc
         return ToolResult(content=self.result)

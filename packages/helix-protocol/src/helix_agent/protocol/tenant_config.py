@@ -57,6 +57,12 @@ class TenantConfigRecord(BaseModel):
     mcp_allowlist: list[str] = Field(default_factory=list)
     rate_limit_override: dict[str, Any] = Field(default_factory=dict)
     pii_fields: list[str] = Field(default_factory=list)
+    # E.8: glob patterns the HTTP tool may call (e.g. ``"https://api.github.com/*"``).
+    # Default ``[]`` ↔ deny-all so a freshly-provisioned tenant is safe.
+    http_tool_allowlist: list[str] = Field(default_factory=list)
+    # E.9: MCP server launch configs.
+    # Shape: ``[{"name": str, "command": [str, ...], "env": {str: str}}]``.
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)
     # D.3: per-tenant retention. Bounded ranges mirror the DB CHECK
     # constraints in migration 0010 so admin clients fail fast rather
     # than tripping a 23514 at write time.
@@ -85,6 +91,8 @@ class TenantConfigPatch(BaseModel):
     mcp_allowlist: list[str] | None = None
     rate_limit_override: dict[str, Any] | None = None
     pii_fields: list[str] | None = None
+    http_tool_allowlist: list[str] | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
     audit_retention_days: int | None = Field(
         default=None, ge=_RETENTION_MIN_DAYS, le=_RETENTION_MAX_DAYS
     )
