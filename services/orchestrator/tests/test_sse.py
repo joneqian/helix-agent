@@ -346,7 +346,16 @@ async def test_run_agent_stops_early_on_abort_event() -> None:
         chunk_delay_s=0.02,
     )
 
-    worker = asyncio.create_task(
+    async def _cancel_mid_stream() -> None:
+        """Wait for the run to start + a couple chunks, then abort it."""
+        await graph.started.wait()
+        await asyncio.sleep(0.03)
+        await rm.cancel(record.run_id)
+
+    # Run the worker and the canceller concurrently. ``gather`` (a call,
+    # not a bare ``await <name>``) keeps CodeQL's py/ineffectual-statement
+    # quiet while still awaiting both to completion.
+    await asyncio.gather(
         run_agent(
             bridge=bridge,
             run_manager=rm,
@@ -354,12 +363,9 @@ async def test_run_agent_stops_early_on_abort_event() -> None:
             graph=graph,
             graph_input={"messages": []},
             config={},
-        )
+        ),
+        _cancel_mid_stream(),
     )
-    await graph.started.wait()
-    await asyncio.sleep(0.03)  # let a chunk or two through
-    await rm.cancel(record.run_id)
-    await worker
 
     events = await _drain(bridge, record.run_id)
     update_events = [e for e in events if e.event == "updates"]
