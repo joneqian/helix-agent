@@ -50,7 +50,11 @@ class Tool(Protocol):
 
     spec: ToolSpec
 
-    async def call(self, args: Mapping[str, Any]) -> ToolResult: ...
+    async def call(self, args: Mapping[str, Any]) -> ToolResult:
+        """Dispatch the tool with the given args and return a
+        :class:`ToolResult`. Implementations may raise; the ReAct graph's
+        tools node wraps any exception into a ``ToolMessage(status='error')``
+        (Mini-ADR E-12) — never let it propagate to the runner."""
 
 
 class ToolNotFoundError(KeyError):

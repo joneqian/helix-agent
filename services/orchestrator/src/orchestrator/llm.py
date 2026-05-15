@@ -31,4 +31,7 @@ class LLMCaller(Protocol):
         *,
         messages: Sequence[BaseMessage],
         tools: Sequence[ToolSpec],
-    ) -> AIMessage: ...
+    ) -> AIMessage:
+        """Call the LLM with the current message history and tool catalogue;
+        return the next ``AIMessage`` (with ``tool_calls`` set if the model
+        wants tools, otherwise text-only)."""
