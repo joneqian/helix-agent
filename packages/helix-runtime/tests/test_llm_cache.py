@@ -9,10 +9,11 @@ cache hit) lives in the orchestrator integration suite.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from helix_agent.runtime.llm import (
     InMemoryRedisCache,
@@ -88,28 +89,37 @@ def test_not_cacheable_with_ai_tool_calls() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _key(
+    cache: LLMResponseCache,
+    *,
+    tenant_id: UUID = _TENANT_A,
+    model: str = _MODEL,
+    messages: Sequence[BaseMessage] | None = None,
+    temperature: float = 0.0,
+    max_tokens: int = 4096,
+) -> str:
+    """Typed wrapper over ``make_key`` with defaults — lets each test
+    override exactly one field without ``**dict`` unpacking (which mypy
+    strict rejects against the keyword-only signature)."""
+    return cache.make_key(
+        tenant_id=tenant_id,
+        model=model,
+        messages=[HumanMessage(content="hello")] if messages is None else messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+
 def test_make_key_is_deterministic() -> None:
     cache = _cache()
-    args = {
-        "tenant_id": _TENANT_A,
-        "model": _MODEL,
-        "messages": [HumanMessage(content="hello")],
-        "temperature": 0.0,
-        "max_tokens": 4096,
-    }
-    assert cache.make_key(**args) == cache.make_key(**args)
+    assert _key(cache) == _key(cache)
 
 
 def test_make_key_differs_by_tenant() -> None:
     """Test matrix #25 root cause — tenant is part of the key."""
     cache = _cache()
-    msgs = [HumanMessage(content="hello")]
-    key_a = cache.make_key(
-        tenant_id=_TENANT_A, model=_MODEL, messages=msgs, temperature=0.0, max_tokens=4096
-    )
-    key_b = cache.make_key(
-        tenant_id=_TENANT_B, model=_MODEL, messages=msgs, temperature=0.0, max_tokens=4096
-    )
+    key_a = _key(cache, tenant_id=_TENANT_A)
+    key_b = _key(cache, tenant_id=_TENANT_B)
     assert key_a != key_b
     assert str(_TENANT_A) in key_a
     assert str(_TENANT_B) in key_b
@@ -117,18 +127,11 @@ def test_make_key_differs_by_tenant() -> None:
 
 def test_make_key_differs_by_model_and_messages_and_params() -> None:
     cache = _cache()
-    base = {
-        "tenant_id": _TENANT_A,
-        "model": _MODEL,
-        "messages": [HumanMessage(content="hello")],
-        "temperature": 0.0,
-        "max_tokens": 4096,
-    }
-    key = cache.make_key(**base)
-    assert cache.make_key(**{**base, "model": "gpt-4o"}) != key
-    assert cache.make_key(**{**base, "messages": [HumanMessage(content="world")]}) != key
-    assert cache.make_key(**{**base, "temperature": 0.1}) != key
-    assert cache.make_key(**{**base, "max_tokens": 2048}) != key
+    key = _key(cache)
+    assert _key(cache, model="gpt-4o") != key
+    assert _key(cache, messages=[HumanMessage(content="world")]) != key
+    assert _key(cache, temperature=0.1) != key
+    assert _key(cache, max_tokens=2048) != key
 
 
 def test_make_key_ignores_message_id() -> None:
