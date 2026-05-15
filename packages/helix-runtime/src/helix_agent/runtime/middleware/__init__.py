@@ -39,13 +39,49 @@ from helix_agent.runtime.middleware.errors import (
 from helix_agent.runtime.middleware.errors import (
     UnknownAnchorError as UnknownAnchorError,
 )
+from helix_agent.runtime.middleware.llm_error_handling import (
+    BreakerRegistry as BreakerRegistry,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    CircuitBreaker as CircuitBreaker,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    CircuitOpenError as CircuitOpenError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMClientError as LLMClientError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMError as LLMError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMErrorHandlingMiddleware as LLMErrorHandlingMiddleware,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMNetworkError as LLMNetworkError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMRateLimitError as LLMRateLimitError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMServerError as LLMServerError,
+)
 
 __all__ = [
     "ANCHORS",
+    "BreakerRegistry",
     "CallNext",
     "ChainCycleError",
+    "CircuitBreaker",
+    "CircuitOpenError",
     "DuplicateMiddlewareError",
     "DynamicContextMiddleware",
+    "LLMClientError",
+    "LLMError",
+    "LLMErrorHandlingMiddleware",
+    "LLMNetworkError",
+    "LLMRateLimitError",
+    "LLMServerError",
     "Middleware",
     "MiddlewareChain",
     "MiddlewareContext",
