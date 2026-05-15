@@ -77,7 +77,21 @@ class ModelSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["anthropic", "openai", "azure", "self-hosted"]
+    provider: Literal[
+        "anthropic",
+        "openai",
+        "azure",
+        "self-hosted",
+        # OpenAI-compatible regional vendors (E.11.5) — all use the
+        # OpenAI Chat Completions wire format; see
+        # ``orchestrator.llm.providers.openai_compatible`` for the
+        # base-URL + path mappings.
+        "kimi",
+        "glm",
+        "deepseek",
+        "qwen",
+        "doubao",
+    ]
     name: str = Field(min_length=1)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=4096, gt=0)

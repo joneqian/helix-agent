@@ -14,7 +14,31 @@ Public surface:
 
 from orchestrator.llm.caller import LLMCaller as LLMCaller
 from orchestrator.llm.providers import (
+    DEEPSEEK_BASE_URL as DEEPSEEK_BASE_URL,
+)
+from orchestrator.llm.providers import (
+    DEFAULT_CHAT_COMPLETIONS_PATH as DEFAULT_CHAT_COMPLETIONS_PATH,
+)
+from orchestrator.llm.providers import (
     DEFAULT_MAX_TOKENS as DEFAULT_MAX_TOKENS,
+)
+from orchestrator.llm.providers import (
+    DOUBAO_BASE_URL as DOUBAO_BASE_URL,
+)
+from orchestrator.llm.providers import (
+    DOUBAO_CHAT_COMPLETIONS_PATH as DOUBAO_CHAT_COMPLETIONS_PATH,
+)
+from orchestrator.llm.providers import (
+    GLM_BASE_URL as GLM_BASE_URL,
+)
+from orchestrator.llm.providers import (
+    GLM_CHAT_COMPLETIONS_PATH as GLM_CHAT_COMPLETIONS_PATH,
+)
+from orchestrator.llm.providers import (
+    KIMI_BASE_URL as KIMI_BASE_URL,
+)
+from orchestrator.llm.providers import (
+    QWEN_BASE_URL as QWEN_BASE_URL,
 )
 from orchestrator.llm.providers import (
     AnthropicClient as AnthropicClient,
@@ -40,6 +64,21 @@ from orchestrator.llm.providers import (
 from orchestrator.llm.providers import (
     RecordingOpenAIClient as RecordingOpenAIClient,
 )
+from orchestrator.llm.providers import (
+    make_deepseek_client as make_deepseek_client,
+)
+from orchestrator.llm.providers import (
+    make_doubao_client as make_doubao_client,
+)
+from orchestrator.llm.providers import (
+    make_glm_client as make_glm_client,
+)
+from orchestrator.llm.providers import (
+    make_kimi_client as make_kimi_client,
+)
+from orchestrator.llm.providers import (
+    make_qwen_client as make_qwen_client,
+)
 from orchestrator.llm.router import (
     AllProvidersExhaustedError as AllProvidersExhaustedError,
 )
@@ -54,7 +93,15 @@ from orchestrator.llm.router import (
 )
 
 __all__ = [
+    "DEEPSEEK_BASE_URL",
+    "DEFAULT_CHAT_COMPLETIONS_PATH",
     "DEFAULT_MAX_TOKENS",
+    "DOUBAO_BASE_URL",
+    "DOUBAO_CHAT_COMPLETIONS_PATH",
+    "GLM_BASE_URL",
+    "GLM_CHAT_COMPLETIONS_PATH",
+    "KIMI_BASE_URL",
+    "QWEN_BASE_URL",
     "AllProvidersExhaustedError",
     "AnthropicClient",
     "AnthropicProvider",
@@ -68,4 +115,9 @@ __all__ = [
     "ProviderHandle",
     "RecordingAnthropicClient",
     "RecordingOpenAIClient",
+    "make_deepseek_client",
+    "make_doubao_client",
+    "make_glm_client",
+    "make_kimi_client",
+    "make_qwen_client",
 ]
