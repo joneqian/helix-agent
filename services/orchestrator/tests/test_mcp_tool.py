@@ -1,0 +1,317 @@
+"""Unit tests for the MCP tool adapter (Stream E.9)."""
+
+from __future__ import annotations
+
+import pytest
+
+from orchestrator import Tool, ToolContext
+from orchestrator.tools import (
+    DEFAULT_MAX_SERVERS,
+    DEFAULT_MCP_CHAR_CAP,
+    MCPClient,
+    MCPServerConfig,
+    MCPServerPool,
+    MCPServerPoolLimitError,
+    MCPTool,
+    MCPToolDef,
+    RecordingMCPClient,
+    ToolNotFoundError,
+    ToolRegistry,
+    register_mcp_tools,
+)
+
+_CTX = ToolContext()
+
+
+def _read_file_def() -> MCPToolDef:
+    return MCPToolDef(
+        name="read_file",
+        description="Read a file from the workspace.",
+        input_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    )
+
+
+def _list_dir_def() -> MCPToolDef:
+    return MCPToolDef(
+        name="list_directory",
+        description="List a directory.",
+        input_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# MCPServerConfig
+# ---------------------------------------------------------------------------
+
+
+def test_server_config_requires_non_empty_command() -> None:
+    with pytest.raises(ValueError, match="empty command"):
+        MCPServerConfig(name="fs", command=[])
+
+
+def test_server_config_accepts_command_and_env() -> None:
+    cfg = MCPServerConfig(
+        name="fs",
+        command=("npx", "mcp-server-filesystem", "/workspace"),
+        env={"DEBUG": "1"},
+    )
+    assert cfg.command[0] == "npx"
+    assert cfg.env["DEBUG"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# RecordingMCPClient
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recording_client_list_tools_returns_configured() -> None:
+    client = RecordingMCPClient(tools=(_read_file_def(), _list_dir_def()))
+    tools = await client.list_tools()
+    assert [t.name for t in tools] == ["read_file", "list_directory"]
+
+
+@pytest.mark.asyncio
+async def test_recording_client_call_tool_returns_scripted() -> None:
+    client = RecordingMCPClient(
+        tools=(_read_file_def(),),
+        responses={"read_file": "file contents"},
+    )
+    result = await client.call_tool("read_file", {"path": "/etc/passwd"})
+    assert result.content == "file contents"
+    assert result.is_error is False
+    assert client.calls == [("read_file", {"path": "/etc/passwd"})]
+
+
+@pytest.mark.asyncio
+async def test_recording_client_unknown_call_raises() -> None:
+    client = RecordingMCPClient(responses={"a": "x"})
+    with pytest.raises(ToolNotFoundError):
+        await client.call_tool("b", {})
+
+
+@pytest.mark.asyncio
+async def test_recording_client_error_tools_marked() -> None:
+    client = RecordingMCPClient(
+        responses={"read_file": "not found"},
+        error_tools=frozenset({"read_file"}),
+    )
+    result = await client.call_tool("read_file", {})
+    assert result.is_error is True
+
+
+@pytest.mark.asyncio
+async def test_recording_client_close_marks_closed() -> None:
+    client = RecordingMCPClient()
+    await client.close()
+    assert client.closed is True
+
+
+def test_recording_client_satisfies_protocol() -> None:
+    assert isinstance(RecordingMCPClient(), MCPClient)
+
+
+# ---------------------------------------------------------------------------
+# MCPTool wrapping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_spec_is_namespaced() -> None:
+    tool = MCPTool(
+        client=RecordingMCPClient(),
+        tool_def=_read_file_def(),
+        server_name="fs",
+    )
+    assert tool.spec.name == "mcp:fs.read_file"
+    assert tool.spec.description == "Read a file from the workspace."
+    assert tool.spec.parameters["required"] == ["path"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_routes_to_underlying_client() -> None:
+    client = RecordingMCPClient(
+        tools=(_read_file_def(),),
+        responses={"read_file": "hello world"},
+    )
+    tool = MCPTool(client=client, tool_def=_read_file_def(), server_name="fs")
+    result = await tool.call({"path": "/x"}, ctx=_CTX)
+
+    assert result.content == "hello world"
+    assert result.meta["server"] == "fs"
+    assert result.meta["truncated"] is False
+    assert result.meta["is_error"] is False
+    # The underlying client got the raw tool name (no namespace).
+    assert client.calls == [("read_file", {"path": "/x"})]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_error_result_propagates_to_meta() -> None:
+    client = RecordingMCPClient(
+        tools=(_read_file_def(),),
+        responses={"read_file": "permission denied"},
+        error_tools=frozenset({"read_file"}),
+    )
+    tool = MCPTool(client=client, tool_def=_read_file_def(), server_name="fs")
+    result = await tool.call({"path": "/etc/shadow"}, ctx=_CTX)
+    assert result.meta["is_error"] is True
+    # Content still surfaced so the LLM can react.
+    assert "permission denied" in result.content
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_propagates_client_exceptions() -> None:
+    """Mini-ADR E-12: tools let exceptions bubble so E.6 graph wraps."""
+    client = RecordingMCPClient(
+        responses={"read_file": ""},
+        raise_on_call={"read_file": RuntimeError("subprocess died")},
+    )
+    tool = MCPTool(client=client, tool_def=_read_file_def(), server_name="fs")
+    with pytest.raises(RuntimeError, match="subprocess died"):
+        await tool.call({"path": "/x"}, ctx=_CTX)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_satisfies_tool_protocol() -> None:
+    tool = MCPTool(client=RecordingMCPClient(), tool_def=_read_file_def(), server_name="fs")
+    assert isinstance(tool, Tool)
+
+
+# ---------------------------------------------------------------------------
+# Middle-trim truncation (Mini-ADR E-10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_short_content_passes_through_untrimmed() -> None:
+    client = RecordingMCPClient(responses={"read_file": "small body"})
+    tool = MCPTool(client=client, tool_def=_read_file_def(), server_name="fs")
+    result = await tool.call({"path": "/x"}, ctx=_CTX)
+    assert result.content == "small body"
+    assert result.meta["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_long_content_middle_trimmed_with_head_and_tail_visible() -> None:
+    head_marker = "HEAD-START"
+    tail_marker = "TAIL-END"
+    middle = "x" * (DEFAULT_MCP_CHAR_CAP + 5_000)
+    payload = head_marker + middle + tail_marker
+    client = RecordingMCPClient(responses={"read_file": payload})
+    tool = MCPTool(client=client, tool_def=_read_file_def(), server_name="fs")
+    result = await tool.call({"path": "/x"}, ctx=_CTX)
+
+    assert result.meta["truncated"] is True
+    assert head_marker in result.content
+    assert tail_marker in result.content
+    assert "chars truncated" in result.content
+    # Output is roughly the cap plus the truncation marker length.
+    assert len(result.content) < DEFAULT_MCP_CHAR_CAP + 200
+
+
+# ---------------------------------------------------------------------------
+# register_mcp_tools helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_register_mcp_tools_registers_each_with_namespaced_name() -> None:
+    client = RecordingMCPClient(
+        tools=(_read_file_def(), _list_dir_def()),
+        responses={"read_file": "r", "list_directory": "l"},
+    )
+    registry = ToolRegistry()
+    registered = await register_mcp_tools(
+        server_name="fs",
+        client=client,
+        registry=registry,
+    )
+
+    assert registered == ["mcp:fs.read_file", "mcp:fs.list_directory"]
+    assert "mcp:fs.read_file" in registry
+    assert "mcp:fs.list_directory" in registry
+    # Dispatchable end-to-end through the registry.
+    tool = registry.get_required("mcp:fs.read_file")
+    result = await tool.call({"path": "/x"}, ctx=_CTX)
+    assert result.content == "r"
+
+
+# ---------------------------------------------------------------------------
+# MCPServerPool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pool_add_and_get() -> None:
+    pool = MCPServerPool()
+    client = RecordingMCPClient()
+    await pool.add("fs", client)
+    assert pool.get("fs") is client
+    assert pool.names() == ["fs"]
+
+
+@pytest.mark.asyncio
+async def test_pool_rejects_duplicate_name() -> None:
+    pool = MCPServerPool()
+    await pool.add("fs", RecordingMCPClient())
+    with pytest.raises(ValueError, match="already registered"):
+        await pool.add("fs", RecordingMCPClient())
+
+
+@pytest.mark.asyncio
+async def test_pool_enforces_max_servers_cap() -> None:
+    pool = MCPServerPool(max_servers=2)
+    await pool.add("a", RecordingMCPClient())
+    await pool.add("b", RecordingMCPClient())
+    with pytest.raises(MCPServerPoolLimitError, match="2 servers"):
+        await pool.add("c", RecordingMCPClient())
+
+
+@pytest.mark.asyncio
+async def test_pool_default_max_matches_design() -> None:
+    """STREAM-E-DESIGN § 6 caps the per-pool MCP server count at 5."""
+    pool = MCPServerPool()
+    assert pool.max_servers == DEFAULT_MAX_SERVERS
+
+
+@pytest.mark.asyncio
+async def test_pool_close_all_closes_every_client() -> None:
+    pool = MCPServerPool()
+    clients = [RecordingMCPClient() for _ in range(3)]
+    for i, c in enumerate(clients):
+        await pool.add(f"s{i}", c)
+    await pool.close_all()
+    assert all(c.closed for c in clients)
+    assert pool.names() == []
+
+
+@pytest.mark.asyncio
+async def test_pool_close_all_collects_errors_into_exceptiongroup() -> None:
+    class _BrokenClient:
+        closed = False
+
+        async def list_tools(self):
+            return ()
+
+        async def call_tool(self, name, args):
+            return None  # never reached in this test
+
+        async def close(self):
+            raise RuntimeError("teardown fail")
+
+    pool = MCPServerPool()
+    await pool.add("good", RecordingMCPClient())
+    await pool.add("bad", _BrokenClient())  # type: ignore[arg-type]
+    with pytest.raises(ExceptionGroup) as excinfo:
+        await pool.close_all()
+    assert any(isinstance(e, RuntimeError) for e in excinfo.value.exceptions)
+    # Even with the broken client, the pool empties.
+    assert pool.names() == []
