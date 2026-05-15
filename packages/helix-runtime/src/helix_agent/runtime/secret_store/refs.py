@@ -17,8 +17,8 @@ and ``kms://`` should be migrated.
 
 from __future__ import annotations
 
-#: Canonical reference scheme.
-SECRET_SCHEME = "secret://"
+#: Canonical reference scheme — a URI prefix, not a credential.
+SECRET_SCHEME = "secret://"  # noqa: S105
 
 #: Tolerated legacy alias (Stream C ``model_credentials_ref`` text).
 #: Resolves to the same name; emit-a-warning / migrate at the call site.
