@@ -1,4 +1,4 @@
-"""LLM provider fallback router — Stream E.11.
+"""LLM provider fallback router — Stream E.11 + E.12.5.
 
 :class:`LLMRouter` implements the :class:`~orchestrator.llm.caller.LLMCaller`
 protocol so the ReAct graph (E.6) treats it as a single callable; under
@@ -18,28 +18,39 @@ Fallback semantics — straight from
 
 The router **does not** retry within a single provider — that's
 :class:`~helix_agent.runtime.middleware.LLMErrorHandlingMiddleware`'s
-job (E.4 ``around_llm_call``). Expected production wiring:
+job (E.4 ``around_llm_call``). E.12.5 wires the middleware chain in:
 
 ::
 
     LLMRouter
-      → (per provider) middleware chain @ around_llm_call
-        → (terminal handler) ProviderHandle.provider.complete(...)
+      → (per provider) chain.invoke("around_llm_call", ctx, terminal=provider.complete)
+                       ↑
+                       │  ctx.payload contains provider_key / messages /
+                       │  tools / response — Mini-ADR E-13 explains why
+                       │  the wrap is per-provider and not per-router
+                       │  (E.4 breaker per-key isolation + langfuse
+                       │  per-provider span split).
 
-Without the middleware, each provider gets one attempt before fallback —
-which is the M0 unit-test path and also a valid degraded mode.
+Without the middleware chain (``chain=None``), each provider gets one
+attempt before fallback — the M0 unit-test path and a valid degraded
+mode for early-stage runs that haven't booted the chain yet.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage
 
-from helix_agent.runtime.middleware import LLMClientError, LLMError
+from helix_agent.runtime.middleware import (
+    LLMClientError,
+    LLMError,
+    MiddlewareChain,
+    MiddlewareContext,
+)
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -114,6 +125,11 @@ class AllProvidersExhaustedError(LLMError):
 class LLMRouter:
     """Try each :class:`ProviderHandle` in order; fall back on retryable errors.
 
+    When ``around_llm_chain`` is set, each provider call is wrapped in
+    ``chain.invoke("around_llm_call", ...)`` — letting E.4 retry /
+    breaker, E.5 langfuse span recording, and any future
+    around-LLM-call middleware run **per provider** (Mini-ADR E-13).
+
     See module docstring for the full fallback semantics. The router is
     stateless — all per-provider state (breaker counters, rate-limit
     tokens) lives in middleware / inside :class:`LLMProvider` adapters
@@ -121,6 +137,7 @@ class LLMRouter:
     """
 
     providers: Sequence[ProviderHandle]
+    around_llm_chain: MiddlewareChain | None = field(default=None)
 
     async def __call__(
         self,
@@ -136,7 +153,7 @@ class LLMRouter:
         last_exc: LLMError | None = None
         for idx, handle in enumerate(self.providers):
             try:
-                return await handle.provider.complete(messages=messages, tools=tools)
+                return await self._call_one(handle, messages=messages, tools=tools)
             except LLMClientError:
                 logger.warning(
                     "llm_router.client_error_no_fallback idx=%d key=%s",
@@ -161,3 +178,49 @@ class LLMRouter:
 
         assert last_exc is not None  # noqa: S101 - loop invariant
         raise AllProvidersExhaustedError(last_exc)
+
+    async def _call_one(
+        self,
+        handle: ProviderHandle,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolSpec],
+    ) -> AIMessage:
+        """Invoke one provider, optionally wrapped in the around-LLM chain.
+
+        Without ``around_llm_chain`` we just delegate to ``provider.complete``
+        — the M0 unit-test path. With the chain set, build a
+        :class:`MiddlewareContext` carrying ``provider_key`` + the call
+        inputs, let the chain run middlewares around a terminal that
+        actually calls the provider and stashes the result in
+        ``ctx.payload["response"]``.
+        """
+        if self.around_llm_chain is None:
+            return await handle.provider.complete(messages=messages, tools=tools)
+
+        ctx = MiddlewareContext(
+            payload={
+                "provider_key": handle.key,
+                "messages": list(messages),
+                "tools": list(tools),
+            }
+        )
+
+        async def terminal(c: MiddlewareContext) -> None:
+            response = await handle.provider.complete(
+                messages=c.payload["messages"],
+                tools=c.payload["tools"],
+            )
+            c.payload["response"] = response
+
+        await self.around_llm_chain.invoke(ctx, terminal)
+        response = ctx.payload.get("response")
+        if not isinstance(response, AIMessage):
+            # Middleware mis-handled the terminal (didn't call call_next, or
+            # cleared the response) → surface clearly rather than silently
+            # returning a falsy / wrong-typed value.
+            raise RuntimeError(
+                f"around_llm_call chain finished without populating an AIMessage "
+                f"response for provider_key={handle.key!r}"
+            )
+        return response
