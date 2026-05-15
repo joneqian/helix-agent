@@ -59,6 +59,10 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
+from helix_agent.runtime.cancellation import (
+    CANCELLATION_TOKEN_KEY,
+    CancellationToken,
+)
 from helix_agent.runtime.middleware import (
     MiddlewareChain,
     MiddlewareContext,
@@ -106,6 +110,9 @@ def build_react_graph(
     """
 
     async def agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+        token = _cancellation_token(config)
+        token.raise_if_cancelled()
+
         step_count = state.get("step_count", 0)
         max_steps = state.get("max_steps", 0)
         if step_count >= max_steps:
@@ -132,7 +139,9 @@ def build_react_graph(
         if cache_hit_response is not None:
             response: AIMessage = cache_hit_response
         else:
-            response = await llm_caller(messages=messages, tools=tools)
+            # Wrap the LLM call so a cancel mid-call interrupts the
+            # in-flight await rather than waiting it out (E.15).
+            response = await token.run_cancellable(llm_caller(messages=messages, tools=tools))
 
         if after_llm_chain is not None:
             after_messages: list[BaseMessage] = [*messages, response]
@@ -152,6 +161,9 @@ def build_react_graph(
         return {"messages": [response], "step_count": step_count + 1}
 
     async def tools_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+        token = _cancellation_token(config)
+        token.raise_if_cancelled()
+
         last = state["messages"][-1]
         tool_calls = _extract_tool_calls(last)
         if not tool_calls:
@@ -160,12 +172,21 @@ def build_react_graph(
         ctx_obj = _build_tool_context(config)
         new_messages: list[BaseMessage] = []
         for tc in tool_calls:
+            token.raise_if_cancelled()
+            # ``run_cancellable`` interrupts a slow tool mid-dispatch. A
+            # cancel surfaces as ``asyncio.CancelledError`` inside
+            # ``_dispatch_tool`` — which is *not* an ``Exception``, so
+            # the tool's own ``except Exception`` won't swallow it into
+            # a ToolMessage; ``run_cancellable`` re-raises it as
+            # ``RunCancelledError``.
             new_messages.append(
-                await _dispatch_tool(
-                    tc,
-                    tool_registry,
-                    ctx_obj,
-                    before_tool_dispatch_chain=before_tool_dispatch_chain,
+                await token.run_cancellable(
+                    _dispatch_tool(
+                        tc,
+                        tool_registry,
+                        ctx_obj,
+                        before_tool_dispatch_chain=before_tool_dispatch_chain,
+                    )
                 )
             )
         return {"messages": new_messages}
@@ -272,6 +293,21 @@ async def _dispatch_tool(
             tool_call_id=call_id,
             status="error",
         )
+
+
+def _cancellation_token(config: RunnableConfig) -> CancellationToken:
+    """Lift the run's :class:`CancellationToken` out of ``config``.
+
+    The token travels via ``config["configurable"]`` (not ``AgentState``
+    — a live :class:`asyncio.Event` is not checkpoint-serialisable).
+    When absent — dev / unit-test path that never cancels — a fresh,
+    never-cancelled token is returned so node code is uniform.
+    """
+    configurable = config.get("configurable") or {}
+    token = configurable.get(CANCELLATION_TOKEN_KEY)
+    if isinstance(token, CancellationToken):
+        return token
+    return CancellationToken()
 
 
 def _build_tool_context(config: RunnableConfig) -> ToolContext:

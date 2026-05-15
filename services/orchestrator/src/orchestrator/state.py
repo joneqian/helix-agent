@@ -4,14 +4,16 @@ Per [STREAM-E-DESIGN § 2.3](../../../../docs/streams/STREAM-E-DESIGN.md),
 fields are added incrementally across the Stream E sub-PRs:
 
 - **E.1**: ``messages`` (LangGraph reducer-style append)
-- **E.6 (this PR)**: ``step_count`` + ``max_steps`` for the ReAct loop guard
-- E.11: ``provider_chain`` / ``current_provider_idx`` for LLM fallback routing
-- E.15: ``cancellation_token`` (runtime-only, ``__skip_checkpoint__``)
+- **E.6**: ``step_count`` + ``max_steps`` for the ReAct loop guard
 
-Tenant binding (``tenant_id`` / ``session_id`` / ``run_id``) is passed via
-the ``config["configurable"]`` channel (LangGraph idiom) and does not live
-on ``AgentState`` — graphs read it from ``RunnableConfig`` so the same
-state shape works for any tenant.
+Every ``AgentState`` channel is checkpointed (dill), so **non-serialisable
+runtime objects do not live here**. They travel via the
+``config["configurable"]`` channel instead — it is per-invocation and not
+checkpointed:
+
+- Tenant binding (``tenant_id`` / ``session_id`` / ``run_id``) — LangGraph idiom.
+- ``cancellation_token`` (E.15) — backed by a live ``asyncio.Event``.
+- The ``LLMRouter`` holds its own provider chain + fallback state (E.11).
 """
 
 from __future__ import annotations
