@@ -2,9 +2,9 @@
 
 The agent node delegates the actual LLM call through this protocol so
 the ReAct graph stays decoupled from any specific provider SDK. E.11
-``LLMRouter`` is the production implementation; tests inject a
-deterministic fake that returns a scripted sequence of ``AIMessage``
-values.
+:class:`orchestrator.llm.router.LLMRouter` is the production
+implementation; tests inject a deterministic fake that returns a
+scripted sequence of ``AIMessage`` values.
 """
 
 from __future__ import annotations
