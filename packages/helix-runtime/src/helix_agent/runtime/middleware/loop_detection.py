@@ -75,7 +75,7 @@ def normalize_args(value: object) -> object:
     """
     if isinstance(value, Mapping):
         return {str(k): normalize_args(v) for k, v in sorted(value.items())}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [normalize_args(item) for item in value]
     if isinstance(value, str):
         return value.strip().lower()
