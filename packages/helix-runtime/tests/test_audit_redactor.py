@@ -45,6 +45,19 @@ async def test_masks_openai_key() -> None:
     assert result.hits == {"openai_key": 1}
 
 
+def test_redact_text_masks_secrets_in_a_string() -> None:
+    """The text entry point used by the E.5 PII middleware."""
+    redactor = DefaultSecretRedactor()
+    out = redactor.redact_text("use key sk-ABCDEFGHIJKLMNOPQRSTUVWX now")
+    assert REPLACEMENT in out
+    assert "sk-ABCDEFGHIJKLMNOPQRSTUVWX" not in out
+
+
+def test_redact_text_passes_clean_string_through() -> None:
+    redactor = DefaultSecretRedactor()
+    assert redactor.redact_text("just a normal sentence") == "just a normal sentence"
+
+
 @pytest.mark.asyncio
 async def test_masks_jwt_three_segment() -> None:
     redactor = DefaultSecretRedactor()
