@@ -12,9 +12,9 @@ Wiring (in :func:`control_plane.app.create_app`):
 * Started from the FastAPI ``lifespan`` ``yield``.
 * Stopped via :meth:`stop` from the ``finally`` branch.
 * Per-cycle errors are caught and logged — the reaper never crashes
-  the process. A consecutive-failure counter feeds the
-  ``helix_token_reservation_reaper_error_total`` metric (TODO Stream
-  I — for now we just log).
+  the process — and increment the
+  ``helix_control_plane_quota_reaper_cycle_errors_total`` counter so
+  alerting fires on a sustained failure rate.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from helix_agent.common.observability import helix_counter
 from helix_agent.persistence.quota import (
     ReservationNotFoundError,
     TokenReservationStore,
@@ -32,6 +33,13 @@ from helix_agent.persistence.rls import bypass_rls_var, current_tenant_id_var
 from helix_agent.protocol import ReservationState, TokenReservationRecord
 
 logger = logging.getLogger("helix.control_plane.quota.reaper")
+
+# Periodic-loop failures. Monotonic — alerting keys off ``rate(...)`` to
+# distinguish a one-off blip from a reaper that is wedged every cycle.
+_reaper_cycle_errors = helix_counter(
+    "helix_control_plane_quota_reaper_cycle_errors_total",
+    "Reservation reaper cycles that ended in a caught exception.",
+)
 
 # Type alias for the optional ``on_expire`` hook — receives one
 # reservation row and may perform side effects (audit emit, metric
@@ -158,7 +166,8 @@ class ReservationReaper:
                     )
             except Exception:
                 # The reaper's own errors must never crash the
-                # process. Log + continue; next tick retries.
+                # process. Log + count + continue; next tick retries.
+                _reaper_cycle_errors.inc()
                 logger.exception("quota.reaper.cycle_failed")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval_s)

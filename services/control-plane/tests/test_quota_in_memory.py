@@ -299,3 +299,35 @@ async def test_reaper_runs_once_releases_stale_rows() -> None:
     final = await store.get(reservation_id=row.id, tenant_id=tenant)
     assert final is not None
     assert final.state is ReservationState.EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_reaper_cycle_error_increments_metric() -> None:
+    """A failing cycle bumps ``helix_control_plane_quota_reaper_cycle_errors_total``."""
+    import asyncio
+
+    from prometheus_client import REGISTRY
+
+    from control_plane.quota import ReservationReaper
+
+    metric = "helix_control_plane_quota_reaper_cycle_errors_total"
+
+    class _RaisingStore:
+        async def list_expired(self, **_kwargs: object) -> list[object]:
+            msg = "store unavailable"
+            raise RuntimeError(msg)
+
+    before = REGISTRY.get_sample_value(metric) or 0.0
+
+    # interval_s is large so exactly one cycle runs before stop().
+    reaper = ReservationReaper(
+        reservation_store=_RaisingStore(),  # type: ignore[arg-type]
+        max_age_s=600,
+        interval_s=3600,
+    )
+    reaper.start()
+    await asyncio.sleep(0.05)  # let the first cycle hit the except branch
+    await reaper.stop()
+
+    after = REGISTRY.get_sample_value(metric) or 0.0
+    assert after >= before + 1

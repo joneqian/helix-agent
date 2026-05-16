@@ -329,8 +329,9 @@ async def test_per_tenant_retention_isolated(
         "matching ``audit_log`` delete (same role + grant pattern) both "
         "succeed; couldn't pin the asyncpg/PG interaction. The retention "
         "LOGIC is exercised by the audit_log + per_tenant + idempotent "
-        "tests; migration 0010 carries the ACL contract. TODO(D.3): "
-        "re-enable once the upstream quirk is identified."
+        "tests; migration 0010 carries the ACL contract. Tracked: "
+        "docs/ITERATION-PLAN.md M1-B 'retention-cleanup-job CI-only "
+        "permission denied 收尾' — re-enable once the quirk is pinned."
     ),
     strict=False,
 )
@@ -390,8 +391,8 @@ async def test_event_log_retention_deletes_old_rows(
     reason=(
         "CI-only: same unexplained ``permission denied for table "
         "jwt_blacklist`` as event_log above; see that test's xfail "
-        "reason. TODO(D.3): re-enable once the upstream quirk is "
-        "identified."
+        "reason. Tracked: docs/ITERATION-PLAN.md M1-B "
+        "'retention-cleanup-job CI-only permission denied 收尾'."
     ),
     strict=False,
 )
