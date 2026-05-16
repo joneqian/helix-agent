@@ -39,6 +39,27 @@ class AcquireResponse(BaseModel):
     acquired_at: datetime
 
 
+class ExecRequest(BaseModel):
+    """Request body for ``POST /v1/sandboxes/{id}:exec``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    #: Per-call execution timeout; omitted → the sandbox's own default.
+    timeout_s: int | None = Field(default=None, gt=0, le=300)
+
+
+class ExecResponse(BaseModel):
+    """Response body for a code execution — the runner's captured outcome."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stdout: str
+    stderr: str
+    exit_code: int
+    timed_out: bool
+
+
 class DestroyRequest(BaseModel):
     """Request body for ``POST /v1/sandboxes/{id}:destroy``."""
 

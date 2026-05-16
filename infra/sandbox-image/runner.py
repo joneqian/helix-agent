@@ -30,6 +30,11 @@ DEFAULT_TIMEOUT_S = 30
 #: Hard ceiling — a request asking for more is clamped down. Matches the
 #: sandbox-instance lifetime ceiling in subsystem 14.
 MAX_TIMEOUT_S = 300
+#: Captured stdout / stderr is capped to this many characters before it
+#: goes into the JSON response — a transport safety net so a chatty
+#: snippet cannot produce an unbounded response line. The exec_python
+#: tool applies its own (smaller, LLM-budget) truncation on top.
+MAX_OUTPUT_CHARS = 1_000_000
 
 #: A response is always this 4-key shape, so the supervisor parses one
 #: schema whether the run succeeded, failed, timed out, or the request
@@ -54,14 +59,14 @@ def run_once(code: str, timeout_s: int) -> Response:
         )
     except subprocess.TimeoutExpired as exc:
         return {
-            "stdout": _as_text(exc.stdout),
-            "stderr": _as_text(exc.stderr),
+            "stdout": _cap(_as_text(exc.stdout)),
+            "stderr": _cap(_as_text(exc.stderr)),
             "exit_code": -1,
             "timed_out": True,
         }
     return {
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
+        "stdout": _cap(proc.stdout),
+        "stderr": _cap(proc.stderr),
         "exit_code": proc.returncode,
         "timed_out": False,
     }
@@ -96,7 +101,13 @@ def handle_line(line: str) -> Response:
 
 
 def main(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
-    """Read requests line-by-line until EOF, writing one response per line."""
+    """Emit a readiness line, then serve requests until stdin EOF.
+
+    The leading ``{"ready": true}`` line lets the supervisor confirm the
+    runner booted (the acquire-time health check) before sending code.
+    """
+    stdout.write(json.dumps({"ready": True}) + "\n")
+    stdout.flush()
     for raw in stdin:
         line = raw.strip()
         if not line:
@@ -122,6 +133,15 @@ def _as_text(value: str | bytes | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _cap(text: str) -> str:
+    """Bound captured output to :data:`MAX_OUTPUT_CHARS` (head + tail kept)."""
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    half = MAX_OUTPUT_CHARS // 2
+    dropped = len(text) - 2 * half
+    return f"{text[:half]}\n[... {dropped} chars truncated ...]\n{text[-half:]}"
 
 
 if __name__ == "__main__":

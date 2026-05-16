@@ -65,6 +65,17 @@ def test_run_once_clamps_timeout_below_one() -> None:
     assert result["timed_out"] is False
 
 
+def test_run_once_caps_oversized_output() -> None:
+    # A snippet printing far more than MAX_OUTPUT_CHARS still yields a
+    # bounded response (transport safety net).
+    code = f"print('x' * {runner.MAX_OUTPUT_CHARS * 2})"
+    result = runner.run_once(code, 30)
+    stdout = result["stdout"]
+    assert isinstance(stdout, str)
+    assert len(stdout) <= runner.MAX_OUTPUT_CHARS + 64
+    assert "truncated" in stdout
+
+
 # ---------- handle_request ----------
 
 
@@ -107,6 +118,14 @@ def test_handle_line_non_object_is_error() -> None:
 # ---------- main loop ----------
 
 
+def test_main_emits_readiness_line_first() -> None:
+    stdout = io.StringIO()
+    runner.main(stdin=io.StringIO(""), stdout=stdout)
+
+    first = json.loads(stdout.getvalue().splitlines()[0])
+    assert first == {"ready": True}
+
+
 def test_main_processes_multiple_lines_and_skips_blanks() -> None:
     stdin = io.StringIO(
         '{"code": "print(10)"}\n'
@@ -116,7 +135,10 @@ def test_main_processes_multiple_lines_and_skips_blanks() -> None:
     stdout = io.StringIO()
     runner.main(stdin=stdin, stdout=stdout)
 
-    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    lines = stdout.getvalue().splitlines()
+    # Line 0 is the readiness line; the two requests follow.
+    assert json.loads(lines[0]) == {"ready": True}
+    responses = [json.loads(line) for line in lines[1:]]
     assert len(responses) == 2
     assert responses[0]["stdout"].strip() == "10"
     assert responses[1]["stdout"].strip() == "20"
@@ -126,6 +148,8 @@ def test_main_emits_error_response_for_bad_line() -> None:
     stdout = io.StringIO()
     runner.main(stdin=io.StringIO("{bad}\n"), stdout=stdout)
 
-    response = json.loads(stdout.getvalue())
+    lines = stdout.getvalue().splitlines()
+    assert json.loads(lines[0]) == {"ready": True}
+    response = json.loads(lines[1])
     assert response["exit_code"] == -1
     assert "invalid JSON" in response["stderr"]

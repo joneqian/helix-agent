@@ -34,6 +34,8 @@ from sandbox_supervisor.schemas import (
     AcquireRequest,
     AcquireResponse,
     DestroyRequest,
+    ExecRequest,
+    ExecResponse,
     HealthResponse,
 )
 from sandbox_supervisor.settings import SandboxSupervisorSettings
@@ -84,9 +86,14 @@ def create_app(
             redactor=DefaultSecretRedactor(),
             fallback=InMemoryAuditFallbackQueue(),
         )
+        docker = CliDockerClient()
+        # Startup recovery: clear any sandboxes a previous supervisor left
+        # behind — the held-pipe model (option C) does not survive a
+        # supervisor restart, so leftovers must be swept.
+        await docker.sweep_orphans()
         live = SandboxSupervisor(
             store=store,
-            docker=CliDockerClient(),
+            docker=docker,
             audit=audit,
             runtime_provider=make_sandbox_runtime_provider(resolved_settings.oci_runtime),
             settings=resolved_settings,
@@ -137,6 +144,18 @@ def _register_routes(app: FastAPI) -> None:
     ) -> Response:
         await supervisor.destroy(sandbox_id, reason=body.reason)
         return Response(status_code=204)
+
+    @app.post("/v1/sandboxes/{sandbox_id}:exec")
+    async def exec_code(
+        sandbox_id: UUID, body: ExecRequest, supervisor: SupervisorDep
+    ) -> ExecResponse:
+        result = await supervisor.exec(sandbox_id, code=body.code, timeout_s=body.timeout_s)
+        return ExecResponse(
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.exit_code,
+            timed_out=result.timed_out,
+        )
 
     @app.get("/v1/health")
     async def health(supervisor: SupervisorDep) -> HealthResponse:

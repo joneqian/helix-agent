@@ -1,9 +1,13 @@
 """``SandboxSupervisor`` — the F.1 sandbox lifecycle core.
 
 M0 cold-start (Mini-ADR F-4): ``acquire`` is a fresh ``docker run``,
-``release`` / ``destroy`` a ``docker rm -f``. No warm pool. All
-dependencies are injected so the logic is unit-testable with fakes
-(test matrix #40 / #41 / #42).
+``release`` / ``destroy`` a ``docker rm -f``. No warm pool.
+
+Transport is the held-pipe (option C): ``acquire`` launches the
+container with ``docker run -i`` and keeps the subprocess; the
+supervisor holds a :class:`RunnerLink` per sandbox and ``exec`` drives
+the runner protocol over it. All dependencies are injected so the logic
+is unit-testable with fakes (test matrix #40 / #41 / #42 + exec).
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from sandbox_supervisor.domain import (
     SandboxState,
     SupervisorError,
 )
+from sandbox_supervisor.runner_link import ExecResult, RunnerLink, RunnerLinkError
 from sandbox_supervisor.schemas import AcquireRequest, AcquireResponse
 from sandbox_supervisor.settings import SandboxSupervisorSettings
 from sandbox_supervisor.store import SandboxStore
@@ -39,8 +44,13 @@ class AuditSink(Protocol):
         """Persist one audit entry."""
 
 
+def _container_name(sandbox_id: UUID) -> str:
+    """The deterministic ``--name`` for a sandbox's container."""
+    return f"helix-sb-{sandbox_id}"
+
+
 class SandboxSupervisor:
-    """Owns the ``acquire`` / ``release`` / ``destroy`` lifecycle."""
+    """Owns the ``acquire`` / ``exec`` / ``release`` / ``destroy`` lifecycle."""
 
     def __init__(
         self,
@@ -56,13 +66,15 @@ class SandboxSupervisor:
         self._audit = audit
         self._runtime = runtime_provider
         self._settings = settings
+        # Held runner links, keyed by sandbox id — the option-C transport.
+        self._links: dict[UUID, RunnerLink] = {}
 
     async def acquire(self, request: AcquireRequest) -> AcquireResponse:
-        """Quota-check, then launch a fresh sandbox container.
+        """Quota-check, launch a fresh sandbox, wait for the runner to be ready.
 
         Raises :class:`QuotaExceededError` when the tenant is at its
         cap, and :class:`SupervisorError` when the container fails to
-        launch (the row is left ``FAILED`` for observability).
+        launch or never reports ready (the row is left ``FAILED``).
         """
         await self._enforce_quota(request.tenant_id)
 
@@ -70,19 +82,22 @@ class SandboxSupervisor:
         await self._store.insert(record)
 
         try:
-            container_id = await self._docker.run(self._run_argv(record))
-        except DockerError as exc:
+            link = await self._docker.launch(self._run_argv(record))
+            await link.wait_ready(self._settings.runner_ready_timeout_s)
+        except (DockerError, RunnerLinkError) as exc:
             await self._store.update(record.with_state(SandboxState.FAILED))
             msg = f"sandbox launch failed: {exc}"
             raise SupervisorError(msg) from exc
 
+        self._links[record.id] = link
         acquired_at = datetime.now(UTC)
-        running = record.with_state(
-            SandboxState.IN_USE,
-            container_id=container_id,
-            acquired_at=acquired_at,
+        await self._store.update(
+            record.with_state(
+                SandboxState.IN_USE,
+                container_id=_container_name(record.id),
+                acquired_at=acquired_at,
+            )
         )
-        await self._store.update(running)
         await self._emit_audit(
             tenant_id=record.tenant_id,
             action=AuditAction.SANDBOX_ACQUIRED,
@@ -92,17 +107,36 @@ class SandboxSupervisor:
         )
         return AcquireResponse(
             sandbox_id=record.id,
-            container_id=container_id,
+            container_id=_container_name(record.id),
             cold_start=True,
             acquired_at=acquired_at,
         )
+
+    async def exec(
+        self, sandbox_id: UUID, *, code: str, timeout_s: int | None = None
+    ) -> ExecResult:
+        """Run ``code`` in an acquired sandbox via its held runner link.
+
+        ``timeout_s`` omitted → the service default. Raises
+        :class:`SandboxNotFoundError` when no live sandbox holds that id,
+        and :class:`SupervisorError` when the runner link fails.
+        """
+        link = self._links.get(sandbox_id)
+        if link is None:
+            raise SandboxNotFoundError(sandbox_id)
+        resolved_timeout = timeout_s if timeout_s is not None else self._settings.default_timeout_s
+        try:
+            return await link.exec(code, resolved_timeout)
+        except RunnerLinkError as exc:
+            msg = f"sandbox exec failed: {exc}"
+            raise SupervisorError(msg) from exc
 
     async def release(self, sandbox_id: UUID) -> None:
         """Routine teardown — no force-destroy audit."""
         await self.destroy(sandbox_id, reason=DESTROY_REASON_RELEASE)
 
     async def destroy(self, sandbox_id: UUID, *, reason: str) -> None:
-        """Tear a sandbox down — ``docker rm -f`` + mark ``DESTROYED``.
+        """Tear a sandbox down — close the link + ``docker rm -f`` + mark DESTROYED.
 
         Idempotent: destroying an already-terminal sandbox is a no-op.
         A non-``release`` reason emits a ``sandbox:force_destroy`` audit.
@@ -113,8 +147,10 @@ class SandboxSupervisor:
         if record.state in (SandboxState.DESTROYED, SandboxState.FAILED):
             return
 
-        if record.container_id is not None:
-            await self._docker.remove(record.container_id)
+        link = self._links.pop(sandbox_id, None)
+        if link is not None:
+            await link.close()
+        await self._docker.remove(_container_name(sandbox_id))
 
         now = datetime.now(UTC)
         released_at = now if reason == DESTROY_REASON_RELEASE else record.released_at
@@ -177,21 +213,21 @@ class SandboxSupervisor:
         )
 
     def _run_argv(self, record: SandboxRecord) -> list[str]:
-        """Compose the ``docker run`` argv: hardening flags from the F.3
-        provider, plus ``--detach`` so the container outlives this call."""
-        argv = self._runtime.docker_run_argv(
+        """The hardened ``docker run`` argv from the F.3 provider.
+
+        The provider's argv already carries ``--interactive`` — option C
+        keeps the container attached so the supervisor holds its stdio;
+        no ``--detach`` is added.
+        """
+        return self._runtime.docker_run_argv(
             image=record.image_ref,
-            container_name=f"helix-sb-{record.id}",
+            container_name=_container_name(record.id),
             limits=SandboxResourceLimits(
                 cpus=record.cpu_quota,
                 memory_mb=record.memory_mb,
                 pids_limit=record.pids_limit,
             ),
         )
-        # Insert after ["docker", "run", ...] so the supervisor gets a
-        # container id back and the runner stays alive on stdin.
-        argv.insert(2, "--detach")
-        return argv
 
     async def _emit_audit(
         self,

@@ -3,6 +3,10 @@
 A :class:`DockerClient` Protocol so the :class:`SandboxSupervisor` logic
 is unit-testable with a recording fake (test matrix #40); the real
 :class:`CliDockerClient` shells out to the ``docker`` CLI.
+
+The C-model (STREAM-F-DESIGN): ``launch`` starts ``docker run -i`` and
+*keeps the subprocess alive*, handing back a :class:`RunnerLink` over its
+stdio — the supervisor talks to the in-sandbox runner through that pipe.
 """
 
 from __future__ import annotations
@@ -11,7 +15,17 @@ import asyncio
 import logging
 from typing import Protocol
 
+from sandbox_supervisor.runner_link import PipeRunnerLink, RunnerLink
+
 logger = logging.getLogger(__name__)
+
+#: ``asyncio`` StreamReader buffer for a runner's stdout. Generous so a
+#: large (runner-capped, ~1 MiB) response line never overflows the
+#: default 64 KiB limit.
+_READ_LIMIT = 4 * 1024 * 1024
+
+#: ``docker run`` argv prefix used to find leftover sandboxes on boot.
+_ORPHAN_NAME_PREFIX = "helix-sb-"
 
 
 class DockerError(RuntimeError):
@@ -21,37 +35,41 @@ class DockerError(RuntimeError):
 class DockerClient(Protocol):
     """The Docker operations the supervisor needs — nothing more."""
 
-    async def run(self, argv: list[str]) -> str:
-        """Run a fully-formed ``docker run`` argv; return the container id."""
+    async def launch(self, argv: list[str]) -> RunnerLink:
+        """Start a ``docker run -i`` container; return a live link to it."""
 
-    async def remove(self, container_id: str) -> None:
-        """Force-remove a container (``docker rm --force``) — kills if running."""
+    async def remove(self, container_name: str) -> None:
+        """Force-remove a container (``docker rm --force``)."""
 
     async def ping(self) -> bool:
         """Return whether the Docker daemon is reachable."""
+
+    async def sweep_orphans(self) -> int:
+        """Remove leftover ``helix-sb-*`` containers; return the count."""
 
 
 class CliDockerClient:
     """:class:`DockerClient` backed by the ``docker`` CLI via asyncio subprocess."""
 
-    async def run(self, argv: list[str]) -> str:
-        stdout, stderr, code = await self._exec(argv)
-        if code != 0:
-            msg = f"docker run failed (exit {code}): {stderr.strip()}"
-            raise DockerError(msg)
-        container_id = stdout.strip()
-        if not container_id:
-            msg = "docker run returned an empty container id"
-            raise DockerError(msg)
-        return container_id
+    async def launch(self, argv: list[str]) -> RunnerLink:
+        # `docker run -i` (no -d): the subprocess stays alive for the
+        # container's lifetime and its stdio *is* the container's stdio.
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=_READ_LIMIT,
+        )
+        return PipeRunnerLink(process)
 
-    async def remove(self, container_id: str) -> None:
-        _, stderr, code = await self._exec(["docker", "rm", "--force", container_id])
+    async def remove(self, container_name: str) -> None:
+        _, stderr, code = await self._exec(["docker", "rm", "--force", container_name])
         if code != 0:
             # A missing container is fine — destroy is idempotent.
             logger.warning(
                 "docker_client.remove_failed container=%s reason=%s",
-                container_id,
+                container_name,
                 stderr.strip(),
             )
 
@@ -61,6 +79,19 @@ class CliDockerClient:
         except OSError:
             return False
         return code == 0
+
+    async def sweep_orphans(self) -> int:
+        stdout, _, code = await self._exec(
+            ["docker", "ps", "--all", "--quiet", "--filter", f"name={_ORPHAN_NAME_PREFIX}"]
+        )
+        if code != 0:
+            return 0
+        ids = [line for line in stdout.split() if line]
+        for container_id in ids:
+            await self.remove(container_id)
+        if ids:
+            logger.info("docker_client.swept_orphans count=%d", len(ids))
+        return len(ids)
 
     @staticmethod
     async def _exec(argv: list[str]) -> tuple[str, str, int]:
