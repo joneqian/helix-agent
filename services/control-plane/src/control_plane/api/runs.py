@@ -183,11 +183,12 @@ def build_runs_router() -> APIRouter:
             )
         )
         await runtime.run_manager.attach_task(run_id, worker)
-        # ``run_id`` + ``thread_id`` are UUIDs — safe to log. The agent
-        # name / version are user-supplied strings; they are deliberately
-        # NOT logged here (CodeQL py/log-injection) — recover them from
-        # the thread record if needed.
-        logger.info("control_plane.run.started run_id=%s thread=%s", run_id, thread_id)
+        # Log only ``run_id`` — it is server-generated (``uuid4()``) and
+        # uniquely identifies the run. ``thread_id`` (a request path
+        # param) and the agent name / version (user-supplied) are
+        # request-derived; CodeQL py/log-injection taints them, so they
+        # are kept out of the log. Recover them from the run record.
+        logger.info("control_plane.run.started run_id=%s", run_id)
 
         return StreamingResponse(
             sse_consumer(
