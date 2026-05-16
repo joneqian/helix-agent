@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
 from helix_agent.protocol import AgentSpec
+from helix_agent.runtime.audit import DefaultSecretRedactor
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
 from helix_agent.runtime.runs import RunManager
@@ -221,13 +222,22 @@ def build_tool_env(
 def build_middleware_env() -> MiddlewareEnv:
     """Assemble the M0 :class:`MiddlewareEnv`.
 
-    Single-instance defaults: an in-process response cache and the
+    Single-instance defaults: an in-process response cache, the
     span-recording Langfuse client (the SDK-backed Langfuse adapter is
-    M1). The PII redactor is not wired yet — see its follow-up.
+    M1), and the global-pattern secret redactor for the E.5 PII
+    middleware. Per-tenant ``pii_fields`` mask only dict-shaped audit
+    details (D.2); free-text LLM messages use the global patterns, so
+    ``redact_text`` is a plain sync call — no per-tenant lookup.
     """
+    secret_redactor = DefaultSecretRedactor()
+
+    def _redact_text(text: str, _tenant_id: UUID | None) -> str:
+        return secret_redactor.redact_text(text)
+
     return MiddlewareEnv(
         response_cache=LLMResponseCache(redis=InMemoryRedisCache()),
         langfuse_client=RecordingLangfuseClient(),
+        redact_text=_redact_text,
     )
 
 

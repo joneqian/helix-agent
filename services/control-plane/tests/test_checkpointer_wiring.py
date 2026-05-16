@@ -106,10 +106,18 @@ class _FakeTenantConfigService:
         return SimpleNamespace(http_tool_allowlist=self.allowlist)
 
 
-def test_build_middleware_env_wires_cache_and_langfuse() -> None:
+def test_build_middleware_env_wires_cache_langfuse_and_redactor() -> None:
     env = build_middleware_env()
     assert env.response_cache is not None
     assert env.langfuse_client is not None
+    assert env.redact_text is not None
+
+
+def test_build_middleware_env_redact_text_masks_secrets() -> None:
+    env = build_middleware_env()
+    assert env.redact_text is not None
+    out = env.redact_text("token sk-ABCDEFGHIJKLMNOPQRSTUVWX here", None)
+    assert "sk-ABCDEFGHIJKLMNOPQRSTUVWX" not in out
 
 
 def test_build_tool_env_wires_allowlist_provider_only() -> None:

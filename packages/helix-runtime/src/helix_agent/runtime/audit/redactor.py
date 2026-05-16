@@ -130,6 +130,17 @@ class DefaultSecretRedactor:
         # the static type without an explicit cast import.
         return RedactionResult(redacted=dict(cleaned), hits=hits)
 
+    def redact_text(self, text: str) -> str:
+        """Apply the global secret patterns to a single string.
+
+        The text-level entry point for the E.5 PII middleware — same
+        patterns as :meth:`redact`, no recursive tree walk, and the
+        per-pattern hit counts are dropped (the middleware's
+        ``redact_text`` contract returns only the redacted string).
+        """
+        hits: dict[str, int] = {}
+        return self._redact_str(text, hits)
+
     def _walk(self, node: Any, hits: dict[str, int]) -> Any:
         if isinstance(node, Mapping):
             return {k: self._walk(v, hits) for k, v in node.items()}
