@@ -183,12 +183,12 @@ def build_runs_router() -> APIRouter:
             )
         )
         await runtime.run_manager.attach_task(run_id, worker)
+        # ``run_id`` + ``thread_id`` are UUIDs — safe to log. The agent
+        # name / version are user-supplied strings; they are deliberately
+        # NOT logged here (CodeQL py/log-injection) — recover them from
+        # the thread record if needed.
         logger.info(
-            "control_plane.run.started run_id=%s thread=%s agent=%s@%s",
-            run_id,
-            thread_id,
-            meta.agent_name,
-            meta.agent_version,
+            "control_plane.run.started run_id=%s thread=%s", run_id, thread_id
         )
 
         return StreamingResponse(
