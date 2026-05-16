@@ -7,6 +7,17 @@ class OrchestratorError(Exception):
     """Base class for orchestrator-raised errors."""
 
 
+class AgentFactoryError(OrchestratorError):
+    """Raised when an ``AgentSpec`` cannot be assembled into a runnable
+    agent — a missing ``api_key_ref``, an unsupported provider, or a
+    ``tools:`` entry whose backing dependency is not configured.
+
+    ``build_tool_registry`` raises this too, so a control-plane caller
+    that catches :class:`AgentFactoryError` handles tool-assembly
+    failures the same way (HTTP 422 — the manifest is un-buildable).
+    """
+
+
 class MaxStepsExceededError(OrchestratorError):
     """Raised when the ReAct loop hits ``max_steps`` and the LLM still
     wants to call tools.

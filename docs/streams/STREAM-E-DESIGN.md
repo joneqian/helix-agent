@@ -244,6 +244,8 @@ class ToolRegistry:
 
 **web_search（E.7）**：单 provider 适配器（Tavily / SerpAPI 二选一，先选 Tavily — 国内可访问；M1 加 fallback）。
 
+**manifest → registry 装配**：`AgentSpecBody.tools` 是 `type`-判别联合（Mini-ADR E-14）；`build_tool_registry(tool_specs, *, tool_env)` 把声明映射成具体适配器实例并注册。`ToolEnv` 注入包携带平台运行期依赖（Tavily client / `AllowlistProvider` / `MCPServerPool`）；`build_agent` 调装配器后把 registry 交给 `build_react_graph`。声明 builtin 名未知 / 依赖缺失 → `AgentFactoryError`。
+
 ### 2.6 SSE 流（E.14）
 
 **架构修正（E.14 实施时定稿）**：原草图画的是"control-plane → gRPC/httpx → 独立 orchestrator 服务"。对照 deer-flow（`backend/app/gateway` + `backend/packages/harness/deerflow/runtime` 同进程）后改为 **in-process 单体**：orchestrator 是 library，control-plane FastAPI app 直接 import，graph 当**后台 `asyncio.Task`** 跑。M0 不引入独立 orchestrator 服务 / 服务间 RPC（那是 M1+ 水平扩展时的事）。
@@ -430,6 +432,15 @@ class LLMResponseCache:
 - **选择**：`LLMRouter` 内部 fallback 循环里，**每次 provider 尝试**都单独包 `chain.invoke("around_llm_call", ctx={provider_key, ...}, terminal=handle.provider.complete)`——chain 每次切换 provider 都重新触发一次（一次 ReAct 步可能触发多次 `around_llm_call`）。
 - **理由**：(1) **E.4 断路器要 per-upstream-key 计数**（Mini-ADR E-4）——anthropic primary 这把 key 五次失败 → OPEN，但 kimi fallback 那把 key 的失败计数不能受影响。包整个 router 时 chain 看不到 fallback 切换 → 断路器只能按 router 聚合维度计数，丢失 per-key 隔离。(2) **Langfuse span 要按 provider 拆**——`provider=anthropic-primary error=503 → provider=kimi-fallback success`：两个独立 span 才能让看板按 provider 拆 latency / 错误率。(3) **retry 中间件**应当让单个 provider 完成自己的重试预算后再 fallback，而不是把"router 重试 + provider fallback"两层语义糊在一起。
 - **代价**：router 多接一个 `chain: MiddlewareChain | None = None` 参数（向后兼容默认 None，单元测试不传）；chain 触发多次 = 中间件本身要能幂等被调（langfuse 每次产生独立 span 是 by-design，breaker 本身就是 per-call，retry 本身就是循环——都天然幂等）。`provider_key` payload 必须由 router 设置好再 invoke，不能由中间件回读 router 状态。
+
+### E-14：manifest `tools:` 用 `type`-判别联合，M0 schema 对齐已实现的适配器
+
+- **背景**：`02-AGENT-MANIFEST.md` 早期示例把 http/mcp 工具画成**声明式逐 API**（每个 `http:` 条目内联 url/method/schema/auth；`mcp:` 内联 transport/url）。但已合并的 E.8/E.9 实现不是这个模型——`HTTPTool` 是**一个通用工具**（"发 HTTP 请求，URL 必须命中租户 allowlist"），allowlist 来自 `tenant_config.http_tool_allowlist`；`MCPTool` 包装 MCP server 自己 advertise 的工具，server 来自 `tenant_config.mcp_servers`。manifest 文档与实现分叉。
+- **替代**：(1) 重构 E.8/E.9 去贴文档的逐 API 模型；(2) manifest 条目用"单键即判别"形状（`- builtin: web_search` / `- mcp: {...}`，键名即类型）。
+- **选择**：M0 tool-spec 对齐**实现**，不返工已合并的 E.8/E.9。manifest `tools:` 是一个 **`type` 字段判别的 Pydantic discriminated union**：`builtin`（`name` + `config`）/ `http`（启用开关，allowlist 仍租户作用域）/ `mcp`（启用开关 + 可选 `allow_tools` 过滤，server 仍租户作用域）。`python` / `subagent` 不在 M0 union 内——声明即 422 失败，明确推 M1-F。
+- **理由**：(1) E.8/E.9 已上线测过，逐 API 返工成本高且收益存疑——通用 HTTP 工具 + 租户 allowlist 的隔离模型本身更干净。(2) `type` 判别字段是 Pydantic `Field(discriminator=...)` 的惯用形状，比"单键即判别"代码健壮、错误信息清晰。(3) http/mcp 的真实配置本就是租户作用域（allowlist / mcp_servers 跨 agent 共享），不该塞进单 agent 的 manifest。
+- **代价**：`02-AGENT-MANIFEST.md` 的 `tools:` 段要改写成 `type:` 形状（M0 无真实 manifest 用到 tools，无破坏性）；逐 API http 工具的需求若 M1 仍要，另开设计。
+- **装配**：`build_tool_registry(tool_specs, *, tool_env)` 把每条 typed spec 映射成具体适配器；平台运行期依赖（Tavily client / allowlist provider / MCP pool）走 `ToolEnv` 注入包。声明了某工具但 `ToolEnv` 未提供对应依赖 → `AgentFactoryError`。本 PR 交付 schema + 装配器 + `build_agent` 接缝（装配器全单测覆盖）；control-plane 把真实后端（Tavily key 设置项 + secret ref / allowlist 接 `TenantConfigService` / MCP server pool 生命周期）注入 `ToolEnv` 是单列 follow-up —— 在此之前 control-plane 传空 `ToolEnv()`，纯 LLM agent 正常跑，声明工具的 agent 在 build 期得到明确 `AgentFactoryError`。
 
 ---
 

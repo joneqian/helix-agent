@@ -61,9 +61,15 @@ class ToolResult:
 
 @runtime_checkable
 class Tool(Protocol):
-    """Async callable wrapped with its static spec."""
+    """Async callable wrapped with its static spec.
 
-    spec: ToolSpec
+    ``spec`` is declared read-only so both a plain attribute (MCPTool's
+    ``field(init=False)``) and a ``@property`` (WebSearchTool / HTTPTool)
+    satisfy the Protocol.
+    """
+
+    @property
+    def spec(self) -> ToolSpec: ...
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
         """Dispatch the tool with the given args and return a

@@ -40,7 +40,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -414,8 +414,13 @@ async def register_mcp_tools(
     client: MCPClient,
     registry: ToolRegistry,
     content_char_cap: int = DEFAULT_MCP_CHAR_CAP,
+    allow_tools: Collection[str] | None = None,
 ) -> list[str]:
     """List tools from ``client`` and register each as :class:`MCPTool`.
+
+    ``allow_tools`` optionally filters by the server-advertised (bare)
+    tool name — ``None`` registers every tool, a set registers only the
+    listed ones (the manifest's ``MCPToolSpec.allow_tools``).
 
     Returns the namespaced names registered, useful for audit
     attribution at orchestrator startup.
@@ -423,6 +428,8 @@ async def register_mcp_tools(
     tools = await client.list_tools()
     registered: list[str] = []
     for tool_def in tools:
+        if allow_tools is not None and tool_def.name not in allow_tools:
+            continue
         helix_tool = MCPTool(
             client=client,
             tool_def=tool_def,

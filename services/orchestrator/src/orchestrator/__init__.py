@@ -6,9 +6,6 @@ the canonical state shape consumed by all orchestrator graphs.
 """
 
 from orchestrator.agent_factory import (
-    AgentFactoryError as AgentFactoryError,
-)
-from orchestrator.agent_factory import (
     BuiltAgent as BuiltAgent,
 )
 from orchestrator.agent_factory import (
@@ -16,6 +13,9 @@ from orchestrator.agent_factory import (
 )
 from orchestrator.agent_factory import (
     build_llm_router as build_llm_router,
+)
+from orchestrator.errors import (
+    AgentFactoryError as AgentFactoryError,
 )
 from orchestrator.errors import (
     MaxStepsExceededError as MaxStepsExceededError,
@@ -76,6 +76,9 @@ from orchestrator.tools import (
     ToolContext as ToolContext,
 )
 from orchestrator.tools import (
+    ToolEnv as ToolEnv,
+)
+from orchestrator.tools import (
     ToolNotFoundError as ToolNotFoundError,
 )
 from orchestrator.tools import (
@@ -86,6 +89,9 @@ from orchestrator.tools import (
 )
 from orchestrator.tools import (
     ToolSpec as ToolSpec,
+)
+from orchestrator.tools import (
+    build_tool_registry as build_tool_registry,
 )
 
 __all__ = [
@@ -108,6 +114,7 @@ __all__ = [
     "StreamableGraph",
     "Tool",
     "ToolContext",
+    "ToolEnv",
     "ToolNotFoundError",
     "ToolRegistry",
     "ToolResult",
@@ -115,6 +122,7 @@ __all__ = [
     "build_agent",
     "build_llm_router",
     "build_react_graph",
+    "build_tool_registry",
     "format_sse",
     "run_agent",
     "sanitize_dangling_tool_calls",

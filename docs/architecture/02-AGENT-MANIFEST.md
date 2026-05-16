@@ -94,32 +94,26 @@ spec:
         template: "<conventions>{{ value }}</conventions>"
 
   # ---------- 工具（声明式装配）----------
+  # M0 工具声明用 `type` 判别字段（STREAM-E-DESIGN Mini-ADR E-14）。
+  # http/mcp 的真实配置（URL allowlist / MCP server）是租户作用域，
+  # 在 tenant_config 里，不在单 agent 的 manifest 内联。
   tools:
     # 1. 内置工具
-    - builtin: web_search
+    - type: builtin
+      name: web_search
       config: { engine: tavily, max_results: 5 }
 
-    # 2. MCP 工具（HTTP/SSE/STDIO 三种 transport）
-    - mcp:
-        name: gitlab-mcp
-        transport: sse
-        url: https://mcp.internal/gitlab
-        auth: !secret gitlab-token        # 由 Credential Proxy 注入
-        allow_tools: ["read_pr", "read_file", "post_comment", "list_changed_files"]
+    # 2. HTTP 工具 — 启用开关；URL allowlist 在
+    #    tenant_config.http_tool_allowlist（租户作用域，glob 模式）
+    - type: http
 
-    # 3. HTTP API as tool（声明式，无需写代码）
-    - http:
-        name: notify_slack
-        method: POST
-        url: https://slack.internal/v1/post
-        schema: schemas/slack_request.json
-        auth: !secret slack-bot-token
+    # 3. MCP 工具 — 启用开关；server 在 tenant_config.mcp_servers
+    #    （租户作用域）。allow_tools 可选，留空 = 暴露全部 MCP 工具
+    - type: mcp
+      allow_tools: ["read_pr", "read_file", "post_comment"]
 
-    # 4. 子 Agent 作为工具
-    - subagent:
-        name: security_auditor
-        ref: security-auditor-agent@^2.0   # 引用其他 agent
-        timeout_s: 60
+    # 4. python / subagent 工具 — M1-F（code 插槽 + Sub-Agent）。
+    #    M0 声明这两类会被 manifest 校验拒绝（discriminated union 无此变体）。
 
   # ---------- 沙盒 ----------
   sandbox:
@@ -257,15 +251,16 @@ spec:
       - "rapidfuzz==3.9.0"
 
   tools:
-    - builtin: web_search
-    # 自定义 Python 工具：插槽 = "code.tools" 入口
-    - python:
-        name: fetch_similar_tickets
-        entrypoint: agents.ticket_classifier.tools:fetch_similar_tickets
-        # 函数签名由 @tool 装饰器自动反射出 input/output schema
-    - python:
-        name: ticket_classifier
-        entrypoint: agents.ticket_classifier.tools:TicketClassifier   # 类也可
+    - type: builtin
+      name: web_search
+    # 自定义 Python 工具（M1-F，code 插槽）：插槽 = "code.tools" 入口
+    - type: python
+      name: fetch_similar_tickets
+      entrypoint: agents.ticket_classifier.tools:fetch_similar_tickets
+      # 函数签名由 @tool 装饰器自动反射出 input/output schema
+    - type: python
+      name: ticket_classifier
+      entrypoint: agents.ticket_classifier.tools:TicketClassifier   # 类也可
 
   # 自定义工作流：插槽 = "code.graph" 入口
   workflow:
