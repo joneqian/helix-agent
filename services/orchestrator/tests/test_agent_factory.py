@@ -159,6 +159,16 @@ async def test_build_llm_router_rate_limit_from_model_spec() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_llm_router_temperature_from_model_spec() -> None:
+    """ModelSpec.temperature is plumbed onto the provider adapter (F-5)."""
+    model = _spec(temperature=0.9).spec.model
+    router = await build_llm_router(model, secret_store=_secret_store())
+    inner = router.providers[0].provider.inner  # type: ignore[union-attr]
+    assert isinstance(inner, AnthropicProvider)
+    assert inner.temperature == 0.9
+
+
+@pytest.mark.asyncio
 async def test_build_llm_router_missing_api_key_ref_raises() -> None:
     model = ModelSpec.model_validate({"provider": "anthropic", "name": "claude"})
     with pytest.raises(AgentFactoryError, match="no api_key_ref"):

@@ -80,6 +80,7 @@ class OpenAIClient(Protocol):
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
         """POST ``/v1/chat/completions`` and return the parsed JSON body."""
 
@@ -113,10 +114,13 @@ class HTTPOpenAIClient:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
         body: dict[str, Any] = {"model": model, "messages": messages}
         if tools:
             body["tools"] = tools
+        if temperature is not None:
+            body["temperature"] = temperature
 
         try:
             async with httpx.AsyncClient(
@@ -166,8 +170,16 @@ class RecordingOpenAIClient:
         model: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
-        self.calls.append({"model": model, "messages": messages, "tools": tools})
+        self.calls.append(
+            {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "temperature": temperature,
+            }
+        )
         if self.raise_with is not None:
             raise self.raise_with
         return self.response
@@ -175,10 +187,16 @@ class RecordingOpenAIClient:
 
 @dataclass
 class OpenAIProvider:
-    """:class:`LLMProvider` for OpenAI Chat Completions."""
+    """:class:`LLMProvider` for OpenAI Chat Completions.
+
+    ``temperature`` is the manifest's sampling temperature
+    (``ModelSpec.temperature``). ``None`` omits it from the request so
+    the provider applies its own default.
+    """
 
     client: OpenAIClient
     model: str
+    temperature: float | None = None
 
     async def complete(
         self,
@@ -193,6 +211,7 @@ class OpenAIProvider:
             model=self.model,
             messages=mapped,
             tools=tool_payload,
+            temperature=self.temperature,
         )
 
         return _from_openai_response(body)

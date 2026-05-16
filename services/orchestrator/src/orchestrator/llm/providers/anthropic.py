@@ -84,6 +84,7 @@ class AnthropicClient(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
         """POST ``/v1/messages`` and return the parsed JSON body."""
 
@@ -111,6 +112,7 @@ class HTTPAnthropicClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
         body: dict[str, Any] = {
             "model": model,
@@ -121,6 +123,8 @@ class HTTPAnthropicClient:
             body["system"] = system
         if tools:
             body["tools"] = tools
+        if temperature is not None:
+            body["temperature"] = temperature
 
         try:
             async with httpx.AsyncClient(
@@ -174,6 +178,7 @@ class RecordingAnthropicClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
+        temperature: float | None = None,
     ) -> Mapping[str, Any]:
         self.calls.append(
             {
@@ -182,6 +187,7 @@ class RecordingAnthropicClient:
                 "messages": messages,
                 "tools": tools,
                 "max_tokens": max_tokens,
+                "temperature": temperature,
             }
         )
         if self.raise_with is not None:
@@ -203,6 +209,9 @@ class AnthropicProvider:
     client: AnthropicClient
     model: str
     max_tokens: int = DEFAULT_MAX_TOKENS
+    #: Sampling temperature (``ModelSpec.temperature``). ``None`` omits
+    #: it from the request so the API applies its own default.
+    temperature: float | None = None
 
     async def complete(
         self,
@@ -219,6 +228,7 @@ class AnthropicProvider:
             messages=mapped,
             tools=tool_payload,
             max_tokens=self.max_tokens,
+            temperature=self.temperature,
         )
 
         return _from_anthropic_response(body)
