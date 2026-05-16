@@ -141,6 +141,23 @@ The same `mc encrypt set` line applied to the audit-WORM bucket
 For a KES-backed dev setup (closer to prod), spin up KES manually next
 to this compose; ADR-0008 keeps that pathway optional.
 
+## Sandbox image (`sandbox-image/`)
+
+The image the `exec_python` tool runs LLM-generated code in (Stream F.2 —
+[STREAM-F-DESIGN](../docs/streams/STREAM-F-DESIGN.md)). It is **not** a
+compose service: the Sandbox Supervisor (F.1) `docker run`s it per call.
+
+```bash
+docker build -t helix-sandbox:dev infra/sandbox-image
+```
+
+`runner.py` is the container's PID 1 — it reads line-delimited JSON
+requests on stdin and writes one response per line (protocol in
+STREAM-F-DESIGN § 4.2). Image-level hardening (non-root uid 10000, no
+pip, exec-form entrypoint) lives in the `Dockerfile`; the `docker run`
+flags (read-only rootfs, `--cap-drop=ALL`, pids/memory limits, network)
+are applied by the F.3 `SandboxRuntimeProvider`, not baked into the image.
+
 ### Postgres at-rest (dev)
 
 - **macOS host**: FileVault is enough — the whole disk is encrypted; the
