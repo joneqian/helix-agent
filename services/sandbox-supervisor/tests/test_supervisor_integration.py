@@ -120,7 +120,7 @@ class _NullAudit:
     """An ``AuditSink`` that drops entries — F.8 does not assert on audit."""
 
     async def write(self, entry: object) -> None:
-        del entry
+        """Drop the audit entry — F.8 asserts on Docker behaviour, not audit."""
 
 
 @dataclass
