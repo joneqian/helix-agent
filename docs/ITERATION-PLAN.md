@@ -244,28 +244,31 @@
 参考：[architecture/01-SYSTEM-ARCHITECTURE](./architecture/01-SYSTEM-ARCHITECTURE.md) §"Orchestrator"
 
 **🔴 中间件链先建**（顺序硬性要求 — 否则 prefix cache / 断路器 / Langfuse 都覆盖不到首次 LLM 调用）：
-- [ ] **E.1 LangGraph PostgresSaver 接入**
-- [ ] **E.2 `@Next/@Prev` 锚点系统**（~120 LOC）— 中间件链基础设施，必须先于任何 middleware
-- [ ] **E.3 `dynamic_context_middleware`**（193 LOC，**API 成本影响 10x，绝不能省**）
-- [ ] **E.4 `llm_error_handling_middleware`**（368 LOC — 断路器 + 自动重试；防开发期被 LLM 限流爆）
-- [ ] **E.5 Langfuse middleware**（落实 P0 #15）— 按 ADR-0005 接入；从首次 LLM 调用开始就有 trace
-- [ ] **D.2 PII redactor middleware 注册**（与 D 跨流；E.2 完成后即可装入链）
+- [x] **E.1 LangGraph PostgresSaver 接入**（#87 control-plane 注入；`make_checkpointer` postgres 后端）
+- [x] **E.2 `@Next/@Prev` 锚点系统** — `MiddlewareChain` / `ANCHORS` / 拓扑排序
+- [x] **E.3 `dynamic_context_middleware`**（**API 成本影响 10x，绝不能省**）
+- [x] **E.4 `llm_error_handling_middleware`**（断路器 + 自动重试；防开发期被 LLM 限流爆）
+- [x] **E.5 Langfuse middleware**（落实 P0 #15）— M0 用 span-recording 客户端；SDK 适配器 M1
+- [x] **D.2 PII redactor middleware 注册**（与 D 跨流；#93 接 `DefaultSecretRedactor` 全局模式）
 
 **业务流程实现**
-- [ ] **E.6 ReAct mode**（先单 agent，无 sub-agent）
-- [ ] **E.7 工具：builtin** — `web_search`
-- [ ] **E.8 工具：HTTP** — 通过 F.5 Credential Proxy
-- [ ] **E.9 工具：MCP** — 单 MCP server 接入（Anthropic 官方 SDK）
-- [ ] **E.10 `sandbox_audit_middleware`**（363 LOC — LLM 命令安全网；Sandbox 工具接入时装）
+- [x] **E.6 ReAct mode**（单 agent，无 sub-agent）— `build_react_graph`
+- [x] **E.7 工具：builtin** — `web_search`（#91 接 Tavily）
+- [x] **E.8 工具：HTTP** — M0 直连 + 租户 allowlist，**不**经 Credential Proxy（Mini-ADR E-7）
+- [x] **E.9 工具：MCP** — `MCPTool` + `MCPServerPool`（#92；server 列表平台配置，Mini-ADR E-17）
+- [x] **E.10 `sandbox_audit_middleware`**（LLM 命令安全网；中间件已实现，链装配随 Stream F sandbox 工具接入）
+- [x] **E.10.5 `loop_detection_middleware`**（对照 deer-flow 补全；N=3 重复 tool_call 早期 abort —— ITERATION-PLAN 原未列，Stream E 设计细化新增）
 
 **LLM 调用与流式**
-- [ ] **E.11 LLM Provider Fallback Chain**（参考 [architecture/00-OVERVIEW](./architecture/00-OVERVIEW.md) §"Fallback"）
-- [ ] **E.12 提供商层限流**（落实 P0 #27 第 3 层）— per LLM key；与 E.11 fallback 一起实现
-- [ ] **E.13 LLM response cache**（落实 P0 #28）— LangGraph 节点链路前置 lookup（精确 cache 先做）
-- [ ] **E.14 SSE 流式输出 + backpressure**
-- [ ] **E.15 请求取消的 engine 节点传播**（落实 P0 #25 第 2 段）— cancellation token 在 graph node 间传递，能中断 in-flight LLM call
+- [x] **E.11 LLM Provider Fallback Chain** + E.11.5 国内 provider（kimi/glm/deepseek/qwen/doubao）
+- [x] **E.12 提供商层限流**（落实 P0 #27 第 3 层）— per LLM key `RateLimitedProvider`
+- [x] **E.13 LLM response cache**（落实 P0 #28）— `LLMResponseCache` lookup/store 中间件
+- [x] **E.14 SSE 流式输出 + backpressure**（in-process 单体 `run_agent` + `sse_consumer`）
+- [x] **E.15 请求取消的 engine 节点传播**（落实 P0 #25 第 2 段）— `CancellationToken` 协作式取消
+- [x] **E 后续：agent factory + tool/middleware 装配**（#84/#85/#90 manifest → 编译 graph 装配 + control-plane 注入）
 
 **Stream E Verification**：1 个 minimal agent 跑通 builtin/http/mcp 三类工具；故意触发 LLM 限流断路器接管；故意输入 PII redactor 工作；prefix cache 命中率 > 80%；cancellation 触达 in-flight LLM call；Langfuse 上每步可见 trace
+> **验证状态**：上述每条机制均有 unit / integration 测试覆盖（`test_react_graph` / `test_tool_assembly` / `test_llm_error_handling` / `test_pii_redact` / `test_llm_cache_integration` / `test_cancellation_integration` / `test_middleware_chain_wiring`）；953 unit 全绿。holistic 的"单 minimal agent 一次跑通全部 + cache 命中率量化观测"需真实 LLM/Tavily 凭证 + 运行环境，归入 **M0→M1 Gate 的 dogfood 平行运行**。
 
 ### Stream F — Sandbox（~4-5 周；含 sandbox 端取消）
 
