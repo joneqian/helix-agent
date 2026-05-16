@@ -77,6 +77,7 @@ from control_plane.runtime import (
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
+    resolve_web_search_client,
 )
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigService
@@ -240,10 +241,17 @@ def create_app(
                     logger.info("control_plane.checkpointer.postgres_ready")
                 else:
                     checkpointer = InMemorySaver()
+                web_search_client = await resolve_web_search_client(
+                    api_key_ref=resolved_settings.tavily_api_key_ref,
+                    secret_store=resolved_secret_store,
+                )
                 resolved_agent_runtime.agent_builder = make_agent_builder(
                     resolved_secret_store,
                     checkpointer,
-                    tool_env=build_tool_env(resolved_tenant_config_service),
+                    tool_env=build_tool_env(
+                        resolved_tenant_config_service,
+                        web_search_client=web_search_client,
+                    ),
                     middleware_env=build_middleware_env(),
                 )
             if reaper is not None:

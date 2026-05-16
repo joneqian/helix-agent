@@ -22,10 +22,12 @@ from control_plane.runtime import (
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
+    resolve_web_search_client,
 )
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigNotConfiguredError
 from helix_agent.runtime.secret_store import LocalDevSecretStore
+from orchestrator.tools import HTTPTavilyClient
 from tests.auth_fixtures import build_test_jwt_verifier
 
 
@@ -133,3 +135,36 @@ async def test_allowlist_provider_empty_when_tenant_unconfigured() -> None:
     env = build_tool_env(_FakeTenantConfigService(allowlist=None))
     assert env.allowlist_provider is not None
     assert await env.allowlist_provider(uuid4()) == []
+
+
+# ---------------------------------------------------------------------------
+# web_search / Tavily wiring (#164)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_web_search_client_none_ref_yields_none() -> None:
+    client = await resolve_web_search_client(
+        api_key_ref=None,
+        secret_store=LocalDevSecretStore.from_mapping({}),
+    )
+    assert client is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_web_search_client_resolves_key() -> None:
+    store = LocalDevSecretStore.from_mapping({"tavily/key": "tvly-test"})
+    client = await resolve_web_search_client(
+        api_key_ref="secret://tavily/key",
+        secret_store=store,
+    )
+    assert isinstance(client, HTTPTavilyClient)
+    assert client.api_key == "tvly-test"
+
+
+@pytest.mark.asyncio
+async def test_build_tool_env_carries_web_search_client() -> None:
+    store = LocalDevSecretStore.from_mapping({"tavily/key": "tvly-test"})
+    client = await resolve_web_search_client(api_key_ref="secret://tavily/key", secret_store=store)
+    env = build_tool_env(_FakeTenantConfigService(allowlist=[]), web_search_client=client)
+    assert env.web_search_client is client

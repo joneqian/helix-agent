@@ -25,10 +25,10 @@ from helix_agent.protocol import AgentSpec
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
 from helix_agent.runtime.runs import RunManager
-from helix_agent.runtime.secret_store import SecretStore
+from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
 from orchestrator import BuiltAgent, MiddlewareEnv, ToolEnv, build_agent
-from orchestrator.tools import AllowlistProvider
+from orchestrator.tools import AllowlistProvider, HTTPTavilyClient, TavilyClient
 
 #: Builds a runnable agent from a manifest. The production builder
 #: closes over a SecretStore + checkpointer and calls
@@ -121,14 +121,36 @@ def _tenant_allowlist_provider(service: TenantConfigService) -> AllowlistProvide
     return _provider
 
 
-def build_tool_env(tenant_config_service: TenantConfigService) -> ToolEnv:
+async def resolve_web_search_client(
+    *,
+    api_key_ref: str | None,
+    secret_store: SecretStore,
+) -> TavilyClient | None:
+    """Resolve the Tavily API key behind ``api_key_ref`` into a web-search
+    client. ``None`` ref → ``None`` — ``web_search`` is then unavailable
+    and an agent declaring it fails at build time."""
+    if api_key_ref is None:
+        return None
+    api_key = await secret_store.get(parse_secret_ref(api_key_ref))
+    return HTTPTavilyClient(api_key=api_key)
+
+
+def build_tool_env(
+    tenant_config_service: TenantConfigService,
+    *,
+    web_search_client: TavilyClient | None = None,
+) -> ToolEnv:
     """Assemble the M0 :class:`ToolEnv`.
 
-    Wires the HTTP tool's per-tenant allowlist. ``web_search`` (Tavily)
-    and ``mcp`` are not wired yet — declaring those tools fails at
-    build time until their follow-ups land.
+    Wires the HTTP tool's per-tenant allowlist and — when a Tavily
+    client is supplied — the ``web_search`` builtin. ``mcp`` is not
+    wired yet; declaring an ``mcp`` tool fails at build time until its
+    follow-up lands.
     """
-    return ToolEnv(allowlist_provider=_tenant_allowlist_provider(tenant_config_service))
+    return ToolEnv(
+        allowlist_provider=_tenant_allowlist_provider(tenant_config_service),
+        web_search_client=web_search_client,
+    )
 
 
 def build_middleware_env() -> MiddlewareEnv:
