@@ -23,6 +23,7 @@ from control_plane.runtime import (
     _load_mcp_server_configs,
     build_mcp_pool,
     build_middleware_env,
+    build_supervisor_client,
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
@@ -31,7 +32,13 @@ from control_plane.runtime import (
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigNotConfiguredError
 from helix_agent.runtime.secret_store import LocalDevSecretStore
-from orchestrator.tools import HTTPTavilyClient, MCPClient, MCPServerConfig, RecordingMCPClient
+from orchestrator.tools import (
+    HTTPSupervisorClient,
+    HTTPTavilyClient,
+    MCPClient,
+    MCPServerConfig,
+    RecordingMCPClient,
+)
 from tests.auth_fixtures import build_test_jwt_verifier
 
 
@@ -123,8 +130,9 @@ def test_build_middleware_env_redact_text_masks_secrets() -> None:
 def test_build_tool_env_wires_allowlist_provider_only() -> None:
     env = build_tool_env(_FakeTenantConfigService(allowlist=[]))
     assert env.allowlist_provider is not None
-    # web_search (Tavily) and mcp pool are deferred follow-ups.
+    # web_search (Tavily), the supervisor client, and the mcp pool are opt-in.
     assert env.web_search_client is None
+    assert env.supervisor_client is None
     assert env.mcp_pool is None
 
 
@@ -180,6 +188,27 @@ async def test_build_tool_env_carries_web_search_client() -> None:
     client = await resolve_web_search_client(api_key_ref="secret://tavily/key", secret_store=store)
     env = build_tool_env(_FakeTenantConfigService(allowlist=[]), web_search_client=client)
     assert env.web_search_client is client
+
+
+# ---------------------------------------------------------------------------
+# Sandbox Supervisor client wiring (Stream F.11)
+# ---------------------------------------------------------------------------
+
+
+def test_build_supervisor_client_none_url_yields_none() -> None:
+    assert build_supervisor_client(None) is None
+
+
+def test_build_supervisor_client_builds_http_client() -> None:
+    client = build_supervisor_client("http://sandbox-supervisor:8000")
+    assert isinstance(client, HTTPSupervisorClient)
+    assert client.base_url == "http://sandbox-supervisor:8000"
+
+
+def test_build_tool_env_carries_supervisor_client() -> None:
+    client = build_supervisor_client("http://sandbox-supervisor:8000")
+    env = build_tool_env(_FakeTenantConfigService(allowlist=[]), supervisor_client=client)
+    assert env.supervisor_client is client
 
 
 # ---------------------------------------------------------------------------

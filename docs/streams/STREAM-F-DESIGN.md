@@ -37,7 +37,7 @@
 | **F.8 沙盒 Docker 集成测试 harness** | `services/sandbox-supervisor/tests/test_supervisor_integration.py`：进程内 `SandboxSupervisor` + 真实 `CliDockerClient`（runc），自动化验收门 #1/#2/#4/#5/#8（测试矩阵 #45/#48/#50/#56/#57/#59）。设计细化新增。 | Mini-ADR F-10 F-11 F-12 |
 | **F.9 sandbox egress 网络隔离** | `helix-sandbox-egress` 创建为 Docker `--internal` 网络 —— 沙盒结构性无对外路由（公网 / 云元数据 / 内网全不可达），唯一可达 = 同 internal 网上的 credential-proxy。关闭验收门 #3（测试矩阵 #49）。**不依赖 compose**（harness 用 stub proxy）。设计细化新增。 | subsystem 21；Mini-ADR F-14 |
 | **F.10 credential-proxy 容器化 + 入 docker-compose** | 给 credential-proxy 写正式多阶段 uv 构建 Dockerfile（确立"helix 服务容器化"pattern，credential-proxy 作 pilot，其余 3 服务复用见 ITERATION-PLAN I.1）；`infra/docker-compose.yml` 加 `credential-proxy` 服务 + `helix-sandbox-egress`（internal）/ egress 双网络，proxy 双归属。设计细化新增。 | Mini-ADR F-15 |
-| **F.11 端到端 egress 集成测试** | harness 的 stub 换真 credential-proxy 容器，验证 `exec_python` → sandbox →（仅）proxy → mock upstream 全链路（测试矩阵 #60）；顺带 control-plane 接 `ToolEnv.supervisor_client`。设计细化新增。 | Mini-ADR F-14 |
+| **F.11 control-plane 接 `ToolEnv.supervisor_client`** | control-plane 生产构造 `ToolEnv` 时注入 `HTTPSupervisorClient`（base URL 取自 settings）—— 否则 manifest 声明 `exec_python` 直接 `AgentFactoryError`。`#60` 全栈 egress e2e 移入 ITERATION-PLAN **I.1**（需真 proxy + postgres + 迁移全栈，在 harness 重建迷你栈不划算）。设计细化新增。 | Stream E E.6 |
 
 ### 1.2 Out-of-scope（明确推迟）
 
@@ -448,7 +448,7 @@ POST /forward
 | 57 | 取消即杀 | F.7 | integration | 验收门 #8 —— long-running `exec_python` → cancel → ≤1s `DESTROYED` |
 | 58 | 取消 finally 释放 | F.7 | unit | `exec_python` 异常 / 取消路径均走到 `supervisor.destroy`（无泄漏容器） |
 | 59 | stdlib C 扩展可用 | F.8 | integration | Mini-ADR F-13 —— alpine/musl CPython 可 import `ssl`/`sqlite3`/`ctypes`/`lzma` 等 C 扩展 stdlib（切基础镜像护栏） |
-| 60 | egress 端到端 | F.11 | integration | `exec_python` → sandbox →（仅）真 credential-proxy → mock upstream 全链路通 |
+| 60 | egress 端到端 | I.1 | integration | `exec_python` → sandbox →（仅）真 credential-proxy → mock upstream 全链路通（需全栈，原属 F.11 → 移入 I.1）|
 
 > 验收门 #6（timing/side-channel）、#7（CVE-2019-5736 PoC）需真实 runsc，不进 CI 自动化 —— 归 M0→M1 Gate 沙盒渗透测试，§ 1.3 已注明。
 >
@@ -533,12 +533,13 @@ F.10 feat(f-10): credential-proxy 容器化 + 入 docker-compose
         - infra/docker-compose.yml 加 helix-sandbox-egress(internal)/egress 双网络
         - credential-proxy 服务双归属（Mini-ADR F-15）
 
-F.11 feat(f-11): 端到端 egress 集成测试
-        - harness stub 换真 credential-proxy 容器；测试矩阵 #60
-        - control-plane 接 ToolEnv.supervisor_client（HTTPSupervisorClient from settings）
+F.11 feat(f-11): control-plane 接 ToolEnv.supervisor_client
+        - control-plane settings 加 sandbox-supervisor base URL
+        - build_tool_env 注入 HTTPSupervisorClient → manifest 声明 exec_python 可端到端用
+        - #60 全栈 egress e2e 移入 ITERATION-PLAN I.1（需真 proxy + postgres + 迁移全栈）
 ```
 
-> **PR 顺序说明**：F.2/F.3 先于 F.1 —— supervisor `acquire` 依赖镜像 + runtime provider 存在。F.6 先于 F.5 —— proxy 取 secret 依赖 `aliyun_kms` 后端。F.4 在 F.1+F.5 之后 —— `exec_python` 同时依赖 supervisor 和（经 sandbox 出网时）proxy。F.7 接 cancellation；F.8 把 § 1.3 的 runc 验收门补成自动化集成 harness。F.9 → F.10 → F.11 是 egress 隔离链路：F.9 独立（stub proxy），F.10 把真 proxy 接入 compose，F.11 端到端验证依赖 F.9 + F.10。
+> **PR 顺序说明**：F.2/F.3 先于 F.1 —— supervisor `acquire` 依赖镜像 + runtime provider 存在。F.6 先于 F.5 —— proxy 取 secret 依赖 `aliyun_kms` 后端。F.4 在 F.1+F.5 之后 —— `exec_python` 同时依赖 supervisor 和（经 sandbox 出网时）proxy。F.7 接 cancellation；F.8 把 § 1.3 的 runc 验收门补成自动化集成 harness。F.9 → F.10 → F.11 是 egress 隔离链路：F.9 把 `helix-sandbox-egress` 改 `--internal`（stub proxy 验 #49），F.10 把真 proxy 容器化 + 接入 compose，F.11 把 supervisor client 接进 control-plane 生产装配。全栈 egress e2e（#60）随 I.1 的 `docker compose up` 一并做。
 
 ---
 

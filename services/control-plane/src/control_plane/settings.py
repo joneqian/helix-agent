@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     #: ``None`` → an empty MCP pool (no servers).
     mcp_servers_config_file: str | None = None
 
+    #: Base URL of the Sandbox Supervisor's HTTP API — backs the built-in
+    #: ``exec_python`` tool (Stream F). ``None`` → ``exec_python`` is
+    #: unavailable; an agent that declares it fails at build time with a
+    #: clear error.
+    sandbox_supervisor_url: str | None = None
+
     # ------------------------------------------------------------------ auth (C.1)
     # OIDC issuer used to validate the ``iss`` JWT claim and to derive
     # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default

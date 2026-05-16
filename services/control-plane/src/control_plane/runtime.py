@@ -34,11 +34,13 @@ from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
 from orchestrator import BuiltAgent, MiddlewareEnv, ToolEnv, build_agent
 from orchestrator.tools import (
     AllowlistProvider,
+    HTTPSupervisorClient,
     HTTPTavilyClient,
     MCPClient,
     MCPServerConfig,
     MCPServerPool,
     StdioMCPClient,
+    SupervisorClient,
     TavilyClient,
 )
 
@@ -201,20 +203,34 @@ async def build_mcp_pool(
         await pool.close_all()
 
 
+def build_supervisor_client(url: str | None) -> SupervisorClient | None:
+    """Build the Sandbox Supervisor HTTP client from its base URL.
+
+    ``None`` → the ``exec_python`` tool is unavailable; an agent that
+    declares it fails at build time with a clear error.
+    """
+    if url is None:
+        return None
+    return HTTPSupervisorClient(base_url=url)
+
+
 def build_tool_env(
     tenant_config_service: TenantConfigService,
     *,
     web_search_client: TavilyClient | None = None,
+    supervisor_client: SupervisorClient | None = None,
     mcp_pool: MCPServerPool | None = None,
 ) -> ToolEnv:
     """Assemble the M0 :class:`ToolEnv`.
 
     Wires the HTTP tool's per-tenant allowlist, and — when supplied —
-    the ``web_search`` Tavily client and the ``mcp`` server pool.
+    the ``web_search`` Tavily client, the ``exec_python`` Sandbox
+    Supervisor client, and the ``mcp`` server pool.
     """
     return ToolEnv(
         allowlist_provider=_tenant_allowlist_provider(tenant_config_service),
         web_search_client=web_search_client,
+        supervisor_client=supervisor_client,
         mcp_pool=mcp_pool,
     )
 
