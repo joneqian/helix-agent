@@ -75,6 +75,7 @@ from control_plane.runtime import (
     AgentRuntime,
     build_mcp_pool,
     build_middleware_env,
+    build_supervisor_client,
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
@@ -255,6 +256,9 @@ def create_app(
                     tool_env=build_tool_env(
                         resolved_tenant_config_service,
                         web_search_client=web_search_client,
+                        supervisor_client=build_supervisor_client(
+                            resolved_settings.sandbox_supervisor_url
+                        ),
                         mcp_pool=mcp_pool,
                     ),
                     middleware_env=build_middleware_env(),

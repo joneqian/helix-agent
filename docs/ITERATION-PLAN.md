@@ -287,7 +287,7 @@
 - [x] **F.8 沙盒 Docker 集成测试 harness** — 进程内 supervisor + 真实 runc，自动化验收门 #1/#2/#4/#5/#8（Mini-ADR F-10/F-11/F-12）
 - [ ] **F.9 sandbox egress 网络隔离** — `helix-sandbox-egress` 改 Docker `--internal` 网络，关闭验收门 #3（网络隔离）；Mini-ADR F-14
 - [ ] **F.10 credential-proxy 容器化 + 入 docker-compose** — 正式多阶段 uv 构建 Dockerfile（确立 helix 服务容器化 pattern，其余 3 服务复用见 I.1）+ `helix-sandbox-egress`/egress 双网络，proxy 双归属；Mini-ADR F-15
-- [ ] **F.11 端到端 egress 集成测试** — sandbox →（仅）真 proxy → mock upstream 全链路；含 control-plane 接 `ToolEnv.supervisor_client`
+- [ ] **F.11 control-plane 接 `ToolEnv.supervisor_client`** — 生产构造 `ToolEnv` 时注入 `HTTPSupervisorClient`（base URL 取自 settings），manifest 声明 `exec_python` 才能端到端可用。全栈 egress e2e（#60）移入 I.1
 
 **Stream F Verification**（落实 [architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"沙盒安全验证"7 条用例）：
 - [x] 文件系统隔离测试 — F.8 harness 自动化
@@ -334,6 +334,7 @@
 > Phase 0.3 已建立 baseline CI/CD + 三环境配置框架；本 Stream 把它生产化。
 
 - [ ] **I.1 服务容器化 + 全栈 compose** — 4 个 helix 服务（control-plane / orchestrator / credential-proxy / sandbox-supervisor）多阶段 uv 构建 Dockerfile + `docker compose up` 起 M0 完整栈。credential-proxy 的 Dockerfile 由 **Stream F.10** 先行落地、确立"helix 服务容器化"pattern；其余 3 个服务复用该 pattern。
+  - **含全栈 egress 端到端测试**（测试矩阵 #60，原属 Stream F.11）：`exec_python` → sandbox →（仅）真 credential-proxy → mock upstream 全链路通。原计划在 sandbox-supervisor 集成 harness 做，但忠实验证需 proxy + postgres + 迁移 + 种 `secret_allowlist`/secret 一整套 —— 等于在 harness 里重建迷你栈；故移入 I.1，待 `docker compose --profile sandbox up` 全栈就位后顺势做。
 - [ ] **I.2 服务发布策略**（落实 P0 #32）— 蓝绿 + 金丝雀脚本
 - [ ] **I.3 服务回滚机制**（落实 P0 #33）— 一键回滚 + DB 兼容
 - [ ] **I.4 三环境部署文档**（dev / staging / prod）
