@@ -292,3 +292,41 @@ def test_tools_entry_missing_discriminator_rejected() -> None:
     doc["spec"]["tools"] = [{"name": "web_search"}]
     with pytest.raises(ValidationError):
         AgentSpec.model_validate(doc)
+
+
+# ---------------------------------------------------------------------------
+# azure / self-hosted model fields (F-4)
+# ---------------------------------------------------------------------------
+
+
+def test_model_fields_default_to_none() -> None:
+    model = ModelSpec.model_validate({"provider": "openai", "name": "gpt-4o"})
+    assert model.base_url is None
+    assert model.azure_deployment is None
+    assert model.azure_api_version is None
+
+
+def test_self_hosted_model_accepts_base_url() -> None:
+    model = ModelSpec.model_validate(
+        {
+            "provider": "self-hosted",
+            "name": "llama-3.1-70b",
+            "base_url": "http://vllm.internal:8000",
+        }
+    )
+    assert model.provider == "self-hosted"
+    assert model.base_url == "http://vllm.internal:8000"
+
+
+def test_azure_model_accepts_deployment_fields() -> None:
+    model = ModelSpec.model_validate(
+        {
+            "provider": "azure",
+            "name": "gpt-4o",
+            "base_url": "https://res.openai.azure.com",
+            "azure_deployment": "gpt-4o-deploy",
+            "azure_api_version": "2024-10-21",
+        }
+    )
+    assert model.azure_deployment == "gpt-4o-deploy"
+    assert model.azure_api_version == "2024-10-21"

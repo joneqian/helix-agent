@@ -52,6 +52,9 @@ from orchestrator.llm.providers.openai_compatible import (
     QWEN_BASE_URL as QWEN_BASE_URL,
 )
 from orchestrator.llm.providers.openai_compatible import (
+    make_azure_client as make_azure_client,
+)
+from orchestrator.llm.providers.openai_compatible import (
     make_deepseek_client as make_deepseek_client,
 )
 from orchestrator.llm.providers.openai_compatible import (
@@ -65,6 +68,9 @@ from orchestrator.llm.providers.openai_compatible import (
 )
 from orchestrator.llm.providers.openai_compatible import (
     make_qwen_client as make_qwen_client,
+)
+from orchestrator.llm.providers.openai_compatible import (
+    make_self_hosted_client as make_self_hosted_client,
 )
 
 __all__ = [
@@ -85,9 +91,11 @@ __all__ = [
     "OpenAIProvider",
     "RecordingAnthropicClient",
     "RecordingOpenAIClient",
+    "make_azure_client",
     "make_deepseek_client",
     "make_doubao_client",
     "make_glm_client",
     "make_kimi_client",
     "make_qwen_client",
+    "make_self_hosted_client",
 ]

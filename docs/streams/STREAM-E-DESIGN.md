@@ -453,6 +453,17 @@ class LLMResponseCache:
 - **理由**：(1) always-on 三件是成本/稳定性底线 —— E.3 "API 成本 10x 绝不能省"、E.4 断路器"防开发期被限流爆"、E.10.5 循环 runaway guard；无依赖，无理由可关。(2) env-gated 三件依赖平台资源（Langfuse 实例 / cache 后端 / redactor），未注入即静默跳过，与 `ToolEnv`（Mini-ADR E-14）同一注入模式，保持一致。(3) manifest 字段（`PolicySpec.pii` / `context_compression` 等）M0 只用于 `DynamicContextMiddleware` 的 `max_turns/max_tokens` 调参；PII/cache 的 manifest 级开关推 M1。
 - **装配**：`build_middleware_chains(spec, *, env) -> MiddlewareChains` 产出 4 个 anchor 的 `MiddlewareChain`（某 anchor 无中间件则为 `None`，保留 graph 的 no-chain 快路径）。`build_agent` 把 3 个 graph chain 传 `build_react_graph`，`around_llm_call` chain 经 `build_llm_router` 传 `LLMRouter.around_llm_chain`（Mini-ADR E-13）。本 PR 交付装配器 + 接缝；control-plane 注入 `MiddlewareEnv` 真实后端是单列 follow-up —— 在此之前传空 `MiddlewareEnv()`，三个 always-on 中间件已生效。
 
+### E-16：azure / self-hosted provider 复用 `OpenAIProvider`，不写独立适配器
+
+- **背景**：`ModelSpec.provider` 枚举含 `azure` / `self-hosted`，但 `_build_provider` 对二者直接 `raise AgentFactoryError`（"no adapter yet"）。
+- **替代**：为 azure / self-hosted 各写一个独立 `LLMProvider` 适配器。
+- **选择**：两者都说 OpenAI Chat Completions wire 格式，复用 `OpenAIProvider`（与 kimi/glm/... E.11.5 同思路）。差异只在 HTTP 层：
+  - **self-hosted**（vLLM / Ollama / LM Studio 等自托管 OpenAI 兼容服务）：仅需自定义 `base_url`，鉴权仍 `Authorization: Bearer`。
+  - **azure**（Azure OpenAI Service）：URL 是 deployment 形态 `{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={ver}`，鉴权头是 `api-key:` 而非 `Authorization: Bearer`。
+- **实现**：(1) `HTTPOpenAIClient` 参数化鉴权头 —— 加 `api_key_header`（默认 `"authorization"`）+ `api_key_prefix`（默认 `"Bearer "`）；azure 传 `api_key_header="api-key"` / `api_key_prefix=""`。(2) `openai_compatible.py` 加 `make_azure_client` / `make_self_hosted_client` 工厂，与 `make_kimi_client` 等并列。(3) `ModelSpec` 加扁平可选字段 `base_url` / `azure_deployment` / `azure_api_version`（与现有扁平 schema 一致）；缺字段的校验放 `_build_provider`（与 `api_key_ref` 同 build-time 校验惯例）。
+- **理由**：(1) 独立适配器会重复 `OpenAIProvider` 的全部 message/tool 编解码 —— azure 的 wire 格式与 OpenAI 完全一致，唯一差异在 URL/header，属 HTTP client 层。(2) 鉴权头参数化是 2 个字段的小改动，不影响既有 bearer 调用方。(3) 扁平字段与 `ModelSpec` 现状一致，免去嵌套 provider-config 对象的 schema 复杂度。
+- **代价**：`ModelSpec` 多 3 个仅 azure/self-hosted 用到的可选字段（其余 provider 为 `None`）；azure deployment-URL 形态硬编码在 `make_azure_client`，Azure 若改 API 形态需改工厂。
+
 ---
 
 ## 4. 接口

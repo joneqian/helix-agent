@@ -49,11 +49,13 @@ from orchestrator.llm import (
     OpenAIProvider,
     ProviderHandle,
     RateLimitedProvider,
+    make_azure_client,
     make_deepseek_client,
     make_doubao_client,
     make_glm_client,
     make_kimi_client,
     make_qwen_client,
+    make_self_hosted_client,
 )
 from orchestrator.middleware_assembly import MiddlewareEnv, build_middleware_chains
 from orchestrator.runner import GraphRunner
@@ -174,9 +176,13 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
 
     OpenAI-compatible regional vendors (kimi / glm / deepseek / qwen /
     doubao) reuse :class:`OpenAIProvider` over a vendor-configured HTTP
-    client (E.11.5). ``azure`` / ``self-hosted`` have no adapter yet.
+    client (E.11.5). ``azure`` and ``self-hosted`` reuse it too — both
+    speak the OpenAI wire format and only differ at the HTTP layer
+    (Mini-ADR E-16).
     """
-    provider = model.provider
+    # Widen to ``str`` so the exhaustive Literal still leaves the
+    # trailing "unsupported" raise reachable to mypy.
+    provider: str = model.provider
     if provider == "anthropic":
         return AnthropicProvider(
             client=HTTPAnthropicClient(api_key=api_key),
@@ -206,7 +212,30 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             temperature=model.temperature,
         )
 
-    raise AgentFactoryError(
-        f"provider {provider!r} has no adapter yet "
-        f"(supported: anthropic, openai, {', '.join(openai_compatible)})"
-    )
+    if provider == "self-hosted":
+        if not model.base_url:
+            raise AgentFactoryError(f"self-hosted model {model.name!r} requires a base_url")
+        return OpenAIProvider(
+            client=make_self_hosted_client(api_key, base_url=model.base_url),
+            model=model.name,
+            temperature=model.temperature,
+        )
+
+    if provider == "azure":
+        if not (model.base_url and model.azure_deployment and model.azure_api_version):
+            raise AgentFactoryError(
+                f"azure model {model.name!r} requires base_url + "
+                f"azure_deployment + azure_api_version"
+            )
+        return OpenAIProvider(
+            client=make_azure_client(
+                api_key,
+                endpoint=model.base_url,
+                deployment=model.azure_deployment,
+                api_version=model.azure_api_version,
+            ),
+            model=model.name,
+            temperature=model.temperature,
+        )
+
+    raise AgentFactoryError(f"provider {provider!r} has no adapter")

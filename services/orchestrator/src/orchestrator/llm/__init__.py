@@ -65,6 +65,9 @@ from orchestrator.llm.providers import (
     RecordingOpenAIClient as RecordingOpenAIClient,
 )
 from orchestrator.llm.providers import (
+    make_azure_client as make_azure_client,
+)
+from orchestrator.llm.providers import (
     make_deepseek_client as make_deepseek_client,
 )
 from orchestrator.llm.providers import (
@@ -78,6 +81,9 @@ from orchestrator.llm.providers import (
 )
 from orchestrator.llm.providers import (
     make_qwen_client as make_qwen_client,
+)
+from orchestrator.llm.providers import (
+    make_self_hosted_client as make_self_hosted_client,
 )
 from orchestrator.llm.rate_limit import (
     DEFAULT_TIME_PERIOD_S as DEFAULT_TIME_PERIOD_S,
@@ -123,9 +129,11 @@ __all__ = [
     "RateLimitedProvider",
     "RecordingAnthropicClient",
     "RecordingOpenAIClient",
+    "make_azure_client",
     "make_deepseek_client",
     "make_doubao_client",
     "make_glm_client",
     "make_kimi_client",
     "make_qwen_client",
+    "make_self_hosted_client",
 ]
