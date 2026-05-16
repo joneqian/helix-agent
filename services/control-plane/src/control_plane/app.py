@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -70,7 +70,7 @@ from control_plane.ratelimit import (
     RateLimiter,
     RedisTokenBucketLimiter,
 )
-from control_plane.runtime import AgentRuntime, make_agent_runtime
+from control_plane.runtime import AgentRuntime, make_agent_builder, make_agent_runtime
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigService
 from helix_agent.common.health import DefaultHealthProvider
@@ -97,6 +97,7 @@ from helix_agent.persistence.tenant_config import (
 )
 from helix_agent.persistence.thread_meta import InMemoryThreadMetaStore, ThreadMetaStore
 from helix_agent.runtime.audit.logger import AuditLogger
+from helix_agent.runtime.checkpointer import make_checkpointer
 from helix_agent.runtime.secret_store import make_secret_store
 
 __all__ = ["create_app"]
@@ -153,9 +154,10 @@ def create_app(
     # In-process agent runtime (RunManager + StreamBridge + manifest→agent
     # build path). Default wires a local-dev SecretStore; tests inject a
     # runtime whose builder returns a fake-LLM agent.
-    resolved_agent_runtime = agent_runtime or make_agent_runtime(
-        make_secret_store("local_dev", env_file=resolved_settings.secret_store_env_file)
+    resolved_secret_store = make_secret_store(
+        "local_dev", env_file=resolved_settings.secret_store_env_file
     )
+    resolved_agent_runtime = agent_runtime or make_agent_runtime(resolved_secret_store)
     # Late-bound PII resolver: lets the audit logger reference
     # tenant_config without forcing it to exist yet (D.2 cycle break).
     pii_resolver = TenantConfigPiiResolver()
@@ -214,20 +216,37 @@ def create_app(
             env=resolved_settings.env,
             otlp_endpoint=resolved_settings.otlp_traces_endpoint,
         )
-        if reaper is not None:
-            reaper.start()
-        resolved_lifecycle.mark_ready()
-        logger.info(
-            "control_plane.lifespan.ready",
-            extra={"service": resolved_settings.service_name, "env": resolved_settings.env},
-        )
-        try:
-            yield
-        finally:
+        async with AsyncExitStack() as stack:
+            # Durable checkpointer (E.1): when configured, open the
+            # Postgres connection context and swap the runtime's builder
+            # before serving. No run starts before lifespan completes,
+            # so the agent cache is still empty — the swap is race-free.
+            # An injected runtime (tests) is left untouched.
+            if agent_runtime is None and resolved_settings.checkpointer_backend == "postgres":
+                if not resolved_settings.checkpointer_dsn:
+                    msg = "checkpointer_backend='postgres' requires checkpointer_dsn"
+                    raise RuntimeError(msg)
+                checkpointer = await stack.enter_async_context(
+                    make_checkpointer("postgres", resolved_settings.checkpointer_dsn)
+                )
+                resolved_agent_runtime.agent_builder = make_agent_builder(
+                    resolved_secret_store, checkpointer
+                )
+                logger.info("control_plane.checkpointer.postgres_ready")
             if reaper is not None:
-                await reaper.stop()
-            await resolved_lifecycle.graceful_shutdown()
-            logger.info("control_plane.lifespan.stopped")
+                reaper.start()
+            resolved_lifecycle.mark_ready()
+            logger.info(
+                "control_plane.lifespan.ready",
+                extra={"service": resolved_settings.service_name, "env": resolved_settings.env},
+            )
+            try:
+                yield
+            finally:
+                if reaper is not None:
+                    await reaper.stop()
+                await resolved_lifecycle.graceful_shutdown()
+                logger.info("control_plane.lifespan.stopped")
 
     app = FastAPI(
         title="Helix-Agent Control Plane",

@@ -79,6 +79,19 @@ class Settings(BaseSettings):
     #: provider-key resolution with a clear error until a file is set.
     secret_store_env_file: str | None = None
 
+    # ------------------------------------------------------------------ checkpointer (E.1)
+    #: LangGraph checkpointer backend. ``memory`` (M0 dev / tests — run
+    #: state is lost on restart) or ``postgres`` (durable — a run's
+    #: graph state survives a process restart). ``postgres`` requires
+    #: ``checkpointer_dsn``; the app refuses to boot without it.
+    checkpointer_backend: Literal["memory", "postgres"] = "memory"
+
+    #: libpq connection string for the Postgres checkpointer. Use the
+    #: sync-driver scheme (``postgresql://...``) — ``AsyncPostgresSaver``
+    #: manages its own async pool. ``None`` is only valid when
+    #: ``checkpointer_backend`` is ``memory``.
+    checkpointer_dsn: str | None = None
+
     # ------------------------------------------------------------------ auth (C.1)
     # OIDC issuer used to validate the ``iss`` JWT claim and to derive
     # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default
