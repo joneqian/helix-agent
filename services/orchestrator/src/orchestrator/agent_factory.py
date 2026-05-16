@@ -11,10 +11,13 @@ M0 v1 scope:
   ``ModelSpec`` fallback tree, resolves each ``api_key_ref`` through the
   SecretStore, builds the matching provider adapter, wraps it in E.12's
   rate limiter, and assembles an :class:`LLMRouter`.
-- **Tools — empty.** The manifest's ``tools`` field is still untyped
-  ``list[dict]`` (no tool-spec schema / dispatcher yet); the factory
-  builds an empty :class:`ToolRegistry`. A pure-LLM agent runs;
-  tool-using agents wait for the tool-spec follow-up.
+- **Tools — assembled.** The manifest's ``tools`` field is a
+  ``type``-discriminated union (Mini-ADR E-14); :func:`build_tool_registry`
+  maps each entry to a concrete adapter. Platform runtime deps (Tavily
+  client / allowlist provider / MCP pool) are injected via
+  :class:`~orchestrator.tools.ToolEnv` — the default empty ``ToolEnv``
+  still builds a pure-LLM agent; a declared tool whose dep is missing
+  raises :class:`AgentFactoryError`.
 - **Middleware chains — not wired.** ``build_react_graph`` is called
   without chains. Wiring E.3/E.4/E.5/E.10/E.10.5/E.13 from the
   manifest's ``policies`` / ``dynamic_context`` blocks is a follow-up.
@@ -34,7 +37,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from helix_agent.protocol import AgentSpec, ModelSpec
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
-from orchestrator.errors import OrchestratorError
+from orchestrator.errors import AgentFactoryError
 from orchestrator.graph_builder import build_react_graph
 from orchestrator.llm import (
     AnthropicProvider,
@@ -52,11 +55,7 @@ from orchestrator.llm import (
     make_qwen_client,
 )
 from orchestrator.runner import GraphRunner
-from orchestrator.tools import ToolRegistry
-
-
-class AgentFactoryError(OrchestratorError):
-    """Raised when an :class:`AgentSpec` cannot be assembled into an agent."""
+from orchestrator.tools import ToolEnv, build_tool_registry
 
 
 @dataclass(frozen=True)
@@ -78,15 +77,23 @@ async def build_agent(
     *,
     secret_store: SecretStore,
     checkpointer: BaseCheckpointSaver[Any],
+    tool_env: ToolEnv | None = None,
 ) -> BuiltAgent:
     """Assemble a :class:`BuiltAgent` from a validated :class:`AgentSpec`.
 
+    ``tool_env`` injects the platform runtime deps the manifest's
+    ``tools:`` entries need (Tavily client / allowlist provider / MCP
+    pool). It defaults to an empty :class:`ToolEnv` — fine for a
+    pure-LLM agent; an agent that declares a tool whose dep is absent
+    raises :class:`AgentFactoryError`.
+
     Raises :class:`AgentFactoryError` for an un-buildable manifest
-    (missing ``api_key_ref``, an unsupported provider, …).
+    (missing ``api_key_ref``, an unsupported provider, an
+    un-assemblable ``tools:`` entry, …).
     """
     router = await build_llm_router(spec.spec.model, secret_store=secret_store)
-    # M0 v1: no tools, no middleware chains — see module docstring.
-    registry = ToolRegistry()
+    # M0 v1: middleware chains not wired — see module docstring.
+    registry = await build_tool_registry(spec.spec.tools, tool_env=tool_env or ToolEnv())
     graph = build_react_graph(llm_caller=router, tool_registry=registry)
     compiled = GraphRunner(checkpointer=checkpointer).compile(graph)
     return BuiltAgent(

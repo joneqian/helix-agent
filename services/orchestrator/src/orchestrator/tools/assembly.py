@@ -1,0 +1,112 @@
+"""Assemble a :class:`ToolRegistry` from a manifest's ``tools:`` block.
+
+STREAM-E-DESIGN Mini-ADR E-14: the manifest declares tools as a
+``type``-discriminated union (:data:`helix_agent.protocol.ToolSpecEntry`).
+:func:`build_tool_registry` maps each declaration to a concrete adapter
+and registers it.
+
+Platform runtime deps — the Tavily client, the per-tenant HTTP
+allowlist provider, the MCP server pool — are *not* in the manifest
+(they are tenant-/platform-scoped, Mini-ADR E-14). They are injected
+via :class:`ToolEnv`. A manifest that declares a tool whose backing
+dep is absent from the ``ToolEnv`` raises :class:`AgentFactoryError`,
+so the failure surfaces at build time, not on the first tool call.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from helix_agent.protocol import (
+    BuiltinToolSpec,
+    HTTPToolSpec,
+    MCPToolSpec,
+    ToolSpecEntry,
+)
+from orchestrator.errors import AgentFactoryError
+from orchestrator.tools.http import AllowlistProvider, HTTPTool
+from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
+from orchestrator.tools.registry import ToolRegistry
+from orchestrator.tools.web_search import DEFAULT_MAX_RESULTS, TavilyClient, WebSearchTool
+
+#: Built-in tool names the platform ships in M0.
+KNOWN_BUILTINS = frozenset({"web_search"})
+
+
+@dataclass(frozen=True)
+class ToolEnv:
+    """Platform runtime deps the assembler draws on.
+
+    Each field backs one tool kind. A field left ``None`` means that
+    tool is not available in this deployment — declaring it in a
+    manifest raises :class:`AgentFactoryError`. An empty ``ToolEnv()``
+    therefore builds a pure-LLM agent and nothing else.
+    """
+
+    web_search_client: TavilyClient | None = None
+    allowlist_provider: AllowlistProvider | None = None
+    mcp_pool: MCPServerPool | None = None
+
+
+async def build_tool_registry(
+    tool_specs: Sequence[ToolSpecEntry],
+    *,
+    tool_env: ToolEnv,
+) -> ToolRegistry:
+    """Build a :class:`ToolRegistry` from a manifest's ``tools:`` entries.
+
+    :raises AgentFactoryError: an entry names an unknown builtin, or
+        declares a tool whose ``ToolEnv`` dependency is not configured.
+    """
+    registry = ToolRegistry()
+    for entry in tool_specs:
+        if isinstance(entry, BuiltinToolSpec):
+            _register_builtin(registry, entry, tool_env)
+        elif isinstance(entry, HTTPToolSpec):
+            _register_http(registry, tool_env)
+        elif isinstance(entry, MCPToolSpec):
+            await _register_mcp(registry, entry, tool_env)
+    return registry
+
+
+def _register_builtin(registry: ToolRegistry, entry: BuiltinToolSpec, env: ToolEnv) -> None:
+    if entry.name not in KNOWN_BUILTINS:
+        raise AgentFactoryError(
+            f"unknown builtin tool {entry.name!r} (known: {sorted(KNOWN_BUILTINS)})"
+        )
+    # entry.name == "web_search" — the only M0 builtin.
+    if env.web_search_client is None:
+        raise AgentFactoryError(
+            "builtin 'web_search' declared but no Tavily client is "
+            "configured (ToolEnv.web_search_client)"
+        )
+    max_results = int(entry.config.get("max_results", DEFAULT_MAX_RESULTS))
+    registry.register(WebSearchTool(client=env.web_search_client, default_max_results=max_results))
+
+
+def _register_http(registry: ToolRegistry, env: ToolEnv) -> None:
+    if env.allowlist_provider is None:
+        raise AgentFactoryError(
+            "'http' tool declared but no allowlist provider is "
+            "configured (ToolEnv.allowlist_provider)"
+        )
+    registry.register(HTTPTool(allowlist_provider=env.allowlist_provider))
+
+
+async def _register_mcp(registry: ToolRegistry, entry: MCPToolSpec, env: ToolEnv) -> None:
+    if env.mcp_pool is None:
+        raise AgentFactoryError(
+            "'mcp' tool declared but no MCP server pool is configured (ToolEnv.mcp_pool)"
+        )
+    allow = set(entry.allow_tools) or None
+    for server_name in env.mcp_pool.names():
+        client = env.mcp_pool.get(server_name)
+        if client is None:  # pragma: no cover - name came from names()
+            continue
+        await register_mcp_tools(
+            server_name=server_name,
+            client=client,
+            registry=registry,
+            allow_tools=allow,
+        )

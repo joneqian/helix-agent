@@ -10,6 +10,9 @@ from pydantic import ValidationError
 
 from helix_agent.protocol import (
     AgentSpec,
+    BuiltinToolSpec,
+    HTTPToolSpec,
+    MCPToolSpec,
     ModelSpec,
 )
 
@@ -225,3 +228,67 @@ def test_rate_limit_rpm_custom_value_accepted() -> None:
         {"provider": "kimi", "name": "moonshot-v1-128k", "rate_limit_rpm": 3}
     )
     assert model.rate_limit_rpm == 3
+
+
+# ---------------------------------------------------------------------------
+# tools: discriminated union (Mini-ADR E-14)
+# ---------------------------------------------------------------------------
+
+
+def test_tools_default_is_empty_list() -> None:
+    spec = AgentSpec.model_validate(_doc())
+    assert spec.spec.tools == []
+
+
+def test_tools_builtin_http_mcp_entries_validate() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [
+        {"type": "builtin", "name": "web_search", "config": {"max_results": 5}},
+        {"type": "http"},
+        {"type": "mcp", "allow_tools": ["read_pr"]},
+    ]
+    spec = AgentSpec.model_validate(doc)
+    builtin, http, mcp = spec.spec.tools
+    assert isinstance(builtin, BuiltinToolSpec)
+    assert isinstance(http, HTTPToolSpec)
+    assert isinstance(mcp, MCPToolSpec)
+    assert builtin.name == "web_search"
+    assert builtin.config == {"max_results": 5}
+    assert mcp.allow_tools == ["read_pr"]
+
+
+def test_tools_mcp_allow_tools_defaults_empty() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [{"type": "mcp"}]
+    spec = AgentSpec.model_validate(doc)
+    entry = spec.spec.tools[0]
+    assert isinstance(entry, MCPToolSpec)
+    assert entry.allow_tools == []
+
+
+def test_tools_unknown_type_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [{"type": "python", "name": "x"}]
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
+
+
+def test_tools_builtin_missing_name_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [{"type": "builtin"}]
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
+
+
+def test_tools_entry_extra_field_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [{"type": "http", "url": "https://x"}]
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
+
+
+def test_tools_entry_missing_discriminator_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["tools"] = [{"name": "web_search"}]
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)

@@ -6,6 +6,15 @@ Concrete tool adapters land in their own modules (``web_search`` E.7,
 :class:`ToolRegistry` at orchestrator startup.
 """
 
+from orchestrator.tools.assembly import (
+    KNOWN_BUILTINS as KNOWN_BUILTINS,
+)
+from orchestrator.tools.assembly import (
+    ToolEnv as ToolEnv,
+)
+from orchestrator.tools.assembly import (
+    build_tool_registry as build_tool_registry,
+)
 from orchestrator.tools.http import (
     DEFAULT_BODY_CHAR_CAP as DEFAULT_BODY_CHAR_CAP,
 )
@@ -101,6 +110,7 @@ __all__ = [
     "DEFAULT_MAX_RESULTS",
     "DEFAULT_MAX_SERVERS",
     "DEFAULT_MCP_CHAR_CAP",
+    "KNOWN_BUILTINS",
     "AllowlistProvider",
     "HTTPTavilyClient",
     "HTTPTool",
@@ -118,10 +128,12 @@ __all__ = [
     "Tool",
     "ToolBlockedError",
     "ToolContext",
+    "ToolEnv",
     "ToolNotFoundError",
     "ToolRegistry",
     "ToolResult",
     "ToolSpec",
     "WebSearchTool",
+    "build_tool_registry",
     "register_mcp_tools",
 ]

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -250,14 +250,60 @@ class ObservabilitySpec(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# tools — manifest-side declarations (STREAM-E-DESIGN Mini-ADR E-14)
+# ---------------------------------------------------------------------------
+
+
+class BuiltinToolSpec(BaseModel):
+    """A platform built-in tool. M0 ships ``web_search``; ``config``
+    carries per-tool knobs (e.g. ``{engine, max_results}``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["builtin"] = "builtin"
+    name: str = Field(min_length=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class HTTPToolSpec(BaseModel):
+    """Enable the generic HTTP tool for this agent. The URL allowlist is
+    tenant-scoped (``tenant_config.http_tool_allowlist``), not declared
+    here — see Mini-ADR E-14."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["http"] = "http"
+
+
+class MCPToolSpec(BaseModel):
+    """Enable MCP tools for this agent. MCP servers are tenant-scoped
+    (``tenant_config.mcp_servers``). ``allow_tools`` optionally filters
+    which advertised tools the agent sees — empty means all."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mcp"] = "mcp"
+    allow_tools: list[str] = Field(default_factory=list)
+
+
+#: Discriminated union of the M0-supported tool declarations. ``python``
+#: / ``subagent`` are M1-F — declaring them fails manifest validation
+#: here (no matching ``type`` variant).
+ToolSpecEntry = Annotated[
+    BuiltinToolSpec | HTTPToolSpec | MCPToolSpec,
+    Field(discriminator="type"),
+]
+
+
+# ---------------------------------------------------------------------------
 # spec body + envelope
 # ---------------------------------------------------------------------------
 
 
 class AgentSpecBody(BaseModel):
-    """The ``spec:`` block. Tools polymorphism (builtin / mcp / http /
-    python / subagent) lives in Stream E once the dispatcher arrives —
-    until then ``tools`` carries the raw dicts verbatim."""
+    """The ``spec:`` block. ``tools`` is a ``type``-discriminated union
+    (Mini-ADR E-14); the orchestrator's ``build_tool_registry`` maps
+    each entry to a concrete tool adapter."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -267,7 +313,7 @@ class AgentSpecBody(BaseModel):
     model: ModelSpec
     system_prompt: SystemPromptSpec
     dynamic_context: DynamicContextSpec = Field(default_factory=DynamicContextSpec)
-    tools: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[ToolSpecEntry] = Field(default_factory=list)
     sandbox: SandboxSpec
     memory: MemorySpec | None = None
     workflow: WorkflowSpec = Field(default_factory=WorkflowSpec)

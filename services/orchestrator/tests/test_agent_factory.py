@@ -17,10 +17,12 @@ from orchestrator import (
     BuiltAgent,
     LLMRouter,
     OpenAIProvider,
+    ToolEnv,
     build_agent,
     build_llm_router,
 )
 from orchestrator.llm import RateLimitedProvider
+from orchestrator.tools import RecordingTavilyClient
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -230,3 +232,28 @@ async def test_build_agent_missing_key_raises() -> None:
     async with make_checkpointer("memory") as cp:
         with pytest.raises(AgentFactoryError, match="no api_key_ref"):
             await build_agent(spec, secret_store=_secret_store(), checkpointer=cp)
+
+
+def _spec_with_web_search() -> AgentSpec:
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["tools"] = [{"type": "builtin", "name": "web_search"}]
+    return AgentSpec.model_validate(doc)
+
+
+@pytest.mark.asyncio
+async def test_build_agent_tool_declared_without_env_raises() -> None:
+    """A manifest tool whose ToolEnv dep is absent fails at build time."""
+    spec = _spec_with_web_search()
+    async with make_checkpointer("memory") as cp:
+        with pytest.raises(AgentFactoryError, match="Tavily client"):
+            await build_agent(spec, secret_store=_secret_store(), checkpointer=cp)
+
+
+@pytest.mark.asyncio
+async def test_build_agent_with_tool_env_succeeds() -> None:
+    """``tool_env`` is threaded to the assembler — a satisfied dep builds."""
+    spec = _spec_with_web_search()
+    env = ToolEnv(web_search_client=RecordingTavilyClient())
+    async with make_checkpointer("memory") as cp:
+        built = await build_agent(spec, secret_store=_secret_store(), checkpointer=cp, tool_env=env)
+    assert isinstance(built, BuiltAgent)
