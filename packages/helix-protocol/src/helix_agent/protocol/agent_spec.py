@@ -108,6 +108,18 @@ class ModelSpec(BaseModel):
     #: the schema (keeps existing manifests / tests loading) but the
     #: agent factory rejects it: a provider with no key cannot be built.
     api_key_ref: str | None = None
+    #: Base URL for the ``self-hosted`` provider (an OpenAI-compatible
+    #: server — vLLM / Ollama / …) and the ``azure`` resource endpoint
+    #: (``https://<resource>.openai.azure.com``). Ignored by the
+    #: built-in providers. The agent factory rejects a ``self-hosted`` /
+    #: ``azure`` model without it.
+    base_url: str | None = None
+    #: Azure OpenAI deployment name — the path segment in the
+    #: deployment-style chat-completions URL. Required for ``azure``.
+    azure_deployment: str | None = None
+    #: Azure OpenAI ``api-version`` query parameter. Required for
+    #: ``azure``.
+    azure_api_version: str | None = None
     fallback: list[ModelSpec] = Field(default_factory=list)
 
 

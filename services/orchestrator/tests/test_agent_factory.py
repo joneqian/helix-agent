@@ -176,19 +176,6 @@ async def test_build_llm_router_missing_api_key_ref_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_llm_router_unsupported_provider_raises() -> None:
-    model = ModelSpec.model_validate(
-        {
-            "provider": "azure",
-            "name": "gpt-4o",
-            "api_key_ref": f"secret://{_OPENAI_KEY_NAME}",
-        }
-    )
-    with pytest.raises(AgentFactoryError, match="no adapter yet"):
-        await build_llm_router(model, secret_store=_secret_store())
-
-
-@pytest.mark.asyncio
 async def test_build_llm_router_missing_secret_propagates() -> None:
     """A ref pointing at a non-existent secret surfaces the
     SecretStore's error, not a silent empty key."""
@@ -208,6 +195,59 @@ async def test_build_llm_router_openai_compatible_vendor() -> None:
     inner = router.providers[0].provider.inner  # type: ignore[union-attr]
     # Domestic vendors reuse OpenAIProvider (E.11.5).
     assert isinstance(inner, OpenAIProvider)
+
+
+@pytest.mark.asyncio
+async def test_build_llm_router_self_hosted_provider() -> None:
+    """self-hosted reuses OpenAIProvider over a custom base_url (F-4)."""
+    model = _spec(
+        provider="self-hosted",
+        name="llama-3.1-70b",
+        api_key_ref=f"secret://{_OPENAI_KEY_NAME}",
+        base_url="http://vllm.internal:8000",
+    ).spec.model
+    router = await build_llm_router(model, secret_store=_secret_store())
+    inner = router.providers[0].provider.inner  # type: ignore[union-attr]
+    assert isinstance(inner, OpenAIProvider)
+
+
+@pytest.mark.asyncio
+async def test_build_llm_router_self_hosted_missing_base_url_raises() -> None:
+    model = _spec(
+        provider="self-hosted",
+        name="llama-3.1-70b",
+        api_key_ref=f"secret://{_OPENAI_KEY_NAME}",
+    ).spec.model
+    with pytest.raises(AgentFactoryError, match="base_url"):
+        await build_llm_router(model, secret_store=_secret_store())
+
+
+@pytest.mark.asyncio
+async def test_build_llm_router_azure_provider() -> None:
+    """azure reuses OpenAIProvider over the deployment-style URL (F-4)."""
+    model = _spec(
+        provider="azure",
+        name="gpt-4o",
+        api_key_ref=f"secret://{_OPENAI_KEY_NAME}",
+        base_url="https://res.openai.azure.com",
+        azure_deployment="gpt-4o-deploy",
+        azure_api_version="2024-10-21",
+    ).spec.model
+    router = await build_llm_router(model, secret_store=_secret_store())
+    inner = router.providers[0].provider.inner  # type: ignore[union-attr]
+    assert isinstance(inner, OpenAIProvider)
+
+
+@pytest.mark.asyncio
+async def test_build_llm_router_azure_missing_config_raises() -> None:
+    model = _spec(
+        provider="azure",
+        name="gpt-4o",
+        api_key_ref=f"secret://{_OPENAI_KEY_NAME}",
+        base_url="https://res.openai.azure.com",
+    ).spec.model  # azure_deployment / azure_api_version omitted
+    with pytest.raises(AgentFactoryError, match="azure_deployment"):
+        await build_llm_router(model, secret_store=_secret_store())
 
 
 # ---------------------------------------------------------------------------

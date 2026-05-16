@@ -174,3 +174,53 @@ def make_doubao_client(
         transport=transport,
         chat_completions_path=DOUBAO_CHAT_COMPLETIONS_PATH,
     )
+
+
+def make_self_hosted_client(
+    api_key: str,
+    *,
+    base_url: str,
+    chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH,
+    timeout_s: float = 60.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> HTTPOpenAIClient:
+    """A self-hosted OpenAI-compatible server (vLLM / Ollama / …).
+
+    Only ``base_url`` differs from stock OpenAI — auth stays
+    ``Authorization: Bearer``. ``chat_completions_path`` is overridable
+    for servers that don't host the endpoint at ``/v1/chat/completions``.
+    """
+    return HTTPOpenAIClient(
+        api_key=api_key,
+        base_url=base_url.rstrip("/"),
+        timeout_s=timeout_s,
+        transport=transport,
+        chat_completions_path=chat_completions_path,
+    )
+
+
+def make_azure_client(
+    api_key: str,
+    *,
+    endpoint: str,
+    deployment: str,
+    api_version: str,
+    timeout_s: float = 60.0,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> HTTPOpenAIClient:
+    """Azure OpenAI Service — OpenAI wire format, deployment-style URL.
+
+    The chat-completions endpoint is
+    ``{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}``
+    and auth is the ``api-key`` header (not ``Authorization: Bearer``).
+    """
+    path = f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+    return HTTPOpenAIClient(
+        api_key=api_key,
+        base_url=endpoint.rstrip("/"),
+        timeout_s=timeout_s,
+        transport=transport,
+        chat_completions_path=path,
+        api_key_header="api-key",
+        api_key_prefix="",
+    )

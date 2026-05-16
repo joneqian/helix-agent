@@ -107,6 +107,11 @@ class HTTPOpenAIClient:
     timeout_s: float = _DEFAULT_TIMEOUT_S
     transport: httpx.AsyncBaseTransport | None = None
     chat_completions_path: str = DEFAULT_CHAT_COMPLETIONS_PATH
+    #: Auth header name + value prefix. OpenAI and the compatible
+    #: regional vendors use ``Authorization: Bearer <key>``; Azure
+    #: OpenAI uses ``api-key: <key>`` (prefix empty).
+    api_key_header: str = "authorization"
+    api_key_prefix: str = "Bearer "
 
     async def chat_completions(
         self,
@@ -129,7 +134,7 @@ class HTTPOpenAIClient:
                 response = await client.post(
                     f"{self.base_url}{self.chat_completions_path}",
                     headers={
-                        "authorization": f"Bearer {self.api_key}",
+                        self.api_key_header: f"{self.api_key_prefix}{self.api_key}",
                         "content-type": "application/json",
                     },
                     json=body,

@@ -26,11 +26,13 @@ from orchestrator.llm import (
     KIMI_BASE_URL,
     QWEN_BASE_URL,
     OpenAIProvider,
+    make_azure_client,
     make_deepseek_client,
     make_doubao_client,
     make_glm_client,
     make_kimi_client,
     make_qwen_client,
+    make_self_hosted_client,
 )
 from orchestrator.llm.providers.openai import HTTPOpenAIClient
 
@@ -47,10 +49,12 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
     response_body: Mapping[str, Any] = field(default_factory=dict)
     captured_url: str | None = None
     captured_auth: str | None = None
+    captured_api_key: str | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.captured_url = str(request.url)
         self.captured_auth = request.headers.get("authorization")
+        self.captured_api_key = request.headers.get("api-key")
         return httpx.Response(200, json=dict(self.response_body))
 
 
@@ -201,3 +205,42 @@ def test_kimi_qwen_deepseek_use_default_path() -> None:
         assert client.chat_completions_path == DEFAULT_CHAT_COMPLETIONS_PATH, (
             f"{factory.__name__} unexpectedly overrode the default path"
         )
+
+
+# ---------------------------------------------------------------------------
+# self-hosted + azure (F-4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_self_hosted_client_targets_custom_base_url() -> None:
+    transport = _RecordingTransport()
+    client = make_self_hosted_client(
+        api_key="sk-local",
+        base_url="http://vllm.internal:8000",
+        transport=transport,
+    )
+    captured = await _make_call(client)
+    assert captured.captured_url == f"http://vllm.internal:8000{DEFAULT_CHAT_COMPLETIONS_PATH}"
+    # self-hosted keeps standard bearer auth.
+    assert captured.captured_auth == "Bearer sk-local"
+
+
+@pytest.mark.asyncio
+async def test_azure_client_deployment_url_and_api_key_header() -> None:
+    transport = _RecordingTransport()
+    client = make_azure_client(
+        api_key="az-secret",
+        endpoint="https://res.openai.azure.com",
+        deployment="gpt-4o-deploy",
+        api_version="2024-10-21",
+        transport=transport,
+    )
+    captured = await _make_call(client)
+    assert captured.captured_url == (
+        "https://res.openai.azure.com/openai/deployments/gpt-4o-deploy"
+        "/chat/completions?api-version=2024-10-21"
+    )
+    # Azure auths via the ``api-key`` header, not ``Authorization: Bearer``.
+    assert captured.captured_auth is None
+    assert captured.captured_api_key == "az-secret"
