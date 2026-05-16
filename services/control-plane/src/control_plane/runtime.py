@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import UUID
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 from helix_agent.protocol import AgentSpec
@@ -70,22 +72,34 @@ class AgentRuntime:
         return built
 
 
-def make_agent_runtime(secret_store: SecretStore) -> AgentRuntime:
-    """Build the production :class:`AgentRuntime`.
+def make_agent_builder(
+    secret_store: SecretStore,
+    checkpointer: BaseCheckpointSaver[Any],
+) -> AgentBuilder:
+    """Production :data:`AgentBuilder` bound to a SecretStore + checkpointer.
 
-    M0 uses an in-memory checkpointer: :class:`InMemorySaver` has no
-    async setup / teardown, so it is safe to construct here (outside a
-    lifespan context manager). The Postgres checkpointer — which owns a
-    connection lifecycle — is M1 and will move this construction into
-    the app lifespan.
+    Kept separate from :func:`make_agent_runtime` so the app lifespan
+    can rebuild the builder once the durable Postgres checkpointer's
+    connection context is open (the in-memory default is swapped out).
     """
-    checkpointer = InMemorySaver()
 
     async def _build(spec: AgentSpec) -> BuiltAgent:
         return await build_agent(spec, secret_store=secret_store, checkpointer=checkpointer)
 
+    return _build
+
+
+def make_agent_runtime(secret_store: SecretStore) -> AgentRuntime:
+    """Build the production :class:`AgentRuntime` with an in-memory checkpointer.
+
+    :class:`InMemorySaver` has no async setup / teardown, so it is safe
+    to construct here (outside a lifespan context). When
+    ``settings.checkpointer_backend`` is ``postgres`` the app lifespan
+    opens the durable checkpointer's connection context and swaps
+    ``agent_builder`` before any run starts — see ``control_plane.app``.
+    """
     return AgentRuntime(
         run_manager=RunManager(),
         stream_bridge=InMemoryStreamBridge(),
-        agent_builder=_build,
+        agent_builder=make_agent_builder(secret_store, InMemorySaver()),
     )
