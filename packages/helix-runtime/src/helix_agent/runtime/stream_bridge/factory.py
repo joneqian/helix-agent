@@ -5,7 +5,7 @@
 # Modifications:
 #   - Drop DeerFlow's app_config / get_stream_bridge_config coupling;
 #     accept backend + kwargs explicitly (DI pattern)
-#   - Redis backend signalled as M1+ TODO via NotImplementedError
+#   - Redis backend deferred to M1+ — signalled via NotImplementedError
 # Last sync: 2026-05-11
 # ============================================================
 
@@ -33,7 +33,7 @@ async def make_stream_bridge(
 ) -> AsyncIterator[StreamBridge]:
     """Yield a configured ``StreamBridge``; clean up on exit.
 
-    :param backend: ``"memory"`` (M0 default) or ``"redis"`` (M1+ TODO).
+    :param backend: ``"memory"`` (M0 default) or ``"redis"`` (deferred to M1+).
     :param queue_maxsize: per-run event buffer cap; older events drop on overflow.
     """
     # Widen so the trailing "unknown backend" branch is reachable to mypy.

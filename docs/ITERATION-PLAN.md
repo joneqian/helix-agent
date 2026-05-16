@@ -382,6 +382,7 @@
 - [ ] IaC（Terraform）描述基础设施
 - [ ] DB zero-downtime migration 规范（Alembic + expand-contract）
 - [ ] 数据归档完整 pipeline
+- [ ] **retention-cleanup-job CI-only `permission denied` 收尾** — `test_event_log_retention_deletes_old_rows` / `test_jwt_blacklist_expired_rows_deleted` 在 CI 的 testcontainers Postgres 上 `DELETE` 报 `permission denied`（本地通过；`audit_log` 同 role/grant 模式正常）。job 已把 `event_log` 的 `ctid IN (SELECT … LIMIT N)` 改为扁平 `DELETE`，xfail 可能已 stale。需一次 CI run 确认两测试是否 `XPASS`：是 → 删 xfail；否 → 定位 asyncpg/SQLAlchemy 2.0/PG 交互（疑似 persistence engine factory 的 per-txn `SET LOCAL ROLE` 覆盖了 superuser 连接的有效 role）。M0 零技术债盘点新增；`test-integration` job 为 `continue-on-error` 非门控，影响低。
 
 #### M1-C Credential Proxy 升级（~3 周）
 参考：[architecture/subsystems/11-credential-proxy.md](./architecture/subsystems/11-credential-proxy.md)（如有）
