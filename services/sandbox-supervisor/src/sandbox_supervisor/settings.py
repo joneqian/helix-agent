@@ -42,6 +42,9 @@ class SandboxSupervisorSettings(BaseSettings):
     default_memory_mb: int = Field(default=512, gt=0, le=65536)
     default_pids_limit: int = Field(default=128, gt=0, le=4096)
     default_timeout_s: int = Field(default=30, gt=0, le=300)
+    #: How long ``acquire`` waits for the runner's readiness line before
+    #: treating the launch as failed.
+    runner_ready_timeout_s: float = Field(default=15.0, gt=0, le=120)
 
     # -------------------------------------------------------------- quota
     #: Per-tenant sandbox cap applied when the tenant has no

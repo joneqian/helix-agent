@@ -1,13 +1,14 @@
-"""Unit tests for the Sandbox Supervisor — Stream F.1 (test matrix #40/#41/#42).
+"""Unit tests for the Sandbox Supervisor — Stream F.1 + F.4a.
 
 All Docker / DB dependencies are faked, so these run in the plain
-``pytest`` job — no testcontainers. Three groups:
+``pytest`` job — no testcontainers. Groups:
 
 * #40 — acquire / release lifecycle + state machine
 * #41 — per-tenant quota denial + audit
 * #42 — the TTL reaper
+* F.4a — the held-pipe ``exec`` channel (option C)
 
-Plus a few HTTP-route smoke tests over an injected supervisor.
+Plus HTTP-route smoke tests over an injected supervisor.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from sandbox_supervisor.domain import (
     SupervisorError,
 )
 from sandbox_supervisor.reaper import SandboxReaper
+from sandbox_supervisor.runner_link import ExecResult, RunnerLinkError
 from sandbox_supervisor.schemas import AcquireRequest
 from sandbox_supervisor.settings import SandboxSupervisorSettings
 from sandbox_supervisor.supervisor import SandboxSupervisor
@@ -41,27 +43,72 @@ from sandbox_supervisor.supervisor import SandboxSupervisor
 # ---------------------------------------------------------------------------
 
 
+class FakeRunnerLink:
+    """A :class:`RunnerLink` that never launches a real container."""
+
+    def __init__(
+        self,
+        *,
+        ready: bool = True,
+        exec_result: ExecResult | None = None,
+        exec_error: RunnerLinkError | None = None,
+    ) -> None:
+        self._ready = ready
+        self._exec_result = exec_result or ExecResult(
+            stdout="ok", stderr="", exit_code=0, timed_out=False
+        )
+        self._exec_error = exec_error
+        self.closed = False
+        self.exec_calls: list[tuple[str, int]] = []
+
+    async def wait_ready(self, timeout_s: float) -> None:
+        if not self._ready:
+            msg = "runner never reported ready"
+            raise RunnerLinkError(msg)
+
+    async def exec(self, code: str, timeout_s: int) -> ExecResult:
+        self.exec_calls.append((code, timeout_s))
+        if self._exec_error is not None:
+            raise self._exec_error
+        return self._exec_result
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class RecordingDockerClient:
     """A :class:`DockerClient` that records calls and never touches Docker."""
 
-    def __init__(self, *, run_error: DockerError | None = None) -> None:
-        self.runs: list[list[str]] = []
+    def __init__(
+        self,
+        *,
+        launch_error: DockerError | None = None,
+        link: FakeRunnerLink | None = None,
+    ) -> None:
+        self.launches: list[list[str]] = []
         self.removed: list[str] = []
-        self._run_error = run_error
-        self._counter = 0
+        self.swept = 0
+        self._launch_error = launch_error
+        self._link = link
+        self.links: list[FakeRunnerLink] = []
 
-    async def run(self, argv: list[str]) -> str:
-        self.runs.append(argv)
-        if self._run_error is not None:
-            raise self._run_error
-        self._counter += 1
-        return f"container-{self._counter}"
+    async def launch(self, argv: list[str]) -> FakeRunnerLink:
+        self.launches.append(argv)
+        if self._launch_error is not None:
+            raise self._launch_error
+        link = self._link if self._link is not None else FakeRunnerLink()
+        self.links.append(link)
+        return link
 
-    async def remove(self, container_id: str) -> None:
-        self.removed.append(container_id)
+    async def remove(self, container_name: str) -> None:
+        self.removed.append(container_name)
 
     async def ping(self) -> bool:
         return True
+
+    async def sweep_orphans(self) -> int:
+        self.swept += 1
+        return 0
 
 
 class InMemorySandboxStore:
@@ -155,7 +202,7 @@ def _running_record(tenant_id: UUID, *, acquired_at: datetime) -> SandboxRecord:
         tenant_id=tenant_id,
         image_ref="helix-sandbox:dev",
         node="local",
-        container_id=f"container-{sandbox_id}",
+        container_id=f"helix-sb-{sandbox_id}",
         state=SandboxState.IN_USE,
         thread_id="t-1",
         cpu_quota=1.0,
@@ -177,16 +224,16 @@ def _acquire_request(tenant_id: UUID | None = None) -> AcquireRequest:
 
 
 @pytest.mark.asyncio
-async def test_acquire_runs_container_and_marks_in_use() -> None:
+async def test_acquire_launches_container_and_marks_in_use() -> None:
     h = _harness()
     response = await h.supervisor.acquire(_acquire_request())
 
-    assert response.container_id == "container-1"
+    assert response.container_id == f"helix-sb-{response.sandbox_id}"
     assert response.cold_start is True
-    assert len(h.docker.runs) == 1
+    assert len(h.docker.launches) == 1
     row = h.store.rows[response.sandbox_id]
     assert row.state is SandboxState.IN_USE
-    assert row.container_id == "container-1"
+    assert row.container_id == f"helix-sb-{response.sandbox_id}"
     assert row.acquired_at is not None
 
 
@@ -207,7 +254,8 @@ async def test_release_removes_container_and_marks_destroyed() -> None:
     response = await h.supervisor.acquire(_acquire_request())
     await h.supervisor.release(response.sandbox_id)
 
-    assert h.docker.removed == ["container-1"]
+    assert h.docker.removed == [f"helix-sb-{response.sandbox_id}"]
+    assert h.docker.links[0].closed is True
     row = h.store.rows[response.sandbox_id]
     assert row.state is SandboxState.DESTROYED
     assert row.destroy_reason == "release"
@@ -226,8 +274,19 @@ async def test_release_does_not_emit_force_destroy_audit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acquire_docker_failure_marks_failed_and_raises() -> None:
-    h = _harness(docker=RecordingDockerClient(run_error=DockerError("daemon down")))
+async def test_acquire_launch_failure_marks_failed_and_raises() -> None:
+    h = _harness(docker=RecordingDockerClient(launch_error=DockerError("daemon down")))
+    with pytest.raises(SupervisorError, match="sandbox launch failed"):
+        await h.supervisor.acquire(_acquire_request())
+
+    states = [r.state for r in h.store.rows.values()]
+    assert states == [SandboxState.FAILED]
+
+
+@pytest.mark.asyncio
+async def test_acquire_runner_not_ready_marks_failed_and_raises() -> None:
+    # The container launches but the runner never reports ready.
+    h = _harness(docker=RecordingDockerClient(link=FakeRunnerLink(ready=False)))
     with pytest.raises(SupervisorError, match="sandbox launch failed"):
         await h.supervisor.acquire(_acquire_request())
 
@@ -243,7 +302,7 @@ async def test_destroy_is_idempotent() -> None:
     # A second destroy is a no-op — no extra docker.remove call.
     await h.supervisor.destroy(response.sandbox_id, reason="cancelled")
 
-    assert h.docker.removed == ["container-1"]
+    assert h.docker.removed == [f"helix-sb-{response.sandbox_id}"]
 
 
 @pytest.mark.asyncio
@@ -264,6 +323,65 @@ async def test_forced_destroy_emits_force_destroy_audit() -> None:
 
 
 # ---------------------------------------------------------------------------
+# F.4a — the held-pipe exec channel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exec_runs_code_via_the_runner_link() -> None:
+    link = FakeRunnerLink(
+        exec_result=ExecResult(stdout="42\n", stderr="", exit_code=0, timed_out=False)
+    )
+    h = _harness(docker=RecordingDockerClient(link=link))
+    response = await h.supervisor.acquire(_acquire_request())
+
+    result = await h.supervisor.exec(response.sandbox_id, code="print(42)", timeout_s=10)
+    assert result.stdout == "42\n"
+    assert result.exit_code == 0
+    assert link.exec_calls == [("print(42)", 10)]
+
+
+@pytest.mark.asyncio
+async def test_exec_defaults_timeout_to_service_default() -> None:
+    link = FakeRunnerLink()
+    h = _harness(
+        docker=RecordingDockerClient(link=link),
+        settings=SandboxSupervisorSettings(default_timeout_s=25),
+    )
+    response = await h.supervisor.acquire(_acquire_request())
+
+    await h.supervisor.exec(response.sandbox_id, code="print(1)")
+    assert link.exec_calls == [("print(1)", 25)]
+
+
+@pytest.mark.asyncio
+async def test_exec_unknown_sandbox_raises_not_found() -> None:
+    h = _harness()
+    with pytest.raises(SandboxNotFoundError):
+        await h.supervisor.exec(uuid4(), code="print(1)")
+
+
+@pytest.mark.asyncio
+async def test_exec_link_failure_raises_supervisor_error() -> None:
+    link = FakeRunnerLink(exec_error=RunnerLinkError("runner closed the connection"))
+    h = _harness(docker=RecordingDockerClient(link=link))
+    response = await h.supervisor.acquire(_acquire_request())
+
+    with pytest.raises(SupervisorError, match="sandbox exec failed"):
+        await h.supervisor.exec(response.sandbox_id, code="print(1)")
+
+
+@pytest.mark.asyncio
+async def test_exec_unavailable_after_release() -> None:
+    h = _harness()
+    response = await h.supervisor.acquire(_acquire_request())
+    await h.supervisor.release(response.sandbox_id)
+    # The link was dropped on release — exec can no longer reach it.
+    with pytest.raises(SandboxNotFoundError):
+        await h.supervisor.exec(response.sandbox_id, code="print(1)")
+
+
+# ---------------------------------------------------------------------------
 # #41 — quota denial
 # ---------------------------------------------------------------------------
 
@@ -280,7 +398,7 @@ async def test_acquire_denied_when_tenant_at_quota() -> None:
         await h.supervisor.acquire(_acquire_request(tenant))
     assert excinfo.value.limit == 2
     # The container was never launched.
-    assert h.docker.runs == []
+    assert h.docker.launches == []
 
 
 @pytest.mark.asyncio
@@ -343,7 +461,7 @@ async def test_reaper_destroys_orphaned_sandbox() -> None:
     assert reaped == 1
     assert h.store.rows[orphan.id].state is SandboxState.DESTROYED
     assert h.store.rows[orphan.id].destroy_reason == DESTROY_REASON_IDLE_TIMEOUT
-    assert orphan.container_id in h.docker.removed
+    assert f"helix-sb-{orphan.id}" in h.docker.removed
 
 
 @pytest.mark.asyncio
@@ -372,7 +490,28 @@ def test_acquire_route_returns_response() -> None:
             json={"tenant_id": str(uuid4()), "thread_id": "t-1"},
         )
     assert resp.status_code == 200
-    assert resp.json()["container_id"] == "container-1"
+    assert resp.json()["container_id"].startswith("helix-sb-")
+
+
+def test_exec_route_returns_runner_output() -> None:
+    link = FakeRunnerLink(
+        exec_result=ExecResult(stdout="hi\n", stderr="", exit_code=0, timed_out=False)
+    )
+    h = _harness(docker=RecordingDockerClient(link=link))
+    app = create_app(SandboxSupervisorSettings(), supervisor=h.supervisor, enable_reaper=False)
+    with TestClient(app) as client:
+        acquired = client.post(
+            "/v1/sandboxes:acquire",
+            json={"tenant_id": str(uuid4()), "thread_id": "t-1"},
+        ).json()
+        resp = client.post(
+            f"/v1/sandboxes/{acquired['sandbox_id']}:exec",
+            json={"code": "print('hi')"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stdout"] == "hi\n"
+    assert body["exit_code"] == 0
 
 
 def test_release_route_returns_204() -> None:
