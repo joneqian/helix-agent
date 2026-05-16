@@ -23,9 +23,8 @@ M0 v1 scope:
   env-gated ones (PII / cache / Langfuse) into the graph's anchor
   chains and the router's ``around_llm_call`` chain.
 
-Known M0 limitation: ``ModelSpec.temperature`` is not plumbed into the
-provider request body — the E.11 provider adapters are minimal and do
-not send sampling params. Tracked for an E.11 hardening pass.
+``ModelSpec.temperature`` is plumbed through ``_build_provider`` into
+each adapter and onto the request body.
 """
 
 from __future__ import annotations
@@ -183,9 +182,14 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             client=HTTPAnthropicClient(api_key=api_key),
             model=model.name,
             max_tokens=model.max_tokens,
+            temperature=model.temperature,
         )
     if provider == "openai":
-        return OpenAIProvider(client=HTTPOpenAIClient(api_key=api_key), model=model.name)
+        return OpenAIProvider(
+            client=HTTPOpenAIClient(api_key=api_key),
+            model=model.name,
+            temperature=model.temperature,
+        )
 
     openai_compatible = {
         "kimi": make_kimi_client,
@@ -196,7 +200,11 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
     }
     make_client = openai_compatible.get(provider)
     if make_client is not None:
-        return OpenAIProvider(client=make_client(api_key=api_key), model=model.name)
+        return OpenAIProvider(
+            client=make_client(api_key=api_key),
+            model=model.name,
+            temperature=model.temperature,
+        )
 
     raise AgentFactoryError(
         f"provider {provider!r} has no adapter yet "

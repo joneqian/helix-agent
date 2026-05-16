@@ -142,6 +142,27 @@ async def test_empty_tools_yields_no_tools_field() -> None:
     assert client.calls[0]["tools"] is None
 
 
+@pytest.mark.asyncio
+async def test_temperature_passed_to_client_when_set() -> None:
+    client = RecordingOpenAIClient(response={"choices": [{"message": {"content": "ok"}}]})
+    provider = OpenAIProvider(client=client, model="gpt-4o-mini", temperature=0.7)
+
+    await provider.complete(messages=[HumanMessage(content="hi")], tools=[])
+
+    assert client.calls[0]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_temperature_defaults_to_none() -> None:
+    """No temperature → None reaches the client → omitted from the body."""
+    client = RecordingOpenAIClient(response={"choices": [{"message": {"content": "ok"}}]})
+    provider = OpenAIProvider(client=client, model="gpt-4o-mini")
+
+    await provider.complete(messages=[HumanMessage(content="hi")], tools=[])
+
+    assert client.calls[0]["temperature"] is None
+
+
 # ---------------------------------------------------------------------------
 # Response decoding
 # ---------------------------------------------------------------------------
@@ -321,6 +342,32 @@ async def test_http_200_returns_parsed_json() -> None:
     )
     body = await _call(client)
     assert body == {"choices": [{"message": {"content": "ok"}}]}
+
+
+@pytest.mark.asyncio
+async def test_http_temperature_included_in_request_body() -> None:
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = _http_client(_handler)
+    await client.chat_completions(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        temperature=0.5,
+    )
+    assert captured["temperature"] == 0.5
+    # ``None`` keeps it out of the body entirely.
+    captured.clear()
+    await client.chat_completions(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+    )
+    assert "temperature" not in captured
 
 
 @pytest.mark.asyncio
