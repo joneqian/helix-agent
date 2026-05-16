@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     #: ``checkpointer_backend`` is ``memory``.
     checkpointer_dsn: str | None = None
 
+    # ------------------------------------------------------------------ tools (E.7)
+    #: ``secret://`` reference to the Tavily API key for the built-in
+    #: ``web_search`` tool. ``None`` → ``web_search`` is unavailable; an
+    #: agent that declares it fails at build time with a clear error.
+    tavily_api_key_ref: str | None = None
+
     # ------------------------------------------------------------------ auth (C.1)
     # OIDC issuer used to validate the ``iss`` JWT claim and to derive
     # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default

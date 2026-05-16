@@ -440,7 +440,7 @@ class LLMResponseCache:
 - **选择**：M0 tool-spec 对齐**实现**，不返工已合并的 E.8/E.9。manifest `tools:` 是一个 **`type` 字段判别的 Pydantic discriminated union**：`builtin`（`name` + `config`）/ `http`（启用开关，allowlist 仍租户作用域）/ `mcp`（启用开关 + 可选 `allow_tools` 过滤，server 仍租户作用域）。`python` / `subagent` 不在 M0 union 内——声明即 422 失败，明确推 M1-F。
 - **理由**：(1) E.8/E.9 已上线测过，逐 API 返工成本高且收益存疑——通用 HTTP 工具 + 租户 allowlist 的隔离模型本身更干净。(2) `type` 判别字段是 Pydantic `Field(discriminator=...)` 的惯用形状，比"单键即判别"代码健壮、错误信息清晰。(3) http/mcp 的真实配置本就是租户作用域（allowlist / mcp_servers 跨 agent 共享），不该塞进单 agent 的 manifest。
 - **代价**：`02-AGENT-MANIFEST.md` 的 `tools:` 段要改写成 `type:` 形状（M0 无真实 manifest 用到 tools，无破坏性）；逐 API http 工具的需求若 M1 仍要，另开设计。
-- **装配**：`build_tool_registry(tool_specs, *, tool_env)` 把每条 typed spec 映射成具体适配器；平台运行期依赖（Tavily client / allowlist provider / MCP pool）走 `ToolEnv` 注入包。声明了某工具但 `ToolEnv` 未提供对应依赖 → `AgentFactoryError`。control-plane 在 lifespan 注入 `ToolEnv`：`http` 的 allowlist 已接 `TenantConfigService`；`web_search`（Tavily key 设置项）和 `mcp`（server pool 子进程生命周期）仍是 follow-up —— 在它们落地前，声明这两类工具的 agent 在 build 期得到明确 `AgentFactoryError`。
+- **装配**：`build_tool_registry(tool_specs, *, tool_env)` 把每条 typed spec 映射成具体适配器；平台运行期依赖（Tavily client / allowlist provider / MCP pool）走 `ToolEnv` 注入包。声明了某工具但 `ToolEnv` 未提供对应依赖 → `AgentFactoryError`。control-plane 在 lifespan 注入 `ToolEnv`：`http` allowlist 接 `TenantConfigService`、`web_search` 接 Tavily（设置项 `tavily_api_key_ref` 经 SecretStore 解析）均已落地；`mcp`（server pool 子进程生命周期）仍是 follow-up —— 在它落地前，声明 `mcp` 工具的 agent 在 build 期得到明确 `AgentFactoryError`。
 
 ### E-15：中间件链装配 = "无依赖中间件 always-on + 平台依赖中间件 env-gated"
 
