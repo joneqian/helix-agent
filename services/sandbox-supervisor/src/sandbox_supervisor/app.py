@@ -109,7 +109,9 @@ def create_app(
         finally:
             stop.set()
             if reaper_task is not None:
-                await reaper_task
+                # gather (not a bare ``await reaper_task``) so CodeQL does
+                # not misread the await as an ineffectual statement.
+                await asyncio.gather(reaper_task)
             await engine.dispose()
             logger.info("sandbox_supervisor.stop")
 
