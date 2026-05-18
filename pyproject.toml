@@ -16,6 +16,7 @@ dependencies = [
     "helix-agent-audit-backup-worker",
     "helix-agent-control-plane",
     "helix-agent-credential-proxy",
+    "helix-agent-event-log-archive-job",
     "helix-agent-orchestrator",
     "helix-agent-retention-cleanup-job",
     "helix-agent-sandbox-supervisor",
@@ -63,6 +64,7 @@ helix-agent-runtime = { workspace = true }
 helix-agent-audit-backup-worker = { workspace = true }
 helix-agent-control-plane = { workspace = true }
 helix-agent-credential-proxy = { workspace = true }
+helix-agent-event-log-archive-job = { workspace = true }
 helix-agent-orchestrator = { workspace = true }
 helix-agent-retention-cleanup-job = { workspace = true }
 helix-agent-sandbox-supervisor = { workspace = true }
