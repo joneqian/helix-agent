@@ -95,6 +95,9 @@ ignore = []
 # Audit action enum values legitimately contain words like "secret"/"token";
 # they are public identifiers, not actual credentials.
 "packages/helix-protocol/src/helix_agent/protocol/audit.py" = ["S105"]
+# BaseHTTPRequestHandler's dispatch methods (do_GET / do_POST) are a stdlib
+# API contract — the uppercase names are required, not a style choice.
+"infra/mock-upstream/echo_server.py" = ["N802"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -169,9 +169,26 @@ docker build -f infra/sandbox-image/Dockerfile -t helix-sandbox:dev infra/sandbo
 
 | # | 用例 | 子项 | 层级 | 说明 |
 |---|------|------|------|------|
-| 60 | 全栈 egress e2e | I.1b | integration | `docker compose --profile full up` 起栈 → 触发声明 `exec_python` 的 agent run → 沙盒内代码经 credential-proxy 出网到 mock upstream → 断言：(a) mock upstream 收到请求且凭据头由 proxy 注入；(b) 沙盒拿到响应；(c) `credential_proxy_audit` 落 ref+host+status、**无明文 secret**。原属 Stream F.11，移入 I.1 |
+| 60 | 全栈 egress e2e | I.1b | integration | 起 egress 子栈 → 直接经 `ExecPythonTool` 跑沙盒 → 沙盒内 stdlib 代码经 credential-proxy 出网到 `mock-upstream` → 断言：(a) `mock-upstream` 收到的请求带 proxy 注入的 `Authorization: Bearer <secret>`；(b) 沙盒拿到响应；(c) `credential_proxy_audit` 落 ref + host + status、**无明文 secret**。原属 Stream F.11，移入 I.1 |
 
-> **#60 设计要点**（实现在 I.1b PR 细化）：新增 `mock-upstream` compose 服务（极简 HTTP echo，挂 `default` 网供 credential-proxy 出网可达）；测试 fixture 经 compose 起 `full` profile 栈 + 在 DB 种 `secret_allowlist` / secret；测试经 control-plane run API 触发 agent。e2e 走非 gating `Test (integration)` job。
+### 4.1 #60 全栈 egress e2e 设计（I.1b 细化）
+
+I.1a 落地后对 #60 的链路做了实测细化，三处偏离 § 4 原草图：
+
+- **入口不走 control-plane run API，直接构造 `ExecPythonTool`**。control-plane 的 `POST /v1/sessions/{id}/runs` 要先经 LLM 推理才决定调 `exec_python` —— 需真 LLM 凭据（STREAM-E Verification 已把 holistic agent run 归 M0→M1 Gate dogfood）。#60 验的是 **egress 链路**（sandbox → proxy → upstream），不是 LLM→tool 决策。故测试直接 `ExecPythonTool(client=HTTPSupervisorClient(base_url=...))` + `tool.call({code}, ctx=ToolContext(...))`，绕过 LLM / orchestrator graph —— 这正是 `#60` 名字里 "exec_python" 的入口。
+- **不起 `full` profile，只起 egress 子栈**。#60 只需 `postgres` + `migrate` + `credential-proxy` + `sandbox-supervisor` + `mock-upstream` —— 不需要 control-plane / redis。起 `full` 会拉 redis，而 redis 是 profile-less（恒起）服务，宿主已占 6379 时本地必冲突。测试 fixture 改为 `docker compose up -d --wait <显式服务名>` —— 显式点名可启动 profile-gated 服务（compose 行为），且**不**触发 profile-less 的 redis/minio/pgbouncer。
+- **沙盒代码用 stdlib `urllib.request`，非 `httpx`**。沙盒镜像无 pip、纯 stdlib（Mini-ADR F-1）。
+
+链路与新增物：
+
+1. **`mock-upstream` 服务**（新）：极简 HTTP echo（`infra/mock-upstream/echo_server.py`，stdlib `http.server`），把收到的 method / path / headers / body 回 JSON。挂 `default` 网，credential-proxy 出网侧经服务名 `mock-upstream` 可达。`profiles: ["e2e"]` —— 仅 e2e 显式点名时启动，不污染 `full` dev 栈。
+2. **credential-proxy 注入用 secret**：credential-proxy `local_dev` SecretStore 当前为空。挂一个 dev fixture secret 文件（`infra/credential-proxy/secrets.env`，占位值，与 compose 里 `helix_agent_dev` 同性质），设 `HELIX_CRED_PROXY_SECRET_STORE_ENV_FILE`。
+3. **sandbox-supervisor 暴露宿主端口** `8001:8000`：测试进程在宿主，需经 HTTP 驱动 supervisor。
+4. **`secret_allowlist` 种行**：测试经宿主 `localhost:5432` 直连 compose Postgres，插 `(tenant, agent_name, agent_version, secret_ref)` 行；测试结束清理。
+5. **沙盒可达 proxy**：composed supervisor 经 DooD `docker run` 沙盒、join `helix-sandbox-egress`；沙盒代码 `POST http://credential-proxy:8080/forward`，带 `X-Helix-Tenant/Agent/Agent-Version/Secret-Ref/Upstream` 头；proxy 校 allowlist → 解析 secret → 注入 `Authorization: Bearer <secret>` → 转发 `X-Helix-Upstream`（= `http://mock-upstream:<port>/...`）。
+6. **`helix-sandbox:dev` 镜像**：composed supervisor 默认用该 tag 起沙盒；fixture 先 `docker build` 它（同 F.8 harness build `helix-sandbox:itest` 的做法）。
+
+测试位置 `services/control-plane/tests/test_fullstack_egress_e2e.py`（control-plane 同时依赖 `orchestrator` + `helix-persistence`，导入闭包齐全），`@pytest.mark.integration`，走非 gating `Test (integration)` job；Docker / compose 不可用时整体 skip（同 F.8）。
 
 ---
 
