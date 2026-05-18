@@ -301,10 +301,12 @@
 
 ### Stream G — SRE + Eval + Feedback（~4 周；消费 A 的可观测数据）
 
-参考：[architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §5、§8、§11、§12
+参考：[architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §5、§8、§11、§12、[streams/STREAM-G-DESIGN](./streams/STREAM-G-DESIGN.md)（设计先行）
 
 > A.9 指标体系 + A.4 audit_log + E.5 Langfuse 已提供数据底座；本 Stream 在它们之上做产品级 SRE/Eval/Feedback。
+> **M0 范围 = 各 P0 的骨架 / 简版**（Mini-ADR G-1）：结构立起、接口定下、dogfood 能用；生产级自动化（错误预算自动冻结、LLM-as-judge gate、PagerDuty 实接、6+ 大盘）推 M1。
 
+- [ ] **G.0 可观测后端栈**（设计细化新增）— `infra/docker-compose.yml` 加 `observability` profile：OTel Collector + Prometheus + Tempo + Loki + Promtail + Grafana + Alertmanager 自托管；G.2/G.7 的前置（Mini-ADR G-2）
 - [ ] **G.1 SLO/SLI 定义文档**（落实 P0 #13）— 可用性、TTFT P95、恢复时间
 - [ ] **G.2 告警体系**（落实 P0 #14）— 飞书/PagerDuty 通道、P0/P1/P2 分级
 - [ ] **G.3 故障预案 runbook**（落实 P0 #26）— Postgres / Vault / Anthropic / sandbox 各 1 份
