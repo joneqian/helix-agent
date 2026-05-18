@@ -285,14 +285,14 @@
 > 以下 F.8 – F.11 为 Stream F 推进中识别的设计细化新增（详见 [streams/STREAM-F-DESIGN](./streams/STREAM-F-DESIGN.md) § 1.1）：
 
 - [x] **F.8 沙盒 Docker 集成测试 harness** — 进程内 supervisor + 真实 runc，自动化验收门 #1/#2/#4/#5/#8（Mini-ADR F-10/F-11/F-12）
-- [ ] **F.9 sandbox egress 网络隔离** — `helix-sandbox-egress` 改 Docker `--internal` 网络，关闭验收门 #3（网络隔离）；Mini-ADR F-14
-- [ ] **F.10 credential-proxy 容器化 + 入 docker-compose** — 正式多阶段 uv 构建 Dockerfile（确立 helix 服务容器化 pattern，其余 3 服务复用见 I.1）+ `helix-sandbox-egress`/egress 双网络，proxy 双归属；Mini-ADR F-15
-- [ ] **F.11 control-plane 接 `ToolEnv.supervisor_client`** — 生产构造 `ToolEnv` 时注入 `HTTPSupervisorClient`（base URL 取自 settings），manifest 声明 `exec_python` 才能端到端可用。全栈 egress e2e（#60）移入 I.1
+- [x] **F.9 sandbox egress 网络隔离** — `helix-sandbox-egress` 为 Docker `--internal` 网络；`SandboxRuntimeProvider.docker_run_argv` 用 `--network helix-sandbox-egress` 启沙盒；测试矩阵 #49（`test_gate_49_network_egress_isolation` —— 实测连 `169.254.169.254` 被拒）关闭验收门 #3；Mini-ADR F-14
+- [x] **F.10 credential-proxy 容器化 + 入 docker-compose** — 多阶段 uv 构建 Dockerfile（确立 helix 服务容器化 pattern，I.1 复用）+ `helix-sandbox-egress`（internal）/ 默认网双归属；Mini-ADR F-15
+- [x] **F.11 control-plane 接 `ToolEnv.supervisor_client`** — `create_app` 经 `build_supervisor_client(settings.sandbox_supervisor_url)` 注入 `HTTPSupervisorClient`；全栈 egress e2e（#60）随 I.1 的 `test_fullstack_egress_e2e.py` 落地
 
 **Stream F Verification**（落实 [architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"沙盒安全验证"7 条用例）：
 - [x] 文件系统隔离测试 — F.8 harness 自动化
 - [x] 进程隔离测试 — F.8 harness 自动化
-- [ ] 网络隔离测试（连 169.254.169.254 失败）— F.9 自动化（`--internal` 网络）
+- [x] 网络隔离测试（连 169.254.169.254 失败）— F.9 自动化（`--internal` 网络；测试矩阵 #49）
 - [x] secret 不可见测试 — F.8 harness 自动化
 - [x] fork bomb PID limit — F.8 harness 自动化
 - [ ] timing 测试 — 需真实 runsc，归 M0→M1 Gate 人工渗透
