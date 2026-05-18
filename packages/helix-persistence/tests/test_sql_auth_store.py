@@ -124,8 +124,12 @@ async def test_service_account_delete(auth_stores: AuthStores) -> None:
         created = await sa_store.create(
             tenant_id=tenant, name="tmp", description="", created_by="a"
         )
-        assert await sa_store.delete(tenant_id=tenant, service_account_id=created.id) is True
-        assert await sa_store.delete(tenant_id=tenant, service_account_id=created.id) is False
+        # Bind the mutating call before asserting — ``assert`` is stripped
+        # under ``python -O`` (CodeQL py/side-effect-in-assert).
+        first = await sa_store.delete(tenant_id=tenant, service_account_id=created.id)
+        assert first is True
+        second = await sa_store.delete(tenant_id=tenant, service_account_id=created.id)
+        assert second is False
     finally:
         await engine.dispose()
 
@@ -209,7 +213,9 @@ async def test_api_key_revoke_and_list(auth_stores: AuthStores) -> None:
         keys = await key_store.list_by_service_account(tenant_id=tenant, service_account_id=sa.id)
         assert [k.id for k in keys] == [created.id]
 
-        assert await key_store.revoke(tenant_id=tenant, api_key_id=created.id) is True
+        # Bind the mutating call before asserting (CodeQL py/side-effect-in-assert).
+        was_revoked = await key_store.revoke(tenant_id=tenant, api_key_id=created.id)
+        assert was_revoked is True
         revoked = await key_store.get_by_prefix(prefix=created.prefix)
         assert revoked is not None and revoked.revoked_at is not None
     finally:
@@ -282,7 +288,10 @@ async def test_role_binding_delete(auth_stores: AuthStores) -> None:
             role=Role.OPERATOR,
             granted_by="root",
         )
-        assert await rb_store.delete(tenant_id=tenant, role_binding_id=created.id) is True
-        assert await rb_store.delete(tenant_id=tenant, role_binding_id=created.id) is False
+        # Bind the mutating call before asserting (CodeQL py/side-effect-in-assert).
+        first = await rb_store.delete(tenant_id=tenant, role_binding_id=created.id)
+        assert first is True
+        second = await rb_store.delete(tenant_id=tenant, role_binding_id=created.id)
+        assert second is False
     finally:
         await engine.dispose()
