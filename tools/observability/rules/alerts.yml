@@ -1,0 +1,56 @@
+# Helix Prometheus alert rules — Stream G.2.
+#
+# M0 alerts on the metrics actually emitted today (control-plane only).
+# Each carries a `severity` label (P0/P1/P2) that Alertmanager routes on
+# (infra/observability/alertmanager.yml) and a runbook_url annotation.
+#
+# Pending — metric not emitted in M0, alert lands with the metric:
+#   * Postgres connection-pool exhaustion (helix_pg_connection_pool_in_use)
+#   * sandbox egress metadata-probe (helix_network_egress_meta_attempt_total)
+
+groups:
+  - name: helix_alerts
+    rules:
+      # P0 — the control-plane is unreachable to Prometheus.
+      - alert: HelixControlPlaneDown
+        expr: up{job="helix-control-plane"} == 0
+        for: 2m
+        labels:
+          severity: P0
+        annotations:
+          summary: "Control-plane is down"
+          description: "Prometheus has failed to scrape helix-control-plane for 2m."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/control-plane.md"
+
+      # P1 — availability SLI (G.1 recording rule) below 95% over 5m.
+      - alert: HelixControlPlaneHigh5xxRate
+        expr: helix:sli:control_plane_availability:ratio5m < 0.95
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "Control-plane 5xx rate elevated"
+          description: "5m success ratio is {{ $value | humanizePercentage }} (SLO target 99.9%)."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/control-plane.md"
+
+      # P2 — P99 latency SLI (G.1 recording rule) far above the 200ms SLO.
+      - alert: HelixControlPlaneHighLatency
+        expr: helix:sli:control_plane_http_latency:p99_5m > 0.5
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Control-plane P99 latency degraded"
+          description: "P99 request latency is {{ $value }}s (SLO target < 0.2s)."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/control-plane.md"
+
+      # P2 — the quota reaper background loop is erroring.
+      - alert: HelixQuotaReaperErrors
+        expr: increase(helix_control_plane_quota_reaper_cycle_errors_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Quota reaper cycle errors"
+          description: "The quota reaper logged {{ $value }} cycle error(s) in the last 15m."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/control-plane.md"
