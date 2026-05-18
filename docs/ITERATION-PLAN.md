@@ -333,7 +333,7 @@
 
 > Phase 0.3 已建立 baseline CI/CD + 三环境配置框架；本 Stream 把它生产化。
 
-- [ ] **I.1 服务容器化 + 全栈 compose** — M0 在线栈 = **3 个 helix 服务镜像**（control-plane / sandbox-supervisor / credential-proxy）多阶段 uv 构建 Dockerfile + `docker compose --profile full up` 起 M0 完整栈。pattern 由 **Stream F.10** 用 credential-proxy 作 pilot 先行确立；I.1 复用它新建 **2 个镜像**（control-plane、sandbox-supervisor）。
+- [x] **I.1 服务容器化 + 全栈 compose** — M0 在线栈 = **3 个 helix 服务镜像**（control-plane / sandbox-supervisor / credential-proxy）多阶段 uv 构建 Dockerfile + `docker compose --profile full up` 起 M0 完整栈。pattern 由 **Stream F.10** 用 credential-proxy 作 pilot 先行确立；I.1 复用它新建 **2 个镜像**（control-plane、sandbox-supervisor）。
   - **orchestrator 不独立成镜像**（Mini-ADR I-1）：它是纯库（无 server 入口），control-plane 把它当 workspace 依赖装进自己镜像里 in-process 跑（STREAM-E-DESIGN § 2.6）；拆独立服务推 M1。
   - **sandbox-supervisor 用 docker-out-of-docker**（Mini-ADR I-2）：容器化后挂宿主 `/var/run/docker.sock` 启沙盒兄弟容器。
   - **I.1a**：上述 Dockerfile + compose（`migrate` 一次性服务 + 两服务 + `full` profile）。

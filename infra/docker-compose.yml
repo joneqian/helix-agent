@@ -204,6 +204,11 @@ services:
     environment:
       HELIX_CRED_PROXY_DB_DSN: postgresql+asyncpg://${HELIX_DB_USER:-helix_agent}:${HELIX_DB_PASSWORD:-helix_agent_dev}@postgres:5432/${HELIX_DB_NAME:-helix_agent_dev}
       HELIX_CRED_PROXY_SECRET_STORE_BACKEND: local_dev
+      # Dev fixture secrets for the local_dev SecretStore (Stream I.1b) —
+      # the #60 egress e2e resolves ``e2e-upstream-token`` from this file.
+      HELIX_CRED_PROXY_SECRET_STORE_ENV_FILE: /run/secrets/proxy-secrets.env
+    volumes:
+      - ./credential-proxy/secrets.env:/run/secrets/proxy-secrets.env:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -227,6 +232,8 @@ services:
   #   --profile auth   + Keycloak IdP
   #   --profile sandbox + credential-proxy (standalone)
   #   --profile full   + migrate / control-plane / sandbox-supervisor / credential-proxy
+  #   --profile e2e    + mock-upstream (only — the #60 egress e2e names the
+  #                      services it needs explicitly; see test_fullstack_egress_e2e.py)
   #
   # Prerequisite for ``exec_python`` to work end-to-end: the sandbox
   # execution image must be pre-built on the host daemon (it is launched
@@ -295,6 +302,9 @@ services:
     image: helix-sandbox-supervisor
     container_name: helix-sandbox-supervisor
     user: root
+    # Host port for dev introspection + the #60 e2e (driver runs on the host).
+    ports:
+      - "8001:8000"
     environment:
       # Direct Postgres (5432) — the supervisor issues plain inserts /
       # updates with no need for the PgBouncer pool.
@@ -308,6 +318,25 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('127.0.0.1',8000)))\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mock-upstream:
+    # Mock upstream for the #60 full-stack egress e2e (Stream I.1b).
+    # A stdlib HTTP echo server — the credential-proxy forwards requests
+    # here and the echoed response proves the secret was injected. On the
+    # default network only (not helix-sandbox-egress): a sandbox must not
+    # reach it directly, only via the proxy. ``e2e`` profile — started
+    # only when the e2e test explicitly names it.
+    profiles: ["e2e"]
+    image: python:3.12-alpine
+    container_name: helix-mock-upstream
+    command: ["python", "/app/echo_server.py"]
+    volumes:
+      - ./mock-upstream/echo_server.py:/app/echo_server.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(s.connect_ex(('127.0.0.1',9100)))\""]
       interval: 3s
       timeout: 3s
       retries: 20
