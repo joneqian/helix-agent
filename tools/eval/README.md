@@ -51,4 +51,5 @@ cases:
 M0 is the harness skeleton: format + runner + assertions + an example
 set. Deferred to M2-D: LLM-as-judge assertions, a real provider wired to
 the orchestrator LLM stack, regression-gating, A/B. Eval **dataset**
-organisation (golden / regression sets) is Stream G.5.
+organisation — golden / regression sets — lives in
+[`datasets/`](./datasets/README.md) (Stream G.5).
