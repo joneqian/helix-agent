@@ -350,8 +350,8 @@
 
 参考：[architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)、[streams/STREAM-J-DESIGN](./streams/STREAM-J-DESIGN.md)（设计先行）
 
-> 2026-05-18 的 25 维 agent 能力评估发现：helix M0 把企业基础设施（Stream A–I）做到生产级，但 agent 认知 / harness 层有 12 个缺口。本 Stream 把这 12 个缺口补到生产级 —— helix 才是一个 harness 能力完整的通用 agent 平台。
-> **canonical 能力 agent + dogfood 必须在 Stream J 之后做** —— canonical agent 是能力评估的载体，平台能力不完整就评不出完整能力面。
+> 2026-05-18 的 26 维 agent 能力评估发现：helix M0 把企业基础设施（Stream A–I）做到生产级，但 agent 认知 / harness 层有 14 个缺口。本 Stream 把这 14 个缺口补到生产级 —— helix 才是能支撑目标产品形态的 harness 能力完整平台。
+> **目标产品形态 = per-user 持久 agent**（租户=公司、用户=公司的员工/客户；每用户一个持久 agent 实例 = 对话 + 长期记忆 + 持久工作区，空闲释放算力、来消息快速还原）。canonical 能力 agent 即此产品形态本身，**不是另起的验证 agent**；Stream J 验收锚定"端到端支撑该 agent 跑通"。详见 [architecture/08-AGENT-CAPABILITY-ASSESSMENT § 4](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)。
 > 量级与 M0 若干 Stream 总和相当。每子项设计先行 + TDD + 一 PR 一子任务 + 零技术债。原 M1-D 的 `reflection/resolvers.py`、`uploads_middleware`、subagent executor 及 M1-F 的 Sub-Agent 项提前并入本 Stream。
 
 - [ ] **J.1 规划 / 任务分解** — planner / todo，先拆解再执行
@@ -367,13 +367,15 @@
 - [ ] **J.11 Model 路由** — 按步骤难度 / 成本 / 模态动态选模型(非单纯 provider fallback)
 - [ ] **J.12 学习 / 反馈闭环** — 从生产 feedback / trajectory 数据迭代改进 agent(区别于 skill 进化)
 - [ ] **J.13 eval 强化** — 评估 G.4 骨架是否需升级（canonical agent 的度量工具）
+- [ ] **J.14 租户内 per-user 隔离** — `(tenant_id, user_id)` 复合 scope;thread / 长期记忆 / 工作区按用户隔离(多租户深化,Stream C 性质)
+- [ ] **J.15 有状态 per-user 执行环境** — 持久工作区(per-user 卷)+ 沙盒会话生命周期(活沙盒复用 / 空闲 hibernate / 快速 restore);Stream F 沙盒模型演进,关联 J.9 产物
 
-**Stream J Verification**：每子项接入 live agent 路径、单测 + 集成测试 80% 覆盖；25 维能力矩阵无"缺失 / 骨架"遗留（eval 按 J.13 结论）。
+**Stream J Verification**：每子项接入 live agent 路径、单测 + 集成测试 80% 覆盖；26 维能力矩阵无"缺失 / 骨架"遗留（eval 按 J.13 结论）；canonical per-user 持久 agent 端到端跑通。
 
 ### M0 Exit Criteria（M0 → M0→M1 Gate 验证门）
 
 - [ ] 24 项 P0 全部勾选完成（参考 [architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §"Gap 严重性矩阵"）
-- [ ] **Stream J（Agent Harness 能力补全）13 子项完成** —— 25 维能力矩阵无缺口
+- [ ] **Stream J（Agent Harness 能力补全）15 子项完成** —— 26 维能力矩阵无缺口
 - [ ] canonical 能力 agent 跑通 + staging 冒烟（便宜模型端到端真实 run）
 - [ ] 测试金字塔达标：unit ≥ 85%、integration ≥ 70% 关键路径、E2E 5-10 场景
 - [ ] 7 条沙盒安全验证用例全部通过
