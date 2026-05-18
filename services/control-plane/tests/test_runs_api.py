@@ -266,3 +266,38 @@ async def test_full_acceptance_flow(runs_client: AsyncClient) -> None:
     assert types[0] == "metadata"
     assert types[-1] == "end"
     assert "updates" in types
+
+
+# ---------------------------------------------------------------------------
+# per-user isolation — Stream J.14
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_run_another_users_session(runs_client: AsyncClient) -> None:
+    """A run trigger on another user's session is rejected (404)."""
+    user_a = {
+        "Authorization": "Bearer "
+        + make_test_jwt(tenant_id=_DEFAULT_TENANT, subject="user-a", roles=("viewer",))
+    }
+    user_b = {
+        "Authorization": "Bearer "
+        + make_test_jwt(tenant_id=_DEFAULT_TENANT, subject="user-b", roles=("viewer",))
+    }
+    create = await runs_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+        headers=user_a,
+    )
+    assert create.status_code == 201
+    thread_id = create.json()["data"]["thread_id"]
+
+    intruder = await runs_client.post(
+        f"/v1/sessions/{thread_id}/runs", json={"input": "hi"}, headers=user_b
+    )
+    assert intruder.status_code == 404
+
+    owner = await runs_client.post(
+        f"/v1/sessions/{thread_id}/runs", json={"input": "hi"}, headers=user_a
+    )
+    assert owner.status_code == 200
