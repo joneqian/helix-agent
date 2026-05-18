@@ -322,6 +322,8 @@
 
 参考：[architecture/00-OVERVIEW](./architecture/00-OVERVIEW.md)、[architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"Dogfood 计划"
 
+> **排序与 dogfood 重构**（评估 08 + Stream J 决策）：H.5 / H.6 的 dogfood 部分由 **canonical 能力 agent** 取代（与具体 Dify 业务解耦），且排在 **Stream J 之后**；H.1–H.4 Admin UI 不受影响、不依赖 Stream J。Admin UI 须做到产品级 UI/UX。
+
 - [ ] **H.1 React 19 + Vite + Antd 骨架**
 - [ ] **H.2 Agent 列表 + Monaco YAML 编辑器**
 - [ ] **H.3 Session 时间线（只读）**
@@ -344,10 +346,37 @@
 - [x] **I.3 服务回滚机制**（落实 P0 #33）— `tools/deploy/rollback.py`（快路径切回旧色 / `--to-tag` 兜底）+ expand-contract 迁移纪律（迁移只向前）；STREAM-I-DESIGN § 7
 - [x] **I.4 三环境部署文档**（dev / staging / prod）— `docs/runbooks/deployment.md`（三环境矩阵 / 配置来源 / 首次部署 / 发布清单）+ `environments/*.yaml` 结构补全；STREAM-I-DESIGN § 8
 
+### Stream J — Agent Harness 能力补全（大里程碑；canonical agent + dogfood 的前置）
+
+参考：[architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)、[streams/STREAM-J-DESIGN](./streams/STREAM-J-DESIGN.md)（设计先行）
+
+> 2026-05-18 的 26 维 agent 能力评估发现：helix M0 把企业基础设施（Stream A–I）做到生产级，但 agent 认知 / harness 层有 14 个缺口。本 Stream 把这 14 个缺口补到生产级 —— helix 才是能支撑目标产品形态的 harness 能力完整平台。
+> **目标产品形态 = per-user 持久 agent**（租户=公司、用户=公司的员工/客户；每用户一个持久 agent 实例 = 对话 + 长期记忆 + 持久工作区，空闲释放算力、来消息快速还原）。canonical 能力 agent 即此产品形态本身，**不是另起的验证 agent**；Stream J 验收锚定"端到端支撑该 agent 跑通"。详见 [architecture/08-AGENT-CAPABILITY-ASSESSMENT § 4](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)。
+> 量级与 M0 若干 Stream 总和相当。每子项设计先行 + TDD + 一 PR 一子任务 + 零技术债。原 M1-D 的 `reflection/resolvers.py`、`uploads_middleware`、subagent executor 及 M1-F 的 Sub-Agent 项提前并入本 Stream。
+
+- [ ] **J.1 规划 / 任务分解** — planner / todo，先拆解再执行
+- [ ] **J.2 反思 / 自我修正** — 通用自我批判 / 修正中间件（非现有 loop detection）
+- [ ] **J.3 长期记忆** — 跨会话记忆 store + 检索，接入上下文组装
+- [ ] **J.4 Sub-agent / 多智能体委派** — agent 派生 / 委派 / agent-as-tool，隔离 + 取消 + token 预算
+- [ ] **J.5 知识 / 检索（RAG）** — 检索增强；工具检索 vs 向量库由 STREAM-J-DESIGN 定
+- [ ] **J.6 多模态输入** — 图像 / 文件输入
+- [ ] **J.7 Skill + skill 进化** — skill 概念 + 习得 / 进化机制
+- [ ] **J.8 人在回路 / 审批** — 运行中可中断 / 纠偏 / 危险操作审批
+- [ ] **J.9 产物 / Artifact 管理** — agent 产出物(文件/文档/代码)的创建 / 存储 / 版本 / 回传
+- [ ] **J.10 调度 / 触发** — 定时 / 事件 / webhook 触发的 agent,非纯请求-响应
+- [ ] **J.11 Model 路由** — 按步骤难度 / 成本 / 模态动态选模型(非单纯 provider fallback)
+- [ ] **J.12 学习 / 反馈闭环** — 从生产 feedback / trajectory 数据迭代改进 agent(区别于 skill 进化)
+- [ ] **J.13 eval 强化** — 评估 G.4 骨架是否需升级（canonical agent 的度量工具）
+- [ ] **J.14 租户内 per-user 隔离** — `(tenant_id, user_id)` 复合 scope;thread / 长期记忆 / 工作区按用户隔离(多租户深化,Stream C 性质)
+- [ ] **J.15 有状态 per-user 执行环境** — 持久工作区(per-user 卷)+ 沙盒会话生命周期(活沙盒复用 / 空闲 hibernate / 快速 restore);Stream F 沙盒模型演进,关联 J.9 产物
+
+**Stream J Verification**：每子项接入 live agent 路径、单测 + 集成测试 80% 覆盖；26 维能力矩阵无"缺失 / 骨架"遗留（eval 按 J.13 结论）；canonical per-user 持久 agent 端到端跑通。
+
 ### M0 Exit Criteria（M0 → M0→M1 Gate 验证门）
 
 - [ ] 24 项 P0 全部勾选完成（参考 [architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §"Gap 严重性矩阵"）
-- [ ] dogfood 业务在 staging 跑通端到端
+- [ ] **Stream J（Agent Harness 能力补全）15 子项完成** —— 26 维能力矩阵无缺口
+- [ ] canonical 能力 agent 跑通 + staging 冒烟（便宜模型端到端真实 run）
 - [ ] 测试金字塔达标：unit ≥ 85%、integration ≥ 70% 关键路径、E2E 5-10 场景
 - [ ] 7 条沙盒安全验证用例全部通过
 - [ ] SLO 第一个版本写入文档；P0 告警全部接入
@@ -356,6 +385,9 @@
 ---
 
 ## M0→M1 Gate（2-4 周，dogfood 平行运行）
+
+> **前置**：Gate 顺延到 **Stream J 之后**（先补全 harness 能力，再 dogfood）。
+> **退出标准待重构**：当前"相对 Dify"框架（token 偏差、p95 倍数、质量对比）将改为**绝对目标 / eval-set 驱动** —— helix 是通用平台，dogfood 用 canonical 能力 agent、与具体 Dify 业务解耦（见 [architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)）。重构随 canonical agent 落地。
 
 ### 目标
 证明 Helix 在真实流量下与 Dify 参数对齐。
@@ -410,11 +442,11 @@
 #### M1-D Vendor P1 中间件（~3 周）
 参考：[architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"M1 vendor P1"
 - [ ] `thread_data_middleware`（118 LOC）
-- [ ] `uploads_middleware`（295 LOC）
 - [ ] `deferred_tool_filter_middleware`（107 LOC）
 - [ ] `token_usage_middleware`（303 LOC）
-- [ ] `reflection/resolvers.py`（98 LOC）
-- [ ] subagent executor + guardrails
+- [ ] ~~`uploads_middleware`~~ → 提前至 **Stream J.6**（多模态输入）
+- [ ] ~~`reflection/resolvers.py`~~ → 提前至 **Stream J.2**（反思 / 自我修正）
+- [ ] ~~subagent executor + guardrails~~ → 提前至 **Stream J.4**（Sub-agent）
 
 #### M1-E 可观测核心生产化（~2 周；紧跟 M1-B 数据层硬化）
 - [ ] OpenTelemetry / Prometheus / Grafana / Loki 全栈生产化
@@ -423,7 +455,7 @@
 
 #### M1-F 多租户 + Sub-Agent + Python 插槽（~6 周；建立在 M1-A/B/C/D 硬化基础上）
 参考：[architecture/02-AGENT-MANIFEST](./architecture/02-AGENT-MANIFEST.md) §"Python 插槽"
-- [ ] Sub-Agent YAML 声明 + LangGraph subgraph 实现（依赖 M1-A warm pool）
+- [ ] ~~Sub-Agent YAML 声明 + LangGraph subgraph 实现~~ → 提前至 **Stream J.4**（Sub-agent / 多智能体委派）
 - [ ] Python 插槽：`code.package` + `tool/graph/hook` 入口（依赖 M1-A cosign 供应链）
 - [ ] tenant_id 全链路贯通深化（依赖 M1-C Vault dynamic）
 - [ ] 多租户隔离自动化测试（cross-tenant 数据泄漏检测）
