@@ -34,11 +34,17 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field
 
 from control_plane.api._quota_admission import check_admission
+from control_plane.api._user_scope import (
+    caller_owns_thread,
+    get_user_repo,
+    resolve_caller_user_id,
+)
 from control_plane.audit import emit
 from control_plane.quota.base import QuotaService
 from control_plane.runtime import AgentRuntime
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.agent_spec import AgentSpecStore
+from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import AuditAction, ThreadStatus
 from helix_agent.runtime.audit.logger import AuditLogger
 from orchestrator import AgentFactoryError, run_agent, sse_consumer
@@ -83,6 +89,7 @@ def build_runs_router() -> APIRouter:
         payload: RunRequest,
         request: Request,
         threads: Annotated[object, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         quota: Annotated[QuotaService, Depends(_get_quota)],
         agent_repo: Annotated[AgentSpecStore, Depends(_get_agent_repo)],
@@ -94,6 +101,13 @@ def build_runs_router() -> APIRouter:
 
         meta = await threads.get(thread_id, tenant_id=tenant_id)  # type: ignore[attr-defined]
         if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        # Stream J.14 — a user-owned thread accepts runs only from its
+        # owner (or an admin); 404 so cross-user existence stays hidden.
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
             raise HTTPException(status_code=404, detail="session not found")
         if meta.status is not ThreadStatus.ACTIVE:
             raise HTTPException(

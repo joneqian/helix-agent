@@ -264,3 +264,103 @@ async def test_other_tenant_cannot_see_session(session_client: AsyncClient) -> N
         headers={"Authorization": f"Bearer {other_jwt}"},
     )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# per-user isolation — Stream J.14
+# ---------------------------------------------------------------------------
+
+
+def _user_headers(subject: str) -> dict[str, str]:
+    """Bearer headers for a non-admin user in the default tenant."""
+    jwt = make_test_jwt(tenant_id=_DEFAULT_TENANT, subject=subject, roles=("viewer",))
+    return {"Authorization": f"Bearer {jwt}"}
+
+
+async def _create_as(client: AsyncClient, headers: dict[str, str]) -> str:
+    response = await client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    return str(response.json()["data"]["thread_id"])
+
+
+@pytest.mark.asyncio
+async def test_create_stamps_owning_user(session_client: AsyncClient) -> None:
+    response = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+        headers=_user_headers("user-a"),
+    )
+    assert response.status_code == 201
+    assert response.json()["data"]["user_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_see_another_users_session(session_client: AsyncClient) -> None:
+    tid = await _create_as(session_client, _user_headers("user-a"))
+    # The owner sees it.
+    own = await session_client.get(f"/v1/sessions/{tid}", headers=_user_headers("user-a"))
+    assert own.status_code == 200
+    # A different user in the same tenant gets 404 — existence stays hidden.
+    other = await session_client.get(f"/v1/sessions/{tid}", headers=_user_headers("user-b"))
+    assert other.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_can_see_any_users_session(session_client: AsyncClient) -> None:
+    tid = await _create_as(session_client, _user_headers("user-a"))
+    # The default fixture headers are an admin JWT — tenant-wide access.
+    response = await session_client.get(f"/v1/sessions/{tid}")
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_list_scopes_to_caller_user(session_client: AsyncClient) -> None:
+    await _create_as(session_client, _user_headers("user-a"))
+    await _create_as(session_client, _user_headers("user-a"))
+    await _create_as(session_client, _user_headers("user-b"))
+
+    a_list = await session_client.get("/v1/sessions", headers=_user_headers("user-a"))
+    assert a_list.json()["data"]["total"] == 2
+    b_list = await session_client.get("/v1/sessions", headers=_user_headers("user-b"))
+    assert b_list.json()["data"]["total"] == 1
+    # Admin sees every thread in the tenant.
+    admin_list = await session_client.get("/v1/sessions")
+    assert admin_list.json()["data"]["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_transition_another_users_session(
+    session_client: AsyncClient,
+) -> None:
+    tid = await _create_as(session_client, _user_headers("user-a"))
+    intruder = await session_client.post(
+        f"/v1/sessions/{tid}:pause", json={}, headers=_user_headers("user-b")
+    )
+    assert intruder.status_code == 404
+    owner = await session_client.post(
+        f"/v1/sessions/{tid}:pause", json={}, headers=_user_headers("user-a")
+    )
+    assert owner.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_machine_principal_session_is_unowned(session_client: AsyncClient) -> None:
+    """A service-account caller has no per-user instance — its threads
+    carry no ``user_id`` and stay tenant-scoped (legacy behaviour)."""
+    sa_jwt = make_test_jwt(
+        tenant_id=_DEFAULT_TENANT,
+        subject="sa-1",
+        sub_type="service_account",
+        roles=("admin",),
+    )
+    sa_headers = {"Authorization": f"Bearer {sa_jwt}"}
+    tid = await _create_as(session_client, sa_headers)
+    create_meta = await session_client.get(f"/v1/sessions/{tid}", headers=sa_headers)
+    assert create_meta.json()["data"]["user_id"] is None
+    # A plain user can still read an unowned thread.
+    plain = await session_client.get(f"/v1/sessions/{tid}", headers=_user_headers("user-a"))
+    assert plain.status_code == 200

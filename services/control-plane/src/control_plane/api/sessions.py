@@ -29,10 +29,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from control_plane.api._quota_admission import check_admission
+from control_plane.api._user_scope import (
+    caller_owns_thread,
+    get_user_repo,
+    resolve_caller_user_id,
+    thread_list_filter,
+)
 from control_plane.audit import emit
 from control_plane.quota.base import QuotaService
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.agent_spec import AgentSpecStore
+from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.persistence.thread_meta import ThreadMetaStore
 from helix_agent.protocol import AgentSpecStatus, AuditAction, AuditResult, ThreadStatus
 from helix_agent.runtime.audit.logger import AuditLogger
@@ -115,6 +122,7 @@ def build_sessions_router() -> APIRouter:
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
         agents: Annotated[AgentSpecStore, Depends(_get_agent_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         quota: Annotated[QuotaService, Depends(_get_quota)],
     ) -> JSONResponse:
@@ -163,11 +171,15 @@ def build_sessions_router() -> APIRouter:
                 422,
             )
 
+        # Stream J.14 — stamp the owning user. None for machine
+        # principals (service / service_account) → an unowned thread.
+        user_id = await resolve_caller_user_id(request, users)
         thread_id = uuid4()
         meta = await threads.create(
             thread_id=thread_id,
             tenant_id=tenant_id,
             created_by=actor_id,
+            user_id=user_id,
             agent_name=payload.agent_name,
             agent_version=payload.agent_version,
         )
@@ -191,11 +203,19 @@ def build_sessions_router() -> APIRouter:
         thread_id: UUID,
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         meta = await threads.get(thread_id, tenant_id=tenant_id)
         if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        # Stream J.14 — a user-owned thread is private to its owner.
+        # 404 (not 403) so cross-user existence is never revealed.
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
             raise HTTPException(status_code=404, detail="session not found")
         await emit(
             audit,
@@ -212,13 +232,22 @@ def build_sessions_router() -> APIRouter:
     async def list_sessions(
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         status: ThreadStatus | None = None,
         limit: Annotated[int, Query(ge=1, le=500)] = 100,
         offset: Annotated[int, Query(ge=0)] = 0,
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
-        items = await threads.list_by_tenant(tenant_id, status=status, limit=limit, offset=offset)
+        # Stream J.14 — a plain user lists only their own threads;
+        # admins / machine principals list the whole tenant.
+        caller_user_id = await resolve_caller_user_id(request, users)
+        user_filter = thread_list_filter(
+            caller_user_id=caller_user_id, principal=request.state.principal
+        )
+        items = await threads.list_by_tenant(
+            tenant_id, status=status, user_id=user_filter, limit=limit, offset=offset
+        )
         await emit(
             audit,
             tenant_id=tenant_id,
@@ -243,6 +272,7 @@ def build_sessions_router() -> APIRouter:
         thread_id: UUID,
         request: Request,
         threads: ThreadMetaStore,
+        users: TenantUserStore,
         audit: AuditLogger,
         target: ThreadStatus,
         allowed_from: frozenset[ThreadStatus],
@@ -255,6 +285,12 @@ def build_sessions_router() -> APIRouter:
 
         meta = await threads.get(thread_id, tenant_id=tenant_id)
         if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        # Stream J.14 — only the owning user (or an admin) may transition.
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
             raise HTTPException(status_code=404, detail="session not found")
 
         if meta.status not in allowed_from:
@@ -298,12 +334,14 @@ def build_sessions_router() -> APIRouter:
         payload: TransitionPayload,
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
     ) -> JSONResponse:
         return await _transition(
             thread_id=thread_id,
             request=request,
             threads=threads,
+            users=users,
             audit=audit,
             target=ThreadStatus.PAUSED,
             allowed_from=frozenset({ThreadStatus.ACTIVE}),
@@ -317,12 +355,14 @@ def build_sessions_router() -> APIRouter:
         payload: TransitionPayload,
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
     ) -> JSONResponse:
         return await _transition(
             thread_id=thread_id,
             request=request,
             threads=threads,
+            users=users,
             audit=audit,
             target=ThreadStatus.ACTIVE,
             allowed_from=frozenset({ThreadStatus.PAUSED}),
@@ -336,12 +376,14 @@ def build_sessions_router() -> APIRouter:
         payload: TransitionPayload,
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
     ) -> JSONResponse:
         return await _transition(
             thread_id=thread_id,
             request=request,
             threads=threads,
+            users=users,
             audit=audit,
             target=ThreadStatus.CANCELLED,
             allowed_from=frozenset({ThreadStatus.ACTIVE, ThreadStatus.PAUSED}),

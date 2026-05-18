@@ -130,6 +130,11 @@ from helix_agent.persistence.tenant_config import (
     SqlTenantConfigStore,
     TenantConfigStore,
 )
+from helix_agent.persistence.tenant_user import (
+    InMemoryTenantUserStore,
+    SqlTenantUserStore,
+    TenantUserStore,
+)
 from helix_agent.persistence.thread_meta import (
     InMemoryThreadMetaStore,
     SqlThreadMetaStore,
@@ -153,6 +158,7 @@ def create_app(
     rate_limiter: RateLimiter | None = None,
     agent_spec_repo: AgentSpecStore | None = None,
     thread_meta_repo: ThreadMetaStore | None = None,
+    tenant_user_repo: TenantUserStore | None = None,
     feedback_repo: FeedbackStore | None = None,
     audit_logger: AuditLogger | None = None,
     manifest_loader: ManifestLoader | None = None,
@@ -201,6 +207,9 @@ def create_app(
     )
     resolved_threads = thread_meta_repo or (
         sql_stores.thread_meta if sql_stores else InMemoryThreadMetaStore()
+    )
+    resolved_tenant_users = tenant_user_repo or (
+        sql_stores.tenant_user if sql_stores else InMemoryTenantUserStore()
     )
     resolved_feedback = feedback_repo or (
         sql_stores.feedback if sql_stores else InMemoryFeedbackStore()
@@ -353,6 +362,7 @@ def create_app(
     app.state.tenant_rate_limiter = resolved_tenant_limiter
     app.state.agent_spec_repo = resolved_repo
     app.state.thread_meta_repo = resolved_threads
+    app.state.tenant_user_repo = resolved_tenant_users
     app.state.feedback_store = resolved_feedback
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader
@@ -448,6 +458,7 @@ class _SqlStores:
     engine: AsyncEngine
     agent_spec: AgentSpecStore
     thread_meta: ThreadMetaStore
+    tenant_user: TenantUserStore
     service_account: ServiceAccountStore
     api_key: ApiKeyStore
     role_binding: RoleBindingStore
@@ -477,6 +488,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         engine=engine,
         agent_spec=SqlAgentSpecStore(session_factory),
         thread_meta=SqlThreadMetaStore(session_factory),
+        tenant_user=SqlTenantUserStore(session_factory),
         service_account=SqlServiceAccountStore(session_factory),
         api_key=SqlApiKeyStore(session_factory),
         role_binding=SqlRoleBindingStore(session_factory),

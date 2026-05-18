@@ -137,6 +137,15 @@ def is_allowed(principal: Principal, *, resource: Resource, action: Action) -> b
     return False
 
 
+def is_admin(principal: Principal) -> bool:
+    """``True`` if the principal holds the ADMIN role (tenant-wide access).
+
+    Used by Stream J.14 per-user scoping: a tenant admin bypasses the
+    per-user thread-ownership check and keeps tenant-wide visibility.
+    """
+    return Role.ADMIN in _collect_roles(principal)
+
+
 def collect_roles_for_audit(principal: Principal) -> Iterable[str]:
     """Stable role list for audit details payloads."""
     return sorted(role.value for role in _collect_roles(principal))
