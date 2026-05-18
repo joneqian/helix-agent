@@ -5,13 +5,6 @@ in-memory object store, and verifies the aged rows are archived to
 object storage and deleted from Postgres while recent rows survive.
 
 #66 / #67 of the test matrix.
-
-``xfail`` (CI only): ``DELETE FROM event_log`` raises ``permission
-denied`` in the testcontainers Postgres image even as the bootstrap
-superuser — the same unexplained quirk that xfails
-``retention_cleanup_job``'s event_log test. Local runs pass (the
-archive logic is real). Tracked: docs/ITERATION-PLAN.md M1-B
-"retention-cleanup-job CI-only permission denied 收尾".
 """
 
 from __future__ import annotations
@@ -39,14 +32,6 @@ from helix_agent.runtime.storage.memory import InMemoryObjectStore
 pytestmark = pytest.mark.integration
 
 ALEMBIC_INI = Path(__file__).resolve().parents[3] / "packages/helix-persistence/alembic.ini"
-
-_XFAIL_REASON = (
-    "CI-only: DELETE FROM event_log raises permission denied in the "
-    "testcontainers Postgres image even as the bootstrap superuser — the "
-    "same quirk that xfails retention_cleanup_job's event_log test. Local "
-    "runs pass. Tracked: ITERATION-PLAN M1-B retention-cleanup-job "
-    "CI-only permission denied 收尾."
-)
 
 
 def _sync_dsn(container: PostgresContainer) -> str:
@@ -104,7 +89,6 @@ async def _event_count(engine: AsyncEngine) -> int:
         return int((await conn.execute(text("SELECT count(*) FROM event_log"))).scalar() or 0)
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
 @pytest.mark.asyncio
 async def test_archive_moves_old_rows_to_object_store(
     archive_db: tuple[AsyncEngine, str],
@@ -145,7 +129,6 @@ async def test_archive_moves_old_rows_to_object_store(
         await engine.dispose()
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON, strict=False)
 @pytest.mark.asyncio
 async def test_archive_rerun_overwrites_and_is_idempotent(
     archive_db: tuple[AsyncEngine, str],

@@ -201,8 +201,8 @@ CREATE TABLE feedback (
 | 63 | 反馈落表 + 关联 | G.6 | integration | `POST /feedback` 👍/👎+文本 → `feedback` 行含 trace_id/turn_seq；写 audit |
 | 64 | 反馈跨租户隔离 | G.6 | integration | 租户 A 的反馈对租户 B 不可见（RLS）|
 | 65 | 反馈输入校验 | G.6 | unit | `rating` 非 up/down → 422；空 body → 422 |
-| 66 | event_log 归档 + 删行 | G.8 | integration | 超龄行 → S3 有 JSONL 对象（内容正确）、表行删、近期行留。本地 XPASS；CI `xfail`（event_log DELETE 的 M1-B permission-denied 坑）|
-| 67 | 归档 job 幂等重跑 | G.8 | integration | 重跑覆盖同 key（不重复）、空扫无副作用。本地 XPASS；CI `xfail`（同 #66）|
+| 66 | event_log 归档 + 删行 | G.8 | integration | 超龄行 → S3 有 JSONL 对象（内容正确）、表行删、近期行留 |
+| 67 | 归档 job 幂等重跑 | G.8 | integration | 重跑覆盖同 key（不重复）、空扫无副作用 |
 | 68b | 归档纯逻辑单测 | G.8 | unit | `_object_key` / `_to_jsonl` / `_normalise_row` / `_json_default` —— 序列化与 key 逻辑，gating `Test (pytest)` job 真绿 |
 | 68 | Eval 简版可跑 | G.4 | integration | promptfoo 包装脚本跑通 1 个 eval set，产出报告 |
 
