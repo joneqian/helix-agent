@@ -42,6 +42,24 @@ async def test_get_filters_by_tenant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_id_round_trip_and_list_filter() -> None:
+    store = InMemoryThreadMetaStore()
+    tenant_id, user_a, user_b = uuid4(), uuid4(), uuid4()
+
+    t_a = await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x", user_id=user_a)
+    assert t_a.user_id == user_a
+    await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x", user_id=user_b)
+    # A thread with no owner (machine-triggered) keeps user_id None.
+    unowned = await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x")
+    assert unowned.user_id is None
+
+    only_a = await store.list_by_tenant(tenant_id, user_id=user_a)
+    assert [m.user_id for m in only_a] == [user_a]
+    # No user filter → all three threads.
+    assert len(await store.list_by_tenant(tenant_id)) == 3
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_duplicate_thread_id() -> None:
     store = InMemoryThreadMetaStore()
     thread_id, tenant_id = uuid4(), uuid4()

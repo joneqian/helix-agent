@@ -76,6 +76,7 @@ from helix_agent.protocol.tenant_config import (
     TenantConfigRecord,
     TenantPlan,
 )
+from helix_agent.protocol.tenant_user import TenantUser
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
 
 __all__ = [
@@ -139,6 +140,7 @@ __all__ = [
     "TenantPlan",
     "TenantQuotaPatch",
     "TenantQuotaRecord",
+    "TenantUser",
     "ThreadMeta",
     "ThreadStatus",
     "TokenReservationRecord",

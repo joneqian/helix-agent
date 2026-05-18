@@ -24,6 +24,7 @@ from helix_agent.persistence.models import AuditLogRow as AuditLogRow
 from helix_agent.persistence.models import BackupRecordRow as BackupRecordRow
 from helix_agent.persistence.models import DrDrillRow as DrDrillRow
 from helix_agent.persistence.models import EventLogRow as EventLogRow
+from helix_agent.persistence.models import TenantUserRow as TenantUserRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
 from helix_agent.persistence.quota import (
     InMemoryTenantQuotaStore as InMemoryTenantQuotaStore,
@@ -56,6 +57,13 @@ from helix_agent.persistence.tenant_config import (
 from helix_agent.persistence.tenant_config import (
     TenantConfigStore as TenantConfigStore,
 )
+from helix_agent.persistence.tenant_user import (
+    InMemoryTenantUserStore as InMemoryTenantUserStore,
+)
+from helix_agent.persistence.tenant_user import (
+    SqlTenantUserStore as SqlTenantUserStore,
+)
+from helix_agent.persistence.tenant_user import TenantUserStore as TenantUserStore
 from helix_agent.persistence.thread_meta import (
     InMemoryThreadMetaStore as InMemoryThreadMetaStore,
 )
@@ -78,16 +86,20 @@ __all__ = [
     "InMemoryBackupRecordStore",
     "InMemoryTenantConfigStore",
     "InMemoryTenantQuotaStore",
+    "InMemoryTenantUserStore",
     "InMemoryThreadMetaStore",
     "InMemoryTokenReservationStore",
     "SqlAuditLogStore",
     "SqlBackupRecordStore",
     "SqlTenantConfigStore",
     "SqlTenantQuotaStore",
+    "SqlTenantUserStore",
     "SqlThreadMetaStore",
     "SqlTokenReservationStore",
     "TenantConfigStore",
     "TenantQuotaStore",
+    "TenantUserRow",
+    "TenantUserStore",
     "ThreadMetaRow",
     "ThreadMetaStore",
     "TokenReservationStore",

@@ -30,6 +30,7 @@ def _row_to_meta(row: ThreadMetaRow) -> ThreadMeta:
     return ThreadMeta(
         thread_id=row.thread_id,
         tenant_id=row.tenant_id,
+        user_id=row.user_id,
         created_by=row.created_by,
         status=ThreadStatus(row.status),
         agent_name=row.agent_name,
@@ -51,6 +52,7 @@ class SqlThreadMetaStore(ThreadMetaStore):
         thread_id: UUID,
         tenant_id: UUID,
         created_by: str,
+        user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
     ) -> ThreadMeta:
@@ -58,6 +60,7 @@ class SqlThreadMetaStore(ThreadMetaStore):
         row = ThreadMetaRow(
             thread_id=thread_id,
             tenant_id=tenant_id,
+            user_id=user_id,
             created_by=created_by,
             status=ThreadStatus.ACTIVE.value,
             agent_name=agent_name,
@@ -87,12 +90,15 @@ class SqlThreadMetaStore(ThreadMetaStore):
         tenant_id: UUID,
         *,
         status: ThreadStatus | None = None,
+        user_id: UUID | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
         stmt = select(ThreadMetaRow).where(ThreadMetaRow.tenant_id == tenant_id)
         if status is not None:
             stmt = stmt.where(ThreadMetaRow.status == status.value)
+        if user_id is not None:
+            stmt = stmt.where(ThreadMetaRow.user_id == user_id)
         stmt = stmt.order_by(ThreadMetaRow.created_at.desc()).limit(limit).offset(offset)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()

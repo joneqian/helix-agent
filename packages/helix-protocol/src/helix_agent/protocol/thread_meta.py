@@ -30,6 +30,10 @@ class ThreadMeta(BaseModel):
 
     thread_id: UUID
     tenant_id: UUID
+    user_id: UUID | None = Field(
+        default=None,
+        description="owning tenant_user.id (Stream J.14); None for pre-J.14 threads",
+    )
     created_by: str = Field(description="actor_id of session creator (user / sa)")
     status: ThreadStatus = ThreadStatus.ACTIVE
     agent_name: str | None = Field(default=None, description="manifest name")

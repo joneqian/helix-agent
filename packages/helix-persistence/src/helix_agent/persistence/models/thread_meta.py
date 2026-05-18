@@ -19,6 +19,8 @@ class ThreadMetaRow(Base):
 
     thread_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    # Stream J.14 — owning user. Nullable, no FK (see migration 0015).
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         Text,
@@ -39,4 +41,7 @@ class ThreadMetaRow(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (Index("thread_meta_tenant_status_idx", "tenant_id", "status"),)
+    __table_args__ = (
+        Index("thread_meta_tenant_status_idx", "tenant_id", "status"),
+        Index("thread_meta_tenant_user_idx", "tenant_id", "user_id"),
+    )
