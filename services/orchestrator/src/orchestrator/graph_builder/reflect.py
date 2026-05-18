@@ -128,6 +128,7 @@ def _parse_reflection(text: str, *, plan: Plan | None) -> tuple[Reflection, Plan
                     revised_plan = _parse_revised_plan(data.get("revised_steps"), plan=plan)
                 return reflection, revised_plan
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            # Malformed reply — fall through to the fail-safe accept below.
             pass
     logger.warning("reflect.parse_failed — accepting to keep the loop bounded")
     return Reflection(verdict="accept", critique="reflection reply was unparseable"), None
