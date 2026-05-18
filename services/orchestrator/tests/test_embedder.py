@@ -64,11 +64,11 @@ async def test_openai_compatible_embedder_extracts_vectors() -> None:
             ]
         }
     )
-    embedder = OpenAICompatibleEmbedder(client=client, model="text-embedding-v3")
+    embedder = OpenAICompatibleEmbedder(client=client, model="text-embedding-v4")
     vectors = await embedder.embed(["a", "b"])
 
     assert vectors == [(0.1, 0.2), (0.3, 0.4)]
-    assert client.calls == [("text-embedding-v3", ["a", "b"])]
+    assert client.calls == [("text-embedding-v4", ["a", "b"])]
 
 
 @pytest.mark.asyncio
@@ -112,12 +112,12 @@ async def test_http_embedding_client_posts_and_parses() -> None:
         return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 2.0]}]})
 
     client = HTTPEmbeddingClient(api_key="sk-test", transport=httpx.MockTransport(_handler))
-    body = await client.embeddings(model="text-embedding-v3", texts=["hi"])
+    body = await client.embeddings(model="text-embedding-v4", texts=["hi"])
 
     assert body["data"][0]["embedding"] == [1.0, 2.0]
     assert seen["url"].endswith("/v1/embeddings")
     assert seen["auth"] == "Bearer sk-test"
-    assert seen["body"] == {"model": "text-embedding-v3", "input": ["hi"]}
+    assert seen["body"] == {"model": "text-embedding-v4", "input": ["hi"]}
 
 
 @pytest.mark.asyncio
