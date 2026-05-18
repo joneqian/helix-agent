@@ -234,6 +234,8 @@ services:
   #   --profile full   + migrate / control-plane / sandbox-supervisor / credential-proxy
   #   --profile e2e    + mock-upstream (only — the #60 egress e2e names the
   #                      services it needs explicitly; see test_fullstack_egress_e2e.py)
+  #   --profile observability + OTel Collector / Prometheus / Tempo / Loki /
+  #                      Promtail / Grafana / Alertmanager (Stream G.0)
   #
   # Prerequisite for ``exec_python`` to work end-to-end: the sandbox
   # execution image must be pre-built on the host daemon (it is launched
@@ -275,6 +277,9 @@ services:
       HELIX_AGENT_DB_DSN: postgresql+asyncpg://${HELIX_DB_USER:-helix_agent}:${HELIX_DB_PASSWORD:-helix_agent_dev}@pgbouncer:6432/${HELIX_DB_NAME:-helix_agent_dev}
       HELIX_AGENT_QUOTA_REDIS_URL: redis://redis:6379/0
       HELIX_AGENT_SANDBOX_SUPERVISOR_URL: http://sandbox-supervisor:8000
+      # Trace export (A.8) — reached only when the observability profile
+      # is also up; the SDK buffers + drops gracefully when it is not.
+      HELIX_AGENT_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
     ports:
       - "8000:8000"
     depends_on:
@@ -341,9 +346,118 @@ services:
       timeout: 3s
       retries: 20
 
+  # ----------------------------------------------------------------------
+  # Observability backend stack — Stream G.0 (Mini-ADR G-2).
+  #
+  # Self-hosted OTel Collector + Prometheus + Tempo + Loki + Promtail +
+  # Grafana + Alertmanager. Behind the ``observability`` profile — the
+  # default ``up`` and the app profiles don't pull it. Enable with
+  # ``docker compose --profile observability up``; add ``--profile full``
+  # to also run the helix services it observes.
+  # ----------------------------------------------------------------------
+
+  otel-collector:
+    # Receives OTLP from the helix services (A.8) → forwards traces to Tempo.
+    # Core distro is enough — the pipeline uses only otlp receiver/exporter.
+    profiles: ["observability"]
+    image: otel/opentelemetry-collector:0.119.0
+    container_name: helix-otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    depends_on:
+      - tempo
+
+  prometheus:
+    # Scrapes the helix services' /metrics; evaluates rules from
+    # tools/observability/rules/ (filled by G.1 / G.2).
+    profiles: ["observability"]
+    image: prom/prometheus:v3.1.0
+    container_name: helix-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../tools/observability/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  tempo:
+    # Trace store — receives OTLP from the collector. ``user: root`` so it
+    # can write the named volume (fresh volume is root-owned).
+    profiles: ["observability"]
+    image: grafana/tempo:2.7.0
+    container_name: helix-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    user: root
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+
+  loki:
+    # Log store — receives the helix services' stdout JSON from Promtail.
+    profiles: ["observability"]
+    image: grafana/loki:3.3.0
+    container_name: helix-loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    user: root
+    volumes:
+      - ./observability/loki-config.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+
+  promtail:
+    # Loki's log agent — discovers containers via the Docker socket.
+    profiles: ["observability"]
+    image: grafana/promtail:3.3.0
+    container_name: helix-promtail
+    command: ["-config.file=/etc/promtail/promtail.yaml"]
+    volumes:
+      - ./observability/promtail-config.yaml:/etc/promtail/promtail.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+
+  grafana:
+    # Unified view — Prometheus / Tempo / Loki datasources auto-provisioned.
+    profiles: ["observability"]
+    image: grafana/grafana:11.4.0
+    container_name: helix-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${HELIX_GRAFANA_ADMIN_PASSWORD:-helix_agent_dev}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../tools/observability/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+  alertmanager:
+    # Alert routing — minimal config in G.0; P0/P1/P2 routing lands in G.2.
+    profiles: ["observability"]
+    image: prom/alertmanager:v0.28.0
+    container_name: helix-alertmanager
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+
 volumes:
   postgres-data:
   minio-data:
+  prometheus-data:
+  tempo-data:
+  loki-data:
+  grafana-data:
 
 networks:
   # Sandbox egress network — created --internal (Mini-ADR F-14): no NAT /

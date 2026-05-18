@@ -1,0 +1,15 @@
+# Alertmanager config — Stream G.0.
+#
+# Minimal bootstrap so the container starts. The P0/P1/P2 severity
+# routing + 飞书/PagerDuty receivers land in G.2 (Mini-ADR G-1 — M0
+# keeps receivers as placeholders).
+
+route:
+  receiver: default
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default
