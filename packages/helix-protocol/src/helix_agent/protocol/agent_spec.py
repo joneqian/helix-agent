@@ -29,6 +29,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from helix_agent.protocol.reflection import ReflectionSpec
+
 # ---------------------------------------------------------------------------
 # metadata
 # ---------------------------------------------------------------------------
@@ -328,6 +330,10 @@ class AgentSpecBody(BaseModel):
     tools: list[ToolSpecEntry] = Field(default_factory=list)
     sandbox: SandboxSpec
     memory: MemorySpec | None = None
+    reflection: ReflectionSpec | None = Field(
+        default=None,
+        description="Stream J.2 — presence activates the self-critique reflect node",
+    )
     workflow: WorkflowSpec = Field(default_factory=WorkflowSpec)
     policies: PolicySpec = Field(default_factory=PolicySpec)
     code: CodePackageSpec | None = None

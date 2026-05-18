@@ -67,6 +67,7 @@ from helix_agent.runtime.middleware import (
 from orchestrator.errors import MaxStepsExceededError
 from orchestrator.graph_builder._config import cancellation_token
 from orchestrator.graph_builder.planner import PlannerNode, render_plan
+from orchestrator.graph_builder.reflect import ReflectNode
 from orchestrator.llm import LLMCaller
 from orchestrator.state import AgentState
 from orchestrator.tools.registry import Tool, ToolContext, ToolNotFoundError, ToolRegistry
@@ -89,6 +90,7 @@ def build_react_graph(
     llm_caller: LLMCaller,
     tool_registry: ToolRegistry,
     planner_node: PlannerNode | None = None,
+    reflect_node: ReflectNode | None = None,
     before_llm_chain: MiddlewareChain | None = None,
     after_llm_chain: MiddlewareChain | None = None,
     before_tool_dispatch_chain: MiddlewareChain | None = None,
@@ -103,6 +105,11 @@ def build_react_graph(
     ``planner`` node: ``START → planner → agent``. The planner writes
     ``AgentState.plan`` and ``agent_node`` renders it into its system
     context every step. ``None`` → plain ``START → agent`` ReAct.
+
+    When ``reflect_node`` is supplied (Stream J.2 — manifest
+    ``reflection:`` block) the agent's no-tool-calls exit routes through
+    a ``reflect`` node that self-critiques and may loop back to the
+    agent instead of ending. ``None`` → the agent ends directly.
 
     All chain arguments are optional — ``None`` means "no middleware at
     this anchor", and ``agent_node`` / ``tools_node`` short-circuit the
@@ -215,9 +222,25 @@ def build_react_graph(
         graph.add_edge("planner", "agent")
     else:
         graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
+    if reflect_node is not None:
+        # When the agent stops issuing tool_calls, route to ``reflect``
+        # instead of ending — it critiques and may send the agent back.
+        graph.add_node("reflect", reflect_node)  # type: ignore[arg-type]
+        graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: "reflect"})
+        graph.add_conditional_edges("reflect", _after_reflect, {"agent": "agent", END: END})
+    else:
+        graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")
     return graph
+
+
+def _after_reflect(state: AgentState) -> Literal["agent", "__end__"]:
+    """Route out of the ``reflect`` node — ``revise`` loops back to the
+    agent, ``accept`` (and budget-exhausted) ends the run."""
+    reflections = state.get("reflections", [])
+    if reflections and reflections[-1].verdict == "revise":
+        return "agent"
+    return "__end__"
 
 
 def _inject_plan(messages: list[BaseMessage], plan: Plan) -> list[BaseMessage]:

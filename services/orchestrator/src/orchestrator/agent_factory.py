@@ -39,7 +39,7 @@ from helix_agent.protocol import AgentSpec, ModelSpec
 from helix_agent.runtime.middleware import MiddlewareChain
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from orchestrator.errors import AgentFactoryError
-from orchestrator.graph_builder import build_react_graph, make_planner_node
+from orchestrator.graph_builder import build_react_graph, make_planner_node, make_reflect_node
 from orchestrator.llm import (
     AnthropicProvider,
     HTTPAnthropicClient,
@@ -111,10 +111,17 @@ async def build_agent(
     # Stream J.1 — a ``plan_execute`` manifest front-loads a planner node
     # that decomposes the task before the ReAct loop runs.
     planner_node = make_planner_node(router) if spec.spec.workflow.type == "plan_execute" else None
+    # Stream J.2 — a ``reflection:`` block inserts a self-critique node
+    # before the run ends.
+    reflection = spec.spec.reflection
+    reflect_node = (
+        make_reflect_node(router, budget=reflection.budget) if reflection is not None else None
+    )
     graph = build_react_graph(
         llm_caller=router,
         tool_registry=registry,
         planner_node=planner_node,
+        reflect_node=reflect_node,
         before_llm_chain=chains.before_llm_call,
         after_llm_chain=chains.after_llm_call,
         before_tool_dispatch_chain=chains.before_tool_dispatch,

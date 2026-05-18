@@ -9,9 +9,9 @@ from orchestrator import DEFAULT_MAX_STEPS, AgentState
 
 def test_required_keys_present() -> None:
     """E.6 ``step_count`` / ``max_steps`` on top of E.1 ``messages``;
-    J.1 added the ``plan`` channel (``NotRequired`` — react inputs omit it)."""
+    J.1 added ``plan`` and J.2 ``reflections`` (both ``NotRequired``)."""
     annotations = inspect.get_annotations(AgentState)
-    assert set(annotations) == {"messages", "step_count", "max_steps", "plan"}
+    assert set(annotations) == {"messages", "step_count", "max_steps", "plan", "reflections"}
 
 
 def test_default_max_steps_constant_is_documented() -> None:
