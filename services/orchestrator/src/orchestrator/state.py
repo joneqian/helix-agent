@@ -18,12 +18,13 @@ checkpointed:
 
 from __future__ import annotations
 
+from operator import add
 from typing import Annotated, NotRequired, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from helix_agent.protocol import Plan
+from helix_agent.protocol import Plan, Reflection
 
 #: Default ReAct hard limit — see Mini-ADR E-6 in the design doc + the
 #: "ReAct 无限循环" risk row. Manifest may override per-agent.
@@ -43,9 +44,14 @@ class AgentState(TypedDict):
     manifest's ``workflow.type`` is ``plan_execute``; it is absent for
     plain ``react`` graphs. ``NotRequired`` so the ReAct input shape is
     unchanged — readers use ``state.get("plan")``.
+
+    ``reflections`` (Stream J.2) accumulates one :class:`Reflection` per
+    ``reflect`` node entry — an ``operator.add`` reducer appends. Absent
+    unless the manifest carries a ``reflection:`` block.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
     step_count: int
     max_steps: int
     plan: NotRequired[Plan | None]
+    reflections: NotRequired[Annotated[list[Reflection], add]]

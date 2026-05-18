@@ -63,6 +63,7 @@ from helix_agent.protocol.quota import (
     TenantQuotaRecord,
     TokenReservationRecord,
 )
+from helix_agent.protocol.reflection import Reflection, ReflectionSpec
 from helix_agent.protocol.service_account import (
     API_KEY_STORED_PREFIX_LEN,
     ApiKey,
@@ -126,6 +127,8 @@ __all__ = [
     "Principal",
     "QuotaDimension",
     "QuotaPurpose",
+    "Reflection",
+    "ReflectionSpec",
     "ReservationState",
     "ReserveRequest",
     "ReserveResult",

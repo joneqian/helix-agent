@@ -297,6 +297,25 @@ async def test_build_agent_plan_execute_adds_planner_node() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_agent_no_reflection_has_no_reflect_node() -> None:
+    """Without a ``reflection:`` block the graph has no reflect node."""
+    async with make_checkpointer("memory") as cp:
+        built = await build_agent(_spec(), secret_store=_secret_store(), checkpointer=cp)
+    assert "reflect" not in built.graph.nodes
+
+
+@pytest.mark.asyncio
+async def test_build_agent_reflection_block_adds_reflect_node() -> None:
+    """A ``reflection:`` block inserts a self-critique reflect node (J.2)."""
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["reflection"] = {"budget": 3}
+    spec = AgentSpec.model_validate(doc)
+    async with make_checkpointer("memory") as cp:
+        built = await build_agent(spec, secret_store=_secret_store(), checkpointer=cp)
+    assert "reflect" in built.graph.nodes
+
+
+@pytest.mark.asyncio
 async def test_build_agent_missing_key_raises() -> None:
     doc = deepcopy(_MINIMAL_SPEC)
     del doc["spec"]["model"]["api_key_ref"]

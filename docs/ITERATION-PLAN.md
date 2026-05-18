@@ -355,7 +355,7 @@
 > 量级与 M0 若干 Stream 总和相当。每子项设计先行 + TDD + 一 PR 一子任务 + 零技术债。原 M1-D 的 `reflection/resolvers.py`、`uploads_middleware`、subagent executor 及 M1-F 的 Sub-Agent 项提前并入本 Stream。
 
 - [x] **J.1 规划 / 任务分解** — `planner` 图节点:`workflow.type==plan_execute` 时 `START→planner→agent⇄tools`,planner 一次 LLM 调用把任务拆成结构化 `Plan`(进 `AgentState.plan`),agent 每步把计划渲染进 system context。先拆解再执行。运行中重规划(`update_plan`)与 J.2 反思耦合,随 J.2 一并落。STREAM-J-DESIGN § 5。
-- [ ] **J.2 反思 / 自我修正** — 通用自我批判 / 修正中间件（非现有 loop detection）；含运行中重规划（reflect 节点触发 J.1 的 `Plan` 修订）
+- [x] **J.2 反思 / 自我修正** — `reflect` 图节点:`reflection:` 块激活,agent 无 tool_call 退出时经 `reflect` 自我批判 —— `accept` 结束 / `revise` 回 agent 带 critique;`budget` 上限封 reflect↔agent 环;unparseable 回复 fail-safe 到 accept。含运行中重规划(`revise` verdict 可带 `revised_steps` 改写 `Plan`)。与 `loop_detection` 中间件正交。STREAM-J-DESIGN § 6。
 - [ ] **J.3 长期记忆** — 跨会话记忆 store + 检索，接入上下文组装
 - [ ] **J.4 Sub-agent / 多智能体委派** — agent 派生 / 委派 / agent-as-tool，隔离 + 取消 + token 预算
 - [ ] **J.5 知识 / 检索（RAG）** — 检索增强；工具检索 vs 向量库由 STREAM-J-DESIGN 定

@@ -1,0 +1,270 @@
+"""Unit tests for the reflect node — Stream J.2 (self-critique).
+
+Covers the reflection parser's tolerance + fail-safe, the ``reflect``
+graph node (verdict / budget / cancellation), and the end-to-end
+reflect↔agent loop using a scripted ``LLMCaller``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+import pytest
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+
+from helix_agent.protocol import Plan, Reflection
+from helix_agent.runtime.cancellation import (
+    CANCELLATION_TOKEN_KEY,
+    CancellationToken,
+    RunCancelledError,
+)
+from helix_agent.runtime.checkpointer import make_checkpointer
+from orchestrator import GraphRunner, ToolRegistry, build_react_graph, make_reflect_node
+from orchestrator.graph_builder.reflect import _parse_reflection
+from orchestrator.tools.registry import ToolSpec
+
+
+@dataclass
+class _RecordingLLM:
+    """LLMCaller stub: returns scripted responses and records each prompt."""
+
+    responses: list[AIMessage]
+    calls: list[list[BaseMessage]] = field(default_factory=list)
+
+    async def __call__(
+        self,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolSpec],
+    ) -> AIMessage:
+        del tools
+        idx = len(self.calls)
+        self.calls.append(list(messages))
+        if idx >= len(self.responses):
+            raise RuntimeError(f"scripted LLM ran out of responses at call {idx}")
+        return self.responses[idx]
+
+
+_PLAN = Plan.model_validate({"goal": "g", "steps": [{"id": "1", "description": "old step"}]})
+
+
+# ---------------------------------------------------------------------------
+# _parse_reflection
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reflection_accept() -> None:
+    reflection, revised = _parse_reflection(
+        '{"verdict": "accept", "critique": "looks good"}', plan=None
+    )
+    assert reflection.verdict == "accept"
+    assert reflection.critique == "looks good"
+    assert revised is None
+
+
+def test_parse_reflection_revise() -> None:
+    reflection, revised = _parse_reflection(
+        'sure: {"verdict": "revise", "critique": "missed a requirement"}', plan=None
+    )
+    assert reflection.verdict == "revise"
+    assert revised is None
+
+
+def test_parse_reflection_revise_with_revised_plan() -> None:
+    reflection, revised = _parse_reflection(
+        '{"verdict": "revise", "critique": "plan stale", "revised_steps": ["new a", "new b"]}',
+        plan=_PLAN,
+    )
+    assert reflection.verdict == "revise"
+    assert revised is not None
+    assert [s.description for s in revised.steps] == ["new a", "new b"]
+    assert revised.goal == "g"
+
+
+def test_parse_reflection_revised_steps_ignored_without_a_plan() -> None:
+    _reflection, revised = _parse_reflection(
+        '{"verdict": "revise", "critique": "x", "revised_steps": ["a"]}', plan=None
+    )
+    assert revised is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "no json here",
+        '{"critique": "missing verdict"}',
+        '{"verdict": "maybe", "critique": "bad verdict"}',
+        "{ not valid json }",
+    ],
+)
+def test_parse_reflection_fails_safe_to_accept(text: str) -> None:
+    """An unparseable reflection must accept — never loop forever."""
+    reflection, revised = _parse_reflection(text, plan=None)
+    assert reflection.verdict == "accept"
+    assert revised is None
+
+
+# ---------------------------------------------------------------------------
+# reflect node
+# ---------------------------------------------------------------------------
+
+
+def _state(messages: list[BaseMessage], **extra: object) -> dict[str, object]:
+    return {"messages": messages, "step_count": 1, "max_steps": 5, **extra}
+
+
+@pytest.mark.asyncio
+async def test_reflect_node_accept_emits_reflection_only() -> None:
+    llm = _RecordingLLM(responses=[AIMessage(content='{"verdict": "accept", "critique": "ok"}')])
+    node = make_reflect_node(llm, budget=2)
+
+    out = await node(  # type: ignore[arg-type]
+        _state([HumanMessage(content="task"), AIMessage(content="answer")]),
+        {"configurable": {}},
+    )
+    assert [r.verdict for r in out["reflections"]] == ["accept"]
+    # accept → no feedback message, no replan.
+    assert "messages" not in out
+    assert "plan" not in out
+
+
+@pytest.mark.asyncio
+async def test_reflect_node_revise_appends_feedback() -> None:
+    llm = _RecordingLLM(
+        responses=[AIMessage(content='{"verdict": "revise", "critique": "incomplete"}')]
+    )
+    node = make_reflect_node(llm, budget=2)
+
+    out = await node(  # type: ignore[arg-type]
+        _state([HumanMessage(content="task"), AIMessage(content="weak answer")]),
+        {"configurable": {}},
+    )
+    assert out["reflections"][0].verdict == "revise"
+    feedback = out["messages"][0]
+    assert isinstance(feedback, HumanMessage)
+    assert "incomplete" in str(feedback.content)
+
+
+@pytest.mark.asyncio
+async def test_reflect_node_revise_replans_for_plan_execute() -> None:
+    llm = _RecordingLLM(
+        responses=[
+            AIMessage(
+                content='{"verdict": "revise", "critique": "plan stale", '
+                '"revised_steps": ["fresh step"]}'
+            )
+        ]
+    )
+    node = make_reflect_node(llm, budget=2)
+
+    out = await node(  # type: ignore[arg-type]
+        _state([HumanMessage(content="task"), AIMessage(content="x")], plan=_PLAN),
+        {"configurable": {}},
+    )
+    assert out["plan"].steps[0].description == "fresh step"
+
+
+@pytest.mark.asyncio
+async def test_reflect_node_budget_exhausted_force_accepts_without_llm() -> None:
+    llm = _RecordingLLM(responses=[])  # must never be called
+    node = make_reflect_node(llm, budget=1)
+
+    out = await node(  # type: ignore[arg-type]
+        _state(
+            [HumanMessage(content="task"), AIMessage(content="answer")],
+            reflections=[Reflection(verdict="revise", critique="earlier")],
+        ),
+        {"configurable": {}},
+    )
+    assert out["reflections"][0].verdict == "accept"
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reflect_node_honours_cancellation() -> None:
+    token = CancellationToken()
+    token.cancel()
+    node = make_reflect_node(_RecordingLLM(responses=[AIMessage(content="{}")]), budget=2)
+    config: RunnableConfig = {"configurable": {CANCELLATION_TOKEN_KEY: token}}
+    with pytest.raises(RunCancelledError):
+        await node(_state([HumanMessage(content="t")]), config)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# reflect↔agent loop — end to end
+# ---------------------------------------------------------------------------
+
+
+async def _run(llm: _RecordingLLM, *, budget: int, max_steps: int = 8) -> dict[str, object]:
+    graph = build_react_graph(
+        llm_caller=llm,
+        tool_registry=ToolRegistry(),
+        reflect_node=make_reflect_node(llm, budget=budget),
+    )
+    async with make_checkpointer("memory") as cp:
+        compiled = GraphRunner(checkpointer=cp).compile(graph)
+        return await compiled.ainvoke(
+            {
+                "messages": [SystemMessage(content="help"), HumanMessage(content="do it")],
+                "step_count": 0,
+                "max_steps": max_steps,
+            },
+            config={"configurable": {"thread_id": "reflect-e2e"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_reflect_loop_revise_then_accept() -> None:
+    llm = _RecordingLLM(
+        responses=[
+            AIMessage(content="draft answer"),  # agent
+            AIMessage(content='{"verdict": "revise", "critique": "add detail"}'),  # reflect
+            AIMessage(content="final answer"),  # agent (after feedback)
+            AIMessage(content='{"verdict": "accept", "critique": "good"}'),  # reflect
+        ]
+    )
+    result = await _run(llm, budget=3)
+
+    assert [r.verdict for r in result["reflections"]] == ["revise", "accept"]
+    assert result["messages"][-1].content == "final answer"
+    assert len(llm.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_reflect_budget_caps_the_loop() -> None:
+    """Once the budget is hit the reflect node force-accepts and the run
+    ends even though the LLM keeps saying revise."""
+    llm = _RecordingLLM(
+        responses=[
+            AIMessage(content="answer 1"),  # agent
+            AIMessage(content='{"verdict": "revise", "critique": "again"}'),  # reflect (real)
+            AIMessage(content="answer 2"),  # agent
+            # reflect entry 2 sees budget=1 reached → force-accept, no LLM call
+        ]
+    )
+    result = await _run(llm, budget=1)
+
+    # One real reflection + one budget-forced accept.
+    assert [r.verdict for r in result["reflections"]] == ["revise", "accept"]
+    assert result["messages"][-1].content == "answer 2"
+    assert len(llm.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_react_graph_without_reflect_has_no_reflect_node() -> None:
+    llm = _RecordingLLM(responses=[AIMessage(content="done")])
+    graph = build_react_graph(llm_caller=llm, tool_registry=ToolRegistry())
+    async with make_checkpointer("memory") as cp:
+        compiled = GraphRunner(checkpointer=cp).compile(graph)
+        result = await compiled.ainvoke(
+            {
+                "messages": [HumanMessage(content="hi")],
+                "step_count": 0,
+                "max_steps": 5,
+            },
+            config={"configurable": {"thread_id": "no-reflect"}},
+        )
+    # No reflect node ran — the add-reducer channel stays empty.
+    assert not result.get("reflections")
