@@ -25,7 +25,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from testcontainers.postgres import PostgresContainer
 
 from helix_agent.persistence import (
@@ -39,6 +39,7 @@ from helix_agent.persistence.rls import (
     bypass_rls_var,
     current_tenant_id_var,
 )
+from helix_agent.persistence.tenant_user import SqlTenantUserStore
 from helix_agent.persistence.thread_meta import SqlThreadMetaStore
 
 pytestmark = pytest.mark.integration
@@ -282,5 +283,63 @@ async def test_feedback_tenants_cannot_see_each_other(
         b_rows = await store.list_for_thread(thread_id=thread_id)
         assert [r.rating for r in b_rows] == ["down"]
         assert all(r.tenant_id == tenant_b for r in b_rows)
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# tenant_user table — Stream J.14
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tenant_user_rls_store(
+    postgres_container: PostgresContainer,
+) -> Iterator[tuple[SqlTenantUserStore, async_sessionmaker[AsyncSession], AsyncEngine]]:
+    """A :class:`SqlTenantUserStore` on the unprivileged role — RLS enforced."""
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("sqlalchemy.url", _sync_dsn(postgres_container))
+    command.upgrade(cfg, "head")
+    _provision_app_role(_sync_dsn(postgres_container))
+    app_async_dsn = _rewrite_credentials(_async_dsn(postgres_container), APP_ROLE, APP_PASSWORD)
+    engine = create_async_engine_from_config(DatabaseConfig(dsn=app_async_dsn))
+    session_factory = build_rls_sessionmaker(create_async_session_factory(engine))
+    yield SqlTenantUserStore(session_factory), session_factory, engine
+
+
+@pytest.mark.asyncio
+async def test_tenant_user_tenants_cannot_see_each_other(
+    tenant_user_rls_store: tuple[SqlTenantUserStore, async_sessionmaker[AsyncSession], AsyncEngine],
+) -> None:
+    """Two tenants resolving the *same* subject_id stay isolated.
+
+    A raw ``SELECT count(*) FROM tenant_user`` carries no tenant
+    predicate, so a leak would surface both rows — this proves the RLS
+    policy isolates, not the store's ``get`` filter.
+    """
+    store, session_factory, engine = tenant_user_rls_store
+    try:
+        tenant_a, tenant_b = uuid4(), uuid4()
+
+        current_tenant_id_var.set(tenant_a)
+        user_a = await store.resolve(
+            tenant_id=tenant_a, subject_type="user", subject_id="shared-sub"
+        )
+
+        current_tenant_id_var.set(tenant_b)
+        user_b = await store.resolve(
+            tenant_id=tenant_b, subject_type="user", subject_id="shared-sub"
+        )
+        assert user_b.id != user_a.id
+
+        # Raw count — no tenant predicate; RLS must scope it to 1.
+        current_tenant_id_var.set(tenant_a)
+        async with session_factory() as session:
+            count_a = await session.scalar(text("SELECT count(*) FROM tenant_user"))
+        assert count_a == 1
+
+        # ``get`` for the other tenant's user resolves to nothing.
+        assert await store.get(user_b.id, tenant_id=tenant_a) is None
+        assert await store.get(user_a.id, tenant_id=tenant_a) is not None
     finally:
         await engine.dispose()

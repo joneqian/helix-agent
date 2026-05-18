@@ -29,6 +29,7 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         thread_id: UUID,
         tenant_id: UUID,
         created_by: str,
+        user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
     ) -> ThreadMeta:
@@ -39,6 +40,7 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         meta = ThreadMeta(
             thread_id=thread_id,
             tenant_id=tenant_id,
+            user_id=user_id,
             created_by=created_by,
             status=ThreadStatus.ACTIVE,
             agent_name=agent_name,
@@ -60,12 +62,15 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         tenant_id: UUID,
         *,
         status: ThreadStatus | None = None,
+        user_id: UUID | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
         rows = [r for r in self._rows.values() if r.tenant_id == tenant_id]
         if status is not None:
             rows = [r for r in rows if r.status == status]
+        if user_id is not None:
+            rows = [r for r in rows if r.user_id == user_id]
         rows.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return rows[offset : offset + limit]
 

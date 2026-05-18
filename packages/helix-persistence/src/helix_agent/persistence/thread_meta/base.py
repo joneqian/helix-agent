@@ -44,10 +44,16 @@ class ThreadMetaStore(abc.ABC):
         thread_id: UUID,
         tenant_id: UUID,
         created_by: str,
+        user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
     ) -> ThreadMeta:
-        """Insert a new thread; ``thread_id`` must be unique."""
+        """Insert a new thread; ``thread_id`` must be unique.
+
+        ``user_id`` records the owning :class:`~helix_agent.protocol.TenantUser`
+        (Stream J.14). ``None`` for machine-triggered threads with no
+        per-user instance.
+        """
 
     @abc.abstractmethod
     async def get(self, thread_id: UUID, *, tenant_id: UUID) -> ThreadMeta | None:
@@ -63,10 +69,15 @@ class ThreadMetaStore(abc.ABC):
         tenant_id: UUID,
         *,
         status: ThreadStatus | None = None,
+        user_id: UUID | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
-        """Paginated list of threads for ``tenant_id``, newest first."""
+        """Paginated list of threads for ``tenant_id``, newest first.
+
+        When ``user_id`` is given, only that user's threads are returned
+        (Stream J.14 per-user scoping).
+        """
 
     @abc.abstractmethod
     async def update_status(

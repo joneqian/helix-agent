@@ -82,6 +82,26 @@ async def test_get_filters_by_tenant(sql_store: SqlStoreFixture) -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_id_round_trip_and_list_filter(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant_id, user_a, user_b = uuid4(), uuid4(), uuid4()
+        owned = await store.create(
+            thread_id=uuid4(), tenant_id=tenant_id, created_by="x", user_id=user_a
+        )
+        assert owned.user_id == user_a
+        await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x", user_id=user_b)
+        unowned = await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x")
+        assert unowned.user_id is None
+
+        only_a = await store.list_by_tenant(tenant_id, user_id=user_a)
+        assert [m.user_id for m in only_a] == [user_a]
+        assert len(await store.list_by_tenant(tenant_id)) == 3
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_duplicate_thread_id_rejected(sql_store: SqlStoreFixture) -> None:
     store, engine = sql_store
     try:
