@@ -26,6 +26,7 @@ from orchestrator.llm import (
     HTTPAnthropicClient,
     RecordingAnthropicClient,
 )
+from orchestrator.multimodal import InMemoryImageResolver, ResolvedImage, image_ref_block
 from orchestrator.tools.registry import ToolSpec
 
 # ---------------------------------------------------------------------------
@@ -407,3 +408,47 @@ def test_recording_response_default_is_empty_dict() -> None:
     assert client.calls == []
     # Confidence check: json roundtrip works on the default response.
     json.dumps(dict(client.response))
+
+
+# ---------------------------------------------------------------------------
+# Multimodal — image_ref content blocks (Stream J.6 Path A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_human_image_ref_emits_base64_image_block() -> None:
+    uri = "helix://image/demo.png"
+    resolver = InMemoryImageResolver(
+        images={uri: ResolvedImage(media_type="image/png", data=b"PNGBYTES")}
+    )
+    client = RecordingAnthropicClient(response={"content": [{"type": "text", "text": "ok"}]})
+    provider = AnthropicProvider(client=client, model="claude-sonnet-4-5", image_resolver=resolver)
+
+    await provider.complete(
+        messages=[
+            HumanMessage(content=[{"type": "text", "text": "what is this?"}, image_ref_block(uri)])
+        ],
+        tools=[],
+    )
+
+    content = client.calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "what is this?"}
+    assert content[1]["type"] == "image"
+    assert content[1]["source"]["type"] == "base64"
+    assert content[1]["source"]["media_type"] == "image/png"
+    assert content[1]["source"]["data"]
+
+
+@pytest.mark.asyncio
+async def test_human_image_ref_dropped_without_resolver() -> None:
+    uri = "helix://image/demo.png"
+    client = RecordingAnthropicClient(response={"content": [{"type": "text", "text": "ok"}]})
+    provider = AnthropicProvider(client=client, model="claude-sonnet-4-5")  # no image_resolver
+
+    await provider.complete(
+        messages=[HumanMessage(content=[{"type": "text", "text": "hi"}, image_ref_block(uri)])],
+        tools=[],
+    )
+
+    # Image silently dropped → plain-text content, no crash.
+    assert client.calls[0]["messages"][0]["content"] == "hi"

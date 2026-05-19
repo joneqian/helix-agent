@@ -10,7 +10,10 @@ Wire-format mapping (covered, deliberately minimal for M0):
 
 - ``SystemMessage`` → top-level ``system`` field. Multiple system
   messages are concatenated with ``\\n\\n`` separators.
-- ``HumanMessage`` → ``{"role": "user", "content": <text>}``.
+- ``HumanMessage`` → ``{"role": "user", "content": <text>}``; when the
+  message carries ``image_ref`` blocks (J.6 Path A) ``content`` becomes a
+  block list with ``{"type": "image", "source": {...}}`` entries, the
+  images resolved to base64 via an :class:`ImageResolver`.
 - ``AIMessage`` with text only → ``{"role": "assistant", "content": <text>}``.
 - ``AIMessage`` with ``tool_calls`` → ``{"role": "assistant", "content":
   [{"type": "text", ...}, {"type": "tool_use", "id": ..., "name": ...,
@@ -20,8 +23,6 @@ Wire-format mapping (covered, deliberately minimal for M0):
 
 Out of scope for M0 (deferred to M1-D hardening):
 
-- Multimodal content (images, PDF). Anthropic supports them; we don't
-  surface them in :class:`BaseMessage` yet.
 - Streaming responses (``stream=true``). Routed through E.14 SSE later.
 - Cache control and tool ``cache_control`` blocks.
 
@@ -55,6 +56,7 @@ from helix_agent.runtime.middleware import (
     LLMRateLimitError,
     LLMServerError,
 )
+from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -212,6 +214,9 @@ class AnthropicProvider:
     #: Sampling temperature (``ModelSpec.temperature``). ``None`` omits
     #: it from the request so the API applies its own default.
     temperature: float | None = None
+    #: Resolves ``image_ref`` content blocks to bytes at call time (J.6
+    #: Path A). ``None`` → image blocks are dropped with a warning.
+    image_resolver: ImageResolver | None = None
 
     async def complete(
         self,
@@ -219,7 +224,7 @@ class AnthropicProvider:
         messages: Sequence[BaseMessage],
         tools: Sequence[ToolSpec],
     ) -> AIMessage:
-        system, mapped = _to_anthropic_messages(messages)
+        system, mapped = await _to_anthropic_messages(messages, self.image_resolver)
         tool_payload = [_to_anthropic_tool(spec) for spec in tools] if tools else None
 
         body = await self.client.messages(
@@ -240,8 +245,8 @@ def _truncate(text: str) -> str:
     return text[:_ERROR_BODY_CHAR_CAP] + "...[truncated]"
 
 
-def _to_anthropic_messages(
-    messages: Sequence[BaseMessage],
+async def _to_anthropic_messages(
+    messages: Sequence[BaseMessage], resolver: ImageResolver | None
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Split system content from the message list and map the rest.
 
@@ -256,7 +261,7 @@ def _to_anthropic_messages(
         if isinstance(msg, SystemMessage):
             system_parts.append(_message_text(msg))
         elif isinstance(msg, HumanMessage):
-            mapped.append({"role": "user", "content": _message_text(msg)})
+            mapped.append({"role": "user", "content": await _human_content(msg, resolver)})
         elif isinstance(msg, AIMessage):
             mapped.append(_ai_message_to_anthropic(msg))
         elif isinstance(msg, ToolMessage):
@@ -330,6 +335,38 @@ def _message_text(msg: BaseMessage) -> str:
             if isinstance(text, str):
                 parts.append(text)
     return "".join(parts)
+
+
+async def _human_content(
+    msg: HumanMessage, resolver: ImageResolver | None
+) -> str | list[dict[str, Any]]:
+    """Map a ``HumanMessage`` to Anthropic ``content``.
+
+    Plain text → a string. With ``image_ref`` blocks (J.6 Path A) → a
+    block list whose images are resolved to base64 ``image`` blocks. A
+    missing resolver drops the images with a warning so a text-only
+    deployment never crashes on an image-bearing message.
+    """
+    text, image_refs = split_human_content(msg.content)
+    if not image_refs:
+        return text
+    if resolver is None:
+        logger.warning("anthropic_adapter.image_dropped_no_resolver count=%d", len(image_refs))
+        return text
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for ref in image_refs:
+        resolved = await resolver.resolve(ref)
+        blocks.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": resolved.media_type,
+                    "data": resolved.base64_data,
+                },
+            }
+        )
+    return blocks
 
 
 def _to_anthropic_tool(spec: ToolSpec) -> dict[str, Any]:

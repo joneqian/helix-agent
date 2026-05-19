@@ -26,6 +26,7 @@ from orchestrator.llm import (
     OpenAIProvider,
     RecordingOpenAIClient,
 )
+from orchestrator.multimodal import InMemoryImageResolver, ResolvedImage, image_ref_block
 from orchestrator.tools.registry import ToolSpec
 
 # ---------------------------------------------------------------------------
@@ -375,3 +376,45 @@ async def test_http_200_non_object_body_raises_server_error() -> None:
     client = _http_client(lambda _req: httpx.Response(200, json=["nope"]))
     with pytest.raises(LLMServerError, match="non-object"):
         await _call(client)
+
+
+# ---------------------------------------------------------------------------
+# Multimodal — image_ref content blocks (Stream J.6 Path A)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_human_image_ref_emits_image_url_block() -> None:
+    uri = "helix://image/demo.png"
+    resolver = InMemoryImageResolver(
+        images={uri: ResolvedImage(media_type="image/png", data=b"PNGBYTES")}
+    )
+    client = RecordingOpenAIClient(response={"choices": [{"message": {"content": "ok"}}]})
+    provider = OpenAIProvider(client=client, model="gpt-4o", image_resolver=resolver)
+
+    await provider.complete(
+        messages=[
+            HumanMessage(content=[{"type": "text", "text": "what is this?"}, image_ref_block(uri)])
+        ],
+        tools=[],
+    )
+
+    content = client.calls[0]["messages"][0]["content"]
+    assert content[0] == {"type": "text", "text": "what is this?"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_human_image_ref_dropped_without_resolver() -> None:
+    uri = "helix://image/demo.png"
+    client = RecordingOpenAIClient(response={"choices": [{"message": {"content": "ok"}}]})
+    provider = OpenAIProvider(client=client, model="gpt-4o")  # no image_resolver
+
+    await provider.complete(
+        messages=[HumanMessage(content=[{"type": "text", "text": "hi"}, image_ref_block(uri)])],
+        tools=[],
+    )
+
+    # Image silently dropped → plain-text content, no crash.
+    assert client.calls[0]["messages"][0]["content"] == "hi"
