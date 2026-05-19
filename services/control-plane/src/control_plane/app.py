@@ -85,7 +85,9 @@ from control_plane.runtime import (
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
+    make_knowledge_retriever,
     resolve_embedder,
+    resolve_reranker,
     resolve_web_search_client,
 )
 from control_plane.settings import Settings
@@ -361,12 +363,24 @@ def create_app(
                     model=resolved_settings.embedding_model,
                     secret_store=resolved_secret_store,
                 )
+                # Stream J.5 — the knowledge retriever backing knowledge_search:
+                # hybrid recall + an optional (deployment-configured) LLM rerank.
+                reranker = await resolve_reranker(
+                    api_key_ref=resolved_settings.rerank_api_key_ref,
+                    provider=resolved_settings.rerank_provider,
+                    model=resolved_settings.rerank_model,
+                    secret_store=resolved_secret_store,
+                )
+                knowledge_retriever = make_knowledge_retriever(
+                    store=resolved_knowledge_store, embedder=embedder, reranker=reranker
+                )
                 base_tool_env = build_tool_env(
                     resolved_tenant_config_service,
                     web_search_client=web_search_client,
                     supervisor_client=resolved_supervisor_client,
                     mcp_pool=mcp_pool,
                     artifact_store=resolved_artifact_store,
+                    knowledge_retriever=knowledge_retriever,
                 )
                 middleware_env = build_middleware_env()
                 memory_env = MemoryEnv(store=resolved_memory_store, embedder=embedder)

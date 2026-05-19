@@ -24,23 +24,33 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
-from helix_agent.persistence import ArtifactStore
-from helix_agent.protocol import AgentSpec
+from helix_agent.persistence import ArtifactStore, KnowledgeStore
+from helix_agent.protocol import AgentSpec, ModelSpec
 from helix_agent.runtime.audit import DefaultSecretRedactor
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
 from helix_agent.runtime.runs import RunManager
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
-from orchestrator import BuiltAgent, MemoryEnv, MiddlewareEnv, ToolEnv, build_agent
+from orchestrator import (
+    BuiltAgent,
+    MemoryEnv,
+    MiddlewareEnv,
+    ToolEnv,
+    build_agent,
+    build_llm_router,
+)
 from orchestrator.llm import Embedder, HTTPEmbeddingClient, OpenAICompatibleEmbedder
 from orchestrator.tools import (
     AllowlistProvider,
     HTTPSupervisorClient,
     HTTPTavilyClient,
+    KnowledgeRetriever,
+    LLMReranker,
     MCPClient,
     MCPServerConfig,
     MCPServerPool,
+    Reranker,
     StdioMCPClient,
     SupervisorClient,
     TavilyClient,
@@ -138,6 +148,29 @@ async def resolve_embedder(
         return None
     api_key = await secret_store.get(parse_secret_ref(api_key_ref))
     return OpenAICompatibleEmbedder(client=HTTPEmbeddingClient(api_key=api_key), model=model)
+
+
+async def resolve_reranker(
+    *,
+    api_key_ref: str | None,
+    provider: str,
+    model: str,
+    secret_store: SecretStore,
+) -> Reranker | None:
+    """Resolve the knowledge-retrieval reranker (Stream J.5).
+
+    ``None`` ref → ``None`` — hybrid search then returns the RRF-fused
+    order without an LLM rerank pass (a graceful degradation, not a
+    failure). Otherwise an :class:`LLMReranker` over an OpenAI-compatible
+    chat model resolved from ``api_key_ref``.
+    """
+    if api_key_ref is None:
+        return None
+    model_spec = ModelSpec.model_validate(
+        {"provider": provider, "name": model, "api_key_ref": api_key_ref}
+    )
+    router = await build_llm_router(model_spec, secret_store=secret_store)
+    return LLMReranker(llm_caller=router)
 
 
 def _tenant_allowlist_provider(service: TenantConfigService) -> AllowlistProvider:
@@ -243,13 +276,15 @@ def build_tool_env(
     supervisor_client: SupervisorClient | None = None,
     mcp_pool: MCPServerPool | None = None,
     artifact_store: ArtifactStore | None = None,
+    knowledge_retriever: KnowledgeRetriever | None = None,
 ) -> ToolEnv:
     """Assemble the M0 :class:`ToolEnv`.
 
     Wires the HTTP tool's per-tenant allowlist, and — when supplied —
     the ``web_search`` Tavily client, the ``exec_python`` Sandbox
-    Supervisor client, the ``mcp`` server pool, and the J.9 artifact
-    store backing ``save_artifact`` / ``list_artifacts``.
+    Supervisor client, the ``mcp`` server pool, the J.9 artifact store
+    backing ``save_artifact`` / ``list_artifacts``, and the J.5
+    knowledge retriever backing ``knowledge_search``.
     """
     return ToolEnv(
         allowlist_provider=_tenant_allowlist_provider(tenant_config_service),
@@ -257,7 +292,24 @@ def build_tool_env(
         supervisor_client=supervisor_client,
         mcp_pool=mcp_pool,
         artifact_store=artifact_store,
+        knowledge_retriever=knowledge_retriever,
     )
+
+
+def make_knowledge_retriever(
+    *,
+    store: KnowledgeStore,
+    embedder: Embedder | None,
+    reranker: Reranker | None,
+) -> KnowledgeRetriever | None:
+    """Build the :class:`KnowledgeRetriever` backing ``knowledge_search``.
+
+    ``None`` when no embedder is configured — ``knowledge_search`` is
+    then unavailable, like long-term memory without an embedder.
+    """
+    if embedder is None:
+        return None
+    return KnowledgeRetriever(store=store, embedder=embedder, reranker=reranker)
 
 
 def build_middleware_env() -> MiddlewareEnv:
