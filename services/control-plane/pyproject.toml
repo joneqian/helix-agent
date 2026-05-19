@@ -43,6 +43,10 @@ dependencies = [
     "pymupdf4llm>=0.0.17,<1",
     "pymupdf>=1.24,<2",
     "markitdown[docx,pptx,xlsx,pdf]>=0.1,<1",
+    # Stream J.5 — knowledge chunking: markdown-it parses the Markdown
+    # block structure; tiktoken counts tokens for the size cap.
+    "markdown-it-py>=3.0,<4",
+    "tiktoken>=0.8,<1",
 ]
 
 [build-system]
