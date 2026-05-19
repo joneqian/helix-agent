@@ -109,6 +109,10 @@ class CliDockerClient:
         output (and the supervisor's buffer) at ``max_bytes + 1`` bytes,
         so the caller can detect an over-cap file. Raises
         :class:`DockerError` when the file cannot be read.
+
+        ``--entrypoint head`` overrides the sandbox image's runner
+        entrypoint — without it the runner would treat ``head ...`` as
+        its own args and just print its readiness line.
         """
         argv = [
             "docker",
@@ -123,8 +127,9 @@ class CliDockerClient:
             "no-new-privileges",
             "--volume",
             f"{volume}:/ws:ro",
-            image,
+            "--entrypoint",
             "head",
+            image,
             "-c",
             str(max_bytes + 1),
             f"/ws/{path}",
