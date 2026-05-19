@@ -25,6 +25,35 @@ def test_knowledge_base_constructs() -> None:
     assert kb.created_at is None
 
 
+def test_knowledge_base_chunk_params_default() -> None:
+    kb = KnowledgeBase(id=uuid4(), tenant_id=uuid4(), name="kb")
+    assert kb.chunk_max_tokens == 512
+    assert kb.chunk_overlap_tokens == 64
+
+
+def test_knowledge_base_accepts_custom_chunk_params() -> None:
+    kb = KnowledgeBase(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        name="kb",
+        chunk_max_tokens=256,
+        chunk_overlap_tokens=32,
+    )
+    assert kb.chunk_max_tokens == 256
+    assert kb.chunk_overlap_tokens == 32
+
+
+def test_knowledge_base_rejects_overlap_ge_max() -> None:
+    with pytest.raises(ValidationError, match="chunk_overlap_tokens must be less than"):
+        KnowledgeBase(
+            id=uuid4(),
+            tenant_id=uuid4(),
+            name="kb",
+            chunk_max_tokens=200,
+            chunk_overlap_tokens=200,
+        )
+
+
 def test_knowledge_document_constructs() -> None:
     doc = KnowledgeDocument(
         id=uuid4(),

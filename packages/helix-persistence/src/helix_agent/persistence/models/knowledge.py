@@ -15,11 +15,13 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Index, Integer, Text, UniqueConstraint, func, text
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from helix_agent.persistence.base import Base
 from helix_agent.persistence.embedding import EMBEDDING_DIM
+from helix_agent.protocol import DEFAULT_CHUNK_MAX_TOKENS, DEFAULT_CHUNK_OVERLAP_TOKENS
 
 
 class KnowledgeBaseRow(Base):
@@ -34,6 +36,12 @@ class KnowledgeBaseRow(Base):
     )
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_max_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text(str(DEFAULT_CHUNK_MAX_TOKENS))
+    )
+    chunk_overlap_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text(str(DEFAULT_CHUNK_OVERLAP_TOKENS))
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -95,6 +103,9 @@ class KnowledgeChunkRow(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    #: Full-text vector for the keyword side of hybrid search — populated
+    #: by the store from jieba-segmented ``content`` (Stream J.5).
+    content_tsv: Mapped[str | None] = mapped_column(TSVECTOR(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -104,4 +115,5 @@ class KnowledgeChunkRow(Base):
     __table_args__ = (
         Index("knowledge_chunk_kb_idx", "tenant_id", "kb_id"),
         Index("knowledge_chunk_document_idx", "document_id"),
+        Index("knowledge_chunk_tsv_idx", "content_tsv", postgresql_using="gin"),
     )

@@ -56,6 +56,8 @@ from helix_agent.protocol.dr import (
 )
 from helix_agent.protocol.event import EventRecord, EventType
 from helix_agent.protocol.knowledge import (
+    DEFAULT_CHUNK_MAX_TOKENS,
+    DEFAULT_CHUNK_OVERLAP_TOKENS,
     DocumentStatus,
     KnowledgeBase,
     KnowledgeChunk,
@@ -98,6 +100,8 @@ from helix_agent.protocol.user_workspace import UserWorkspace
 
 __all__ = [
     "API_KEY_STORED_PREFIX_LEN",
+    "DEFAULT_CHUNK_MAX_TOKENS",
+    "DEFAULT_CHUNK_OVERLAP_TOKENS",
     "AgentMetadata",
     "AgentSpec",
     "AgentSpecBody",

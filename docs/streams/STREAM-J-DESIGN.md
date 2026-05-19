@@ -26,7 +26,7 @@
 | **J.15** | 有状态 per-user 执行环境 | 缺失 | per-user 持久卷 + 沙盒会话生命周期（活沙盒复用 / 空闲 hibernate / 快速 restore）;**临时算力 + 持久卷**,不走 CRIU | J-9 J-10 |
 | **J.9** | 产物 / Artifact 管理 | 缺失 | `artifact` 表 + 持久卷存内容;版本化;经 run API + SSE `artifact` 事件回传 | J-11 |
 | **J.4** | Sub-agent / 多智能体 | 缺失 | agent-as-tool —— 每个声明的子 agent 作为命名 `Tool`;取消链穿透;构建期深度上限(无 token 预算下钻) | J-12 |
-| **J.5** | 知识 / 检索（RAG）| 缺失 | `knowledge_search` 工具（向量召回 + LLM 重排）+ `knowledge_base`/`document`/`chunk` 表（复用 J.3 pgvector）;文档可运维、异步摄取;租户隔离 | J-13 |
+| **J.5** | 知识 / 检索（RAG）| 缺失 | `knowledge_search` 工具（混合检索:向量 + 全文 RRF → LLM 重排）+ `knowledge_base`/`document`/`chunk` 表（复用 J.3 pgvector）;强解析 + 结构/语义/表格感知切块;文档可运维、异步摄取;租户隔离 | J-13 |
 | **J.6** | 多模态输入 | 骨架 | 图像 / 文件输入 —— 扩 `HumanMessage` content block;多模态 handler;经 J.11 路由到 vision 模型 | J-14 |
 | **J.8** | 人在回路 / 审批 | 缺失 | LangGraph `interrupt()` 审批节点;run 暂停 → control-plane 暴露审批请求 → API resume;危险操作按策略门控 | J-15 |
 | **J.7** | Skill + skill 进化 | 缺失 | skill = 可复用能力包（prompt 片段 + 工具集 + 可选代码）;`skill` 库表;agent 可习得 / 精化 skill（有界,非无界自改）| J-16 J-17 |
@@ -129,9 +129,10 @@ class AgentState(TypedDict):
 | `0019_artifact` | `artifact`、`artifact_version` | J.9 | tenant + user 组合 RLS |
 | `0020_sandbox_last_used` | 扩 `sandbox_instance`（`last_used_at`）| J.15 | 无 RLS（supervisor 持有）|
 | `0021_knowledge_base` | `knowledge_base`、`knowledge_document`、`knowledge_chunk`（pgvector）| J.5 | tenant RLS |
-| `0022_skill` | `skill`、`skill_version` | J.7 | tenant RLS |
-| `0023_trigger` | `trigger`、`trigger_run` | J.10 | tenant RLS |
-| `0024_trajectory` | `trajectory`、`eval_dataset` | J.12 J.13 | tenant RLS |
+| `0022_knowledge_chunking_hybrid` | 扩 `knowledge_base`（per-KB 切块参数）、扩 `knowledge_chunk`（`content_tsv` 全文检索列 + GIN）| J.5 | — |
+| `0023_skill` | `skill`、`skill_version` | J.7 | tenant RLS |
+| `0024_trigger` | `trigger`、`trigger_run` | J.10 | tenant RLS |
+| `0025_trajectory` | `trajectory`、`eval_dataset` | J.12 J.13 | tenant RLS |
 
 ---
 
@@ -496,7 +497,7 @@ ChildAgentBuilder = async (*, tenant_id, name, version, depth) -> BuiltAgent
 
 ### 12.2 设计与边界
 
-> **范围**：本节原写"够用的 RAG"并排除 rerank 等;评审后扩为**完善的 RAG 设施** —— 文档可运维(增删改)、摄取异步化、检索带重排。仍守住的有原则边界见末尾。
+> **范围**：本节原写"够用的 RAG";经两轮评审扩为**生产级 RAG 设施** —— 文档可运维、摄取异步化、强解析、token 计量的结构/语义/表格感知切块、混合检索 + 重排。原则:**功能可少,能力不可弱**。仍守住的有原则边界见末尾。
 
 - **检索作工具,非自动注入**（Mini-ADR J-13）：`knowledge_search` 工具,agent 按需查;不在每次 LLM 调用前自动塞检索结果（自动注入污染上下文、不可控）。
 - **块激活**：`knowledge:` manifest 块存在即激活 `knowledge_search` 工具(不进 `tools:` / `KNOWN_BUILTINS`),对齐 J.4 `subagents:` 块 → `SubAgentTool` 的先例。
@@ -504,17 +505,18 @@ ChildAgentBuilder = async (*, tenant_id, name, version, depth) -> BuiltAgent
 - **KB 分组**:一租户多命名知识库;manifest `knowledge_base_refs` 绑定子集,名→id 在 `knowledge_search` 调用期解析(KB 可后建)。
 - **文档生命周期**:`knowledge_document` 表;文档可列举 / 重摄取(替换 chunk)/ 删除;KB 可删除(级联)。
 - **摄取异步化**:上传即返回,后台 `asyncio.Task` 跑 解析→切块→嵌入→入库;`knowledge_document.status`(pending/processing/ready/failed)可查。
-- **结构感知切块**:按 Markdown 标题 / 段落边界切,带大小上限 + overlap。
-- **检索重排**:向量召回 top-N → LLM-rerank → top-k;rerank LLM 部署级配置,未配则退化为纯向量 top-k。
-- 文档解析:`MarkItDown`(PDF/docx/pptx/xlsx → Markdown)。
-- **有原则的边界(不做)**:单一 pgvector 后端,不引 Milvus;不做 GraphRAG(另一套范式);不做混合检索(BM25 融合);知识库租户共享,不做 per-user 私有知识。
+- **文档解析**:pymupdf4llm(PDF 高质量,带标题)+ MarkItDown 兜底(docx/pptx/xlsx + PDF 稀疏回退)。
+- **切块**:**token 计量**(中文按字符切偏差大)、**结构感知**(Markdown 标题/段落/列表/代码/表格边界)、**表格感知**(表整体保留,超限按行切留表头)、**语义切块**(无子标题的长结构单元按相邻块嵌入相似度落断点)、**标题路径前缀**(每 chunk 拼所属小节标题链);`chunk_max_tokens` / `chunk_overlap_tokens` **per-KB 可配**。
+- **混合检索**:向量召回 + 关键词召回(Postgres 全文,`knowledge_chunk.content_tsv`)→ **RRF 融合** top-N → **LLM-rerank** → top-k。中文分词在应用侧用 jieba(Postgres 原生 `tsvector` 不分中文词),`simple` 配置;rerank LLM 部署级配置,未配则退化纯向量。
+- **有原则的边界(不做)**:单一 pgvector 后端,不引 Milvus(pgvector 已是完整生产级后端,换后端不增能力);不做 GraphRAG(另一套检索范式,独立 stream);知识库租户共享,per-user 私有知识是独立产品特性、另行决策。
 
 ### 12.3 接口与数据模型
 
 ```python
-# 迁移 0021_knowledge_base —— 三张表,均租户级 RLS
+# 迁移 0021_knowledge_base —— 三表,均租户级 RLS;0022 加 chunk 配置 + 全文检索列
 class KnowledgeBaseRow(Base):               # 表 knowledge_base
     id, tenant_id, name, created_at         # (tenant_id, name) 唯一
+    chunk_max_tokens, chunk_overlap_tokens  # 0022 —— per-KB 切块参数
 class KnowledgeDocumentRow(Base):           # 表 knowledge_document
     id, tenant_id, kb_id, filename
     status, error, chunk_count              # (tenant_id, kb_id, filename) 唯一
@@ -523,6 +525,7 @@ class KnowledgeChunkRow(Base):              # 表 knowledge_chunk
     id, tenant_id, kb_id, document_id
     chunk_index, content
     embedding: Vector(EMBEDDING_DIM)        # HNSW cosine 索引
+    content_tsv: tsvector                   # 0022 —— 混合检索关键词侧,GIN 索引
 
 class KnowledgeSpec(BaseModel):             # AgentSpecBody.knowledge
     knowledge_base_refs: list[str]          # ≥1,去重校验
@@ -530,9 +533,9 @@ class KnowledgeSpec(BaseModel):             # AgentSpecBody.knowledge
 
 ### 12.4 整合点
 
-`tools/`（`knowledge_search` 工具 + `KnowledgeRetriever`,`knowledge:` 块激活）、`helix-persistence` 新 `knowledge` 子包(`KnowledgeStore` ABC + SQL/内存)、control-plane(KB / 文档 API + 后台 `KnowledgeIngestionRunner`)、`helix-protocol` `KnowledgeSpec` + 知识 DTO。
+`tools/`（`knowledge_search` 工具 + `KnowledgeRetriever` 混合检索,`knowledge:` 块激活）、`helix-persistence` 新 `knowledge` 子包(`KnowledgeStore` ABC + SQL/内存 + jieba 全文分词)、control-plane(KB / 文档 API + 后台 `KnowledgeIngestionRunner` + 解析/切块)、`helix-protocol` `KnowledgeSpec` + 知识 DTO。
 
-> **对标**：deer-flow / hermes 都靠外部 search / FTS5,RAG 弱。helix 自建完善 RAG:pgvector + 工具检索 + 重排 + 完整文档运维。
+> **对标**：deer-flow / hermes 都靠外部 search / FTS5,RAG 弱。helix 自建生产级 RAG:强解析 + 结构/语义/表格感知切块 + 混合检索 + 重排 + 完整文档运维。
 
 ---
 
@@ -776,8 +779,8 @@ J.13 排**最后**,评估并落实升级（Mini-ADR J-20）：
 **J-12｜sub-agent = agent-as-tool,父子单向委派树;成本护栏走结构化深度而非 token 预算**
 背景：多 agent 可做黑板 / 横向协作;失控派生需护栏。决策：M0 只做 agent-as-tool 父→子顺序委派树;护栏 = 构建期深度上限 3 × 每 agent `max_iterations`。取舍：agent-as-tool 复用现有 `ToolRegistry` / 取消链 / 审计,零新增基建;横向协作复杂度高、M0 不需要。原计划"父 token 预算下钻、子拿 30%"**移除** —— helix 无运行期 token 预算(仅月级 `TokenBudgetLedger`),无从下钻;深度 × `max_iterations` 已让全递归树 LLM 调用数结构化有界。orchestrator 无法解析 `agent_ref`,故 control-plane 注入 `ChildAgentBuilder` 回调进 `ToolEnv`。并行扇出 / 子进度流式推迟 M0 后。
 
-**J-13｜RAG = 工具检索(不自动注入)+ 完善的文档运维 + 向量召回后 LLM 重排**
-背景：RAG 可自动在每次调用前注入检索结果;原计划做"够用 RAG"并排除 rerker / 文档运维。决策：(1) `knowledge_search` 工具,agent 按需查 —— 不自动注入(污染上下文、不可控、浪费 token);(2) 评审后扩为**完善的 RAG 设施** —— 文档可列举 / 重摄取 / 删除(只能追加的知识库无法运维,属刚需),摄取异步化且状态可查,检索向量召回后过一道 LLM-rerank。取舍:rerank 复用现有 LLM、无新依赖,未配则优雅退化纯向量;有原则的边界仍守 —— 单一 pgvector(不引 Milvus)、不做 GraphRAG / 混合检索。
+**J-13｜RAG = 工具检索(不自动注入)的生产级 RAG 设施**
+背景：RAG 可自动在每次调用前注入检索结果;原计划做"够用 RAG",排除 rerank / 混合检索 / 文档运维 / 强切块。决策(经两轮评审):(1) `knowledge_search` 工具,agent 按需查 —— 不自动注入(污染上下文、不可控、浪费 token);(2) 扩为**生产级 RAG 设施** —— 原则"功能可少、能力不可弱":文档可列举/重摄取/删除(只能追加无法运维,属刚需)、摄取异步化且状态可查、强解析(pymupdf4llm + MarkItDown)、token 计量的结构/语义/表格感知切块(per-KB 可配)、混合检索(向量 + Postgres 全文 RRF 融合 → LLM-rerank)。取舍:rerank 复用现有 LLM、无新依赖,未配则优雅退化纯向量;中文全文检索用应用侧 jieba 分词 + `tsvector('simple')`,免 Postgres 扩展。有原则的边界仍守 —— 单一 pgvector(不引 Milvus)、不做 GraphRAG(另一范式)、知识库租户共享(per-user 私有知识另立特性)。
 
 **J-14｜多模态仅输入侧,M0 不做生成输出**
 背景：多模态含输入 + 输出。决策：J.6 只做图像 / 文件输入。取舍：输入是 harness 能力面的 table-stakes;生成输出是模型能力 + 产物管线,推迟 M1。

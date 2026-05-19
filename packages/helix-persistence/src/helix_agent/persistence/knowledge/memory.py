@@ -8,7 +8,15 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from helix_agent.persistence.knowledge.base import DuplicateKnowledgeBaseError, KnowledgeStore
-from helix_agent.protocol import DocumentStatus, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+from helix_agent.persistence.knowledge.text_search import tokenize_for_search
+from helix_agent.protocol import (
+    DEFAULT_CHUNK_MAX_TOKENS,
+    DEFAULT_CHUNK_OVERLAP_TOKENS,
+    DocumentStatus,
+    KnowledgeBase,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
 
 
 def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
@@ -31,11 +39,23 @@ class InMemoryKnowledgeStore(KnowledgeStore):
 
     # -- knowledge bases ----------------------------------------------------
 
-    async def create_base(self, *, tenant_id: UUID, name: str) -> KnowledgeBase:
+    async def create_base(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        chunk_max_tokens: int = DEFAULT_CHUNK_MAX_TOKENS,
+        chunk_overlap_tokens: int = DEFAULT_CHUNK_OVERLAP_TOKENS,
+    ) -> KnowledgeBase:
         if any(b.tenant_id == tenant_id and b.name == name for b in self._bases):
             raise DuplicateKnowledgeBaseError(tenant_id=tenant_id, name=name)
         base = KnowledgeBase(
-            id=uuid4(), tenant_id=tenant_id, name=name, created_at=datetime.now(UTC)
+            id=uuid4(),
+            tenant_id=tenant_id,
+            name=name,
+            chunk_max_tokens=chunk_max_tokens,
+            chunk_overlap_tokens=chunk_overlap_tokens,
+            created_at=datetime.now(UTC),
         )
         self._bases.append(base)
         return base
@@ -159,6 +179,30 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         candidates = [c for c in self._chunks if c.tenant_id == tenant_id and c.kb_id in kb_set]
         candidates.sort(key=lambda c: _cosine_distance(query_embedding, c.embedding))
         return candidates[:limit]
+
+    async def keyword_search(
+        self,
+        *,
+        tenant_id: UUID,
+        kb_ids: Sequence[UUID],
+        query: str,
+        limit: int = 5,
+    ) -> list[KnowledgeChunk]:
+        if not kb_ids:
+            return []
+        terms = set(tokenize_for_search(query).split())
+        if not terms:
+            return []
+        kb_set = set(kb_ids)
+        scored: list[tuple[int, KnowledgeChunk]] = []
+        for chunk in self._chunks:
+            if chunk.tenant_id != tenant_id or chunk.kb_id not in kb_set:
+                continue
+            overlap = len(terms & set(tokenize_for_search(chunk.content).split()))
+            if overlap > 0:
+                scored.append((overlap, chunk))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [chunk for _, chunk in scored[:limit]]
 
 
 def _created_key(record: KnowledgeBase | KnowledgeDocument) -> datetime:

@@ -16,7 +16,14 @@ import abc
 from collections.abc import Sequence
 from uuid import UUID
 
-from helix_agent.protocol import DocumentStatus, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+from helix_agent.protocol import (
+    DEFAULT_CHUNK_MAX_TOKENS,
+    DEFAULT_CHUNK_OVERLAP_TOKENS,
+    DocumentStatus,
+    KnowledgeBase,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
 
 
 class DuplicateKnowledgeBaseError(Exception):
@@ -35,9 +42,17 @@ class KnowledgeStore(abc.ABC):
     # -- knowledge bases ----------------------------------------------------
 
     @abc.abstractmethod
-    async def create_base(self, *, tenant_id: UUID, name: str) -> KnowledgeBase:
-        """Create a new knowledge base; raise :class:`DuplicateKnowledgeBaseError`
-        if ``(tenant_id, name)`` already exists."""
+    async def create_base(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        chunk_max_tokens: int = DEFAULT_CHUNK_MAX_TOKENS,
+        chunk_overlap_tokens: int = DEFAULT_CHUNK_OVERLAP_TOKENS,
+    ) -> KnowledgeBase:
+        """Create a new knowledge base with its chunking parameters; raise
+        :class:`DuplicateKnowledgeBaseError` if ``(tenant_id, name)``
+        already exists."""
 
     @abc.abstractmethod
     async def get_base(self, *, tenant_id: UUID, name: str) -> KnowledgeBase | None:
@@ -109,3 +124,18 @@ class KnowledgeStore(abc.ABC):
         """Return the ``limit`` chunks across ``kb_ids`` nearest
         ``query_embedding`` by cosine distance, closest first. An empty
         ``kb_ids`` yields an empty list."""
+
+    @abc.abstractmethod
+    async def keyword_search(
+        self,
+        *,
+        tenant_id: UUID,
+        kb_ids: Sequence[UUID],
+        query: str,
+        limit: int = 5,
+    ) -> list[KnowledgeChunk]:
+        """Return the ``limit`` chunks across ``kb_ids`` most relevant to
+        ``query`` by full-text rank — the keyword side of hybrid search.
+        ``query`` is segmented the same way the chunks were indexed
+        (:func:`~helix_agent.persistence.knowledge.text_search.tokenize_for_search`).
+        An empty ``kb_ids`` yields an empty list."""

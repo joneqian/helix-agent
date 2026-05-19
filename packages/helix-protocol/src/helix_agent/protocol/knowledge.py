@@ -14,9 +14,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+#: Default per-base chunking parameters (token-counted). A base may
+#: override them at creation to tune chunk granularity to its content.
+DEFAULT_CHUNK_MAX_TOKENS: Final = 512
+DEFAULT_CHUNK_OVERLAP_TOKENS: Final = 64
 
 
 class DocumentStatus(StrEnum):
@@ -29,14 +35,34 @@ class DocumentStatus(StrEnum):
 
 
 class KnowledgeBase(BaseModel):
-    """One row of ``knowledge_base`` — a named, tenant-scoped document collection."""
+    """One row of ``knowledge_base`` — a named, tenant-scoped document collection.
+
+    ``chunk_max_tokens`` / ``chunk_overlap_tokens`` are this base's
+    chunking parameters; the ingestion pipeline slices each document to
+    them. Per-base so different bases can tune granularity (Stream J.5).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     id: UUID
     tenant_id: UUID
     name: str = Field(description="logical name, unique per tenant")
+    chunk_max_tokens: int = Field(
+        default=DEFAULT_CHUNK_MAX_TOKENS, gt=0, description="max tokens per chunk"
+    )
+    chunk_overlap_tokens: int = Field(
+        default=DEFAULT_CHUNK_OVERLAP_TOKENS,
+        ge=0,
+        description="tokens of overlap between adjacent chunks",
+    )
     created_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _check_chunking(self) -> KnowledgeBase:
+        if self.chunk_overlap_tokens >= self.chunk_max_tokens:
+            msg = "chunk_overlap_tokens must be less than chunk_max_tokens"
+            raise ValueError(msg)
+        return self
 
 
 class KnowledgeDocument(BaseModel):

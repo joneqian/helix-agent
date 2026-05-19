@@ -132,6 +132,10 @@ ignore_missing_imports = true
 module = "pgvector.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "jieba.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/*/tests", "services/*/tests", "tools/*"]
 asyncio_mode = "auto"
