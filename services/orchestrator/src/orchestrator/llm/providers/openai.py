@@ -9,7 +9,10 @@ with ``tool_calls`` populated.
 Wire-format mapping (M0 minimal):
 
 - ``SystemMessage`` → ``{"role": "system", "content": <text>}``.
-- ``HumanMessage`` → ``{"role": "user", "content": <text>}``.
+- ``HumanMessage`` → ``{"role": "user", "content": <text>}``; when the
+  message carries ``image_ref`` blocks (J.6 Path A) ``content`` becomes a
+  block list with ``{"type": "image_url", ...}`` entries, the images
+  resolved to data URIs via an :class:`ImageResolver`.
 - ``AIMessage`` (text only) → ``{"role": "assistant", "content": <text>}``.
 - ``AIMessage`` with ``tool_calls`` → ``{"role": "assistant", "content":
   null, "tool_calls": [{"id": ..., "type": "function", "function":
@@ -55,6 +58,7 @@ from helix_agent.runtime.middleware import (
     LLMRateLimitError,
     LLMServerError,
 )
+from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -202,6 +206,9 @@ class OpenAIProvider:
     client: OpenAIClient
     model: str
     temperature: float | None = None
+    #: Resolves ``image_ref`` content blocks to bytes at call time (J.6
+    #: Path A). ``None`` → image blocks are dropped with a warning.
+    image_resolver: ImageResolver | None = None
 
     async def complete(
         self,
@@ -209,7 +216,7 @@ class OpenAIProvider:
         messages: Sequence[BaseMessage],
         tools: Sequence[ToolSpec],
     ) -> AIMessage:
-        mapped = _to_openai_messages(messages)
+        mapped = await _to_openai_messages(messages, self.image_resolver)
         tool_payload = [_to_openai_tool(spec) for spec in tools] if tools else None
 
         body = await self.client.chat_completions(
@@ -228,13 +235,15 @@ def _truncate(text: str) -> str:
     return text[:_ERROR_BODY_CHAR_CAP] + "...[truncated]"
 
 
-def _to_openai_messages(messages: Sequence[BaseMessage]) -> list[dict[str, Any]]:
+async def _to_openai_messages(
+    messages: Sequence[BaseMessage], resolver: ImageResolver | None
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for msg in messages:
         if isinstance(msg, SystemMessage):
             out.append({"role": "system", "content": _message_text(msg)})
         elif isinstance(msg, HumanMessage):
-            out.append({"role": "user", "content": _message_text(msg)})
+            out.append({"role": "user", "content": await _human_content(msg, resolver)})
         elif isinstance(msg, AIMessage):
             out.append(_ai_message_to_openai(msg))
         elif isinstance(msg, ToolMessage):
@@ -292,6 +301,29 @@ def _message_text(msg: BaseMessage) -> str:
             if isinstance(text, str):
                 parts.append(text)
     return "".join(parts)
+
+
+async def _human_content(
+    msg: HumanMessage, resolver: ImageResolver | None
+) -> str | list[dict[str, Any]]:
+    """Map a ``HumanMessage`` to OpenAI ``content``.
+
+    Plain text → a string. With ``image_ref`` blocks (J.6 Path A) → a
+    block list whose images are resolved to ``image_url`` data URIs. A
+    missing resolver drops the images with a warning so a text-only
+    deployment never crashes on an image-bearing message.
+    """
+    text, image_refs = split_human_content(msg.content)
+    if not image_refs:
+        return text
+    if resolver is None:
+        logger.warning("openai_adapter.image_dropped_no_resolver count=%d", len(image_refs))
+        return text
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for ref in image_refs:
+        resolved = await resolver.resolve(ref)
+        blocks.append({"type": "image_url", "image_url": {"url": resolved.data_uri}})
+    return blocks
 
 
 def _to_openai_tool(spec: ToolSpec) -> dict[str, Any]:

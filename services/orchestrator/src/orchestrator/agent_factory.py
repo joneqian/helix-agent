@@ -68,6 +68,7 @@ from orchestrator.llm import (
     make_self_hosted_client,
 )
 from orchestrator.middleware_assembly import MiddlewareEnv, build_middleware_chains
+from orchestrator.multimodal import ImageResolver
 from orchestrator.runner import GraphRunner
 from orchestrator.tools import ToolEnv, build_tool_registry
 
@@ -212,6 +213,7 @@ async def build_llm_router(
     *,
     secret_store: SecretStore,
     around_llm_chain: MiddlewareChain | None = None,
+    image_resolver: ImageResolver | None = None,
 ) -> LLMRouter:
     """Build an :class:`LLMRouter` from a ``ModelSpec`` + its fallback tree.
 
@@ -223,6 +225,9 @@ async def build_llm_router(
 
     ``around_llm_chain`` is the ``around_llm_call`` anchor chain — the
     router wraps each provider attempt with it (Mini-ADR E-13).
+
+    ``image_resolver`` is threaded into every provider so ``image_ref``
+    content blocks resolve to bytes at call time (J.6 Path A).
     """
     handles: list[ProviderHandle] = []
     for entry in _flatten_chain(model):
@@ -232,7 +237,7 @@ async def build_llm_router(
                 f"cannot resolve a provider API key"
             )
         api_key = await secret_store.get(parse_secret_ref(entry.api_key_ref))
-        provider = _build_provider(entry, api_key)
+        provider = _build_provider(entry, api_key, image_resolver=image_resolver)
         rate_limited = RateLimitedProvider.with_rpm(provider, rate_limit_rpm=entry.rate_limit_rpm)
         handles.append(ProviderHandle(provider=rate_limited, key=f"{entry.provider}:{entry.name}"))
     return LLMRouter(providers=handles, around_llm_chain=around_llm_chain)
@@ -320,7 +325,9 @@ def _flatten_chain(model: ModelSpec) -> list[ModelSpec]:
     return flat
 
 
-def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
+def _build_provider(
+    model: ModelSpec, api_key: str, *, image_resolver: ImageResolver | None = None
+) -> LLMProvider:
     """Map a ``ModelSpec`` to a concrete :class:`LLMProvider` adapter.
 
     OpenAI-compatible regional vendors (kimi / glm / deepseek / qwen /
@@ -328,6 +335,9 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
     client (E.11.5). ``azure`` and ``self-hosted`` reuse it too — both
     speak the OpenAI wire format and only differ at the HTTP layer
     (Mini-ADR E-16).
+
+    ``image_resolver`` is passed to every adapter so ``image_ref``
+    content blocks resolve to bytes at call time (J.6 Path A).
     """
     # Widen to ``str`` so the exhaustive Literal still leaves the
     # trailing "unsupported" raise reachable to mypy.
@@ -338,12 +348,14 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             model=model.name,
             max_tokens=model.max_tokens,
             temperature=model.temperature,
+            image_resolver=image_resolver,
         )
     if provider == "openai":
         return OpenAIProvider(
             client=HTTPOpenAIClient(api_key=api_key),
             model=model.name,
             temperature=model.temperature,
+            image_resolver=image_resolver,
         )
 
     openai_compatible = {
@@ -359,6 +371,7 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             client=make_client(api_key=api_key),
             model=model.name,
             temperature=model.temperature,
+            image_resolver=image_resolver,
         )
 
     if provider == "self-hosted":
@@ -368,6 +381,7 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             client=make_self_hosted_client(api_key, base_url=model.base_url),
             model=model.name,
             temperature=model.temperature,
+            image_resolver=image_resolver,
         )
 
     if provider == "azure":
@@ -385,6 +399,7 @@ def _build_provider(model: ModelSpec, api_key: str) -> LLMProvider:
             ),
             model=model.name,
             temperature=model.temperature,
+            image_resolver=image_resolver,
         )
 
     raise AgentFactoryError(f"provider {provider!r} has no adapter")
