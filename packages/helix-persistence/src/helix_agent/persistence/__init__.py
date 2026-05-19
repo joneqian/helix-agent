@@ -30,6 +30,7 @@ from helix_agent.persistence.models import EventLogRow as EventLogRow
 from helix_agent.persistence.models import MemoryItemRow as MemoryItemRow
 from helix_agent.persistence.models import TenantUserRow as TenantUserRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
+from helix_agent.persistence.models import UserWorkspaceRow as UserWorkspaceRow
 from helix_agent.persistence.quota import (
     InMemoryTenantQuotaStore as InMemoryTenantQuotaStore,
 )
@@ -77,6 +78,18 @@ from helix_agent.persistence.thread_meta import (
     SqlThreadMetaStore as SqlThreadMetaStore,
 )
 from helix_agent.persistence.thread_meta import ThreadMetaStore as ThreadMetaStore
+from helix_agent.persistence.workspace import (
+    InMemoryUserWorkspaceStore as InMemoryUserWorkspaceStore,
+)
+from helix_agent.persistence.workspace import (
+    SqlUserWorkspaceStore as SqlUserWorkspaceStore,
+)
+from helix_agent.persistence.workspace import (
+    UserWorkspaceStore as UserWorkspaceStore,
+)
+from helix_agent.persistence.workspace import (
+    workspace_volume_name as workspace_volume_name,
+)
 
 __all__ = [
     "RLS_GUC_NAME",
@@ -97,6 +110,7 @@ __all__ = [
     "InMemoryTenantUserStore",
     "InMemoryThreadMetaStore",
     "InMemoryTokenReservationStore",
+    "InMemoryUserWorkspaceStore",
     "MemoryItemRow",
     "MemoryStore",
     "SqlAuditLogStore",
@@ -107,6 +121,7 @@ __all__ = [
     "SqlTenantUserStore",
     "SqlThreadMetaStore",
     "SqlTokenReservationStore",
+    "SqlUserWorkspaceStore",
     "TenantConfigStore",
     "TenantQuotaStore",
     "TenantUserRow",
@@ -114,10 +129,13 @@ __all__ = [
     "ThreadMetaRow",
     "ThreadMetaStore",
     "TokenReservationStore",
+    "UserWorkspaceRow",
+    "UserWorkspaceStore",
     "build_rls_sessionmaker",
     "bypass_rls_var",
     "create_async_engine_from_config",
     "create_async_session_factory",
     "current_tenant_id_var",
     "current_user_id_var",
+    "workspace_volume_name",
 ]
