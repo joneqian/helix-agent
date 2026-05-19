@@ -16,19 +16,26 @@ A parsed document (Markdown text) is sliced into retrieval chunks that:
 * keep tables whole, splitting an oversized table by rows (header
   retained) and an oversized paragraph on sentence boundaries.
 
-Semantic-similarity refinement (splitting a long heading-less section
-at topic shifts) is a separate pass — see ``chunking_semantic`` (J.5
-PR5b). See ``docs/streams/STREAM-J-DESIGN.md`` § 12.
+:func:`chunk_markdown` is the structural chunker; :func:`chunk_markdown_semantic`
+adds semantic refinement — it embeds blocks and additionally splits a
+section at topic shifts (adjacent blocks whose embeddings are far apart),
+so a long heading-less section is split where its subject actually
+changes rather than at an arbitrary size point. See
+``docs/streams/STREAM-J-DESIGN.md`` § 12.
 """
 
 from __future__ import annotations
 
+import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import tiktoken
 from markdown_it import MarkdownIt
+
+from orchestrator.llm import Embedder
 
 #: tiktoken encoding for the token budget. An approximation of the
 #: embedding model's tokenizer — exact enough for *sizing* chunks.
@@ -47,6 +54,11 @@ _CONTENT_STANDALONE = frozenset({"fence", "code_block", "html_block"})
 #: The CJK marks in the class are intentional (noqa: ambiguous-unicode).
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?。！？\n])\s+")  # noqa: RUF001
 
+#: Cosine distance above which two adjacent blocks in the same section
+#: are treated as a topic shift — a semantic chunk boundary. Conservative
+#: so coherent prose is not over-fragmented; only genuine shifts split.
+_SEMANTIC_BREAK_THRESHOLD = 0.4
+
 
 def count_tokens(text: str) -> int:
     """Token count of ``text`` under the chunking tokenizer."""
@@ -63,14 +75,58 @@ class _Block:
 
 
 def chunk_markdown(markdown: str, *, max_tokens: int, overlap_tokens: int) -> list[str]:
-    """Slice ``markdown`` into heading-prefixed retrieval chunks.
+    """Slice ``markdown`` into heading-prefixed retrieval chunks — the
+    structural chunker (no semantic refinement).
 
     ``max_tokens`` bounds a chunk's body; ``overlap_tokens`` of the
     previous chunk's tail is carried into the next chunk *within the
     same section*. Returns chunk texts in document order; empty input
     yields an empty list.
     """
+    return _pack_blocks(
+        _parse_blocks(markdown),
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        semantic_breaks=frozenset(),
+    )
+
+
+async def chunk_markdown_semantic(
+    markdown: str,
+    *,
+    max_tokens: int,
+    overlap_tokens: int,
+    embedder: Embedder,
+) -> list[str]:
+    """Like :func:`chunk_markdown`, but additionally splits a section at
+    *topic shifts* — adjacent blocks whose embeddings are far apart.
+
+    This refines the weak spot of purely structural chunking: a long
+    heading-less section otherwise sliced at arbitrary size points is
+    instead split where its content actually changes subject.
+    """
     blocks = _parse_blocks(markdown)
+    semantic_breaks: frozenset[int] = frozenset()
+    if len(blocks) >= 2:
+        embeddings = await embedder.embed([block.text for block in blocks])
+        semantic_breaks = _semantic_breaks(blocks, embeddings)
+    return _pack_blocks(
+        blocks,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        semantic_breaks=semantic_breaks,
+    )
+
+
+def _pack_blocks(
+    blocks: list[_Block],
+    *,
+    max_tokens: int,
+    overlap_tokens: int,
+    semantic_breaks: frozenset[int],
+) -> list[str]:
+    """Pack blocks into chunks. Flush on a heading change, on a
+    ``semantic_breaks`` index (a topic shift), and on the token cap."""
     chunks: list[str] = []
     trail: tuple[str, ...] = ()
     buffer: list[str] = []
@@ -86,10 +142,13 @@ def chunk_markdown(markdown: str, *, max_tokens: int, overlap_tokens: int) -> li
         buffer = [tail] if tail.strip() else []
         buffer_tokens = count_tokens(tail) if buffer else 0
 
-    for block in blocks:
+    for index, block in enumerate(blocks):
         if block.heading_trail != trail:
             flush(carry_overlap=False)
             trail = block.heading_trail
+        elif index in semantic_breaks:
+            # Topic shift inside a section — a clean boundary, no overlap.
+            flush(carry_overlap=False)
         for piece in _prepare_block(block, max_tokens):
             piece_tokens = count_tokens(piece)
             if buffer and buffer_tokens + piece_tokens > max_tokens:
@@ -98,6 +157,29 @@ def chunk_markdown(markdown: str, *, max_tokens: int, overlap_tokens: int) -> li
             buffer_tokens += piece_tokens
     flush(carry_overlap=False)
     return chunks
+
+
+def _semantic_breaks(blocks: list[_Block], embeddings: Sequence[Sequence[float]]) -> frozenset[int]:
+    """Block indices that start a new semantic segment — adjacent
+    same-section blocks whose embeddings exceed the distance threshold.
+    A heading change is already a flush point, so it is skipped here."""
+    breaks: set[int] = set()
+    for i in range(1, len(blocks)):
+        if blocks[i].heading_trail != blocks[i - 1].heading_trail:
+            continue
+        if _cosine_distance(embeddings[i - 1], embeddings[i]) >= _SEMANTIC_BREAK_THRESHOLD:
+            breaks.add(i)
+    return frozenset(breaks)
+
+
+def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
+    """Cosine distance (0 = identical) between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 1.0
+    return 1.0 - dot / (norm_a * norm_b)
 
 
 def _parse_blocks(markdown: str) -> list[_Block]:
