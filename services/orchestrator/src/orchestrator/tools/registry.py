@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from helix_agent.runtime.cancellation import CancellationToken
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -38,14 +40,17 @@ class ToolContext:
     Most fields are optional because E.6 / E.7 tools didn't need any
     of them; E.8 HTTPTool is the first to require ``tenant_id`` (for
     the per-tenant allowlist lookup). Future tools read ``run_id`` for
-    audit attribution; E.15 will retrofit ``cancellation_token``.
-    ``user_id`` (Stream J.15) scopes ``exec_python``'s persistent
-    workspace volume — ``None`` when the run has no user binding.
+    audit attribution. ``user_id`` (Stream J.15) scopes ``exec_python``'s
+    persistent workspace volume — ``None`` when the run has no user
+    binding. ``cancellation_token`` (Stream J.4) lets a tool propagate
+    the run's cancellation into work it spawns — notably ``SubAgentTool``
+    threading it into a child agent run.
     """
 
     tenant_id: UUID | None = None
     run_id: UUID | None = None
     user_id: UUID | None = None
+    cancellation_token: CancellationToken | None = None
 
 
 @dataclass(frozen=True)
