@@ -6,22 +6,39 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.knowledge.base import DuplicateKnowledgeBaseError, KnowledgeStore
+from helix_agent.persistence.knowledge.text_search import tokenize_for_search
 from helix_agent.persistence.models import (
     KnowledgeBaseRow,
     KnowledgeChunkRow,
     KnowledgeDocumentRow,
 )
-from helix_agent.protocol import DocumentStatus, KnowledgeBase, KnowledgeChunk, KnowledgeDocument
+from helix_agent.protocol import (
+    DEFAULT_CHUNK_MAX_TOKENS,
+    DEFAULT_CHUNK_OVERLAP_TOKENS,
+    DocumentStatus,
+    KnowledgeBase,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
+
+#: Postgres text-search config — chunks are pre-segmented app-side, so
+#: ``simple`` (no stemming / stopwords) is the correct universal config.
+_TS_CONFIG = "simple"
 
 
 def _to_base(row: KnowledgeBaseRow) -> KnowledgeBase:
     return KnowledgeBase(
-        id=row.id, tenant_id=row.tenant_id, name=row.name, created_at=row.created_at
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        chunk_max_tokens=row.chunk_max_tokens,
+        chunk_overlap_tokens=row.chunk_overlap_tokens,
+        created_at=row.created_at,
     )
 
 
@@ -60,8 +77,20 @@ class SqlKnowledgeStore(KnowledgeStore):
 
     # -- knowledge bases ----------------------------------------------------
 
-    async def create_base(self, *, tenant_id: UUID, name: str) -> KnowledgeBase:
-        row = KnowledgeBaseRow(tenant_id=tenant_id, name=name)
+    async def create_base(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        chunk_max_tokens: int = DEFAULT_CHUNK_MAX_TOKENS,
+        chunk_overlap_tokens: int = DEFAULT_CHUNK_OVERLAP_TOKENS,
+    ) -> KnowledgeBase:
+        row = KnowledgeBaseRow(
+            tenant_id=tenant_id,
+            name=name,
+            chunk_max_tokens=chunk_max_tokens,
+            chunk_overlap_tokens=chunk_overlap_tokens,
+        )
         try:
             async with self._sf() as session:
                 session.add(row)
@@ -261,6 +290,11 @@ class SqlKnowledgeStore(KnowledgeStore):
                         chunk_index=chunk.chunk_index,
                         content=chunk.content,
                         embedding=list(chunk.embedding),
+                        # Keyword-search vector — segmented app-side so it
+                        # is correct for CJK (see text_search).
+                        content_tsv=func.to_tsvector(
+                            _TS_CONFIG, tokenize_for_search(chunk.content)
+                        ),
                     )
                     for chunk in chunks
                 ]
@@ -285,6 +319,34 @@ class SqlKnowledgeStore(KnowledgeStore):
             )
             # pgvector cosine distance (``<=>``); HNSW index backs the sort.
             .order_by(KnowledgeChunkRow.embedding.cosine_distance(list(query_embedding)))
+            .limit(limit)
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_to_chunk(row) for row in rows]
+
+    async def keyword_search(
+        self,
+        *,
+        tenant_id: UUID,
+        kb_ids: Sequence[UUID],
+        query: str,
+        limit: int = 5,
+    ) -> list[KnowledgeChunk]:
+        if not kb_ids:
+            return []
+        tokenized = tokenize_for_search(query)
+        if not tokenized:
+            return []
+        ts_query = func.plainto_tsquery(_TS_CONFIG, tokenized)
+        stmt = (
+            select(KnowledgeChunkRow)
+            .where(
+                KnowledgeChunkRow.tenant_id == tenant_id,
+                KnowledgeChunkRow.kb_id.in_(list(kb_ids)),
+                KnowledgeChunkRow.content_tsv.op("@@")(ts_query),
+            )
+            .order_by(func.ts_rank(KnowledgeChunkRow.content_tsv, ts_query).desc())
             .limit(limit)
         )
         async with self._sf() as session:

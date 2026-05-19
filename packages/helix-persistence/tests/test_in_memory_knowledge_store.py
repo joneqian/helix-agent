@@ -49,6 +49,21 @@ async def test_create_and_get_base() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_base_persists_chunk_params() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    default = await store.create_base(tenant_id=tenant, name="default")
+    assert (default.chunk_max_tokens, default.chunk_overlap_tokens) == (512, 64)
+    tuned = await store.create_base(
+        tenant_id=tenant, name="tuned", chunk_max_tokens=256, chunk_overlap_tokens=16
+    )
+    assert (tuned.chunk_max_tokens, tuned.chunk_overlap_tokens) == (256, 16)
+    fetched = await store.get_base(tenant_id=tenant, name="tuned")
+    assert fetched is not None
+    assert fetched.chunk_max_tokens == 256
+
+
+@pytest.mark.asyncio
 async def test_create_base_rejects_duplicate() -> None:
     store = InMemoryKnowledgeStore()
     tenant = uuid4()
@@ -303,3 +318,105 @@ async def test_search_is_tenant_scoped() -> None:
 async def test_search_empty_kb_ids_returns_empty() -> None:
     store = InMemoryKnowledgeStore()
     assert await store.search(tenant_id=uuid4(), kb_ids=[], query_embedding=(1.0,)) == []
+
+
+# ---------------------------------------------------------------------------
+# keyword search (hybrid-search keyword side)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_ranks_by_term_overlap() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id, doc = uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=0,
+                content="the quick brown fox",
+                embedding=(1.0,),
+            ),
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=1,
+                content="a quick fox jumps",
+                embedding=(1.0,),
+            ),
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=2,
+                content="lazy sleeping dog",
+                embedding=(1.0,),
+            ),
+        ],
+    )
+    hits = await store.keyword_search(tenant_id=tenant, kb_ids=[kb_id], query="quick fox", limit=5)
+    # Both query terms hit chunk 0 and 1; chunk 2 has neither.
+    assert {h.chunk_index for h in hits} == {0, 1}
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_filters_by_kb_and_tenant() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, other, kb_a, kb_b, doc = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_a,
+                document_id=doc,
+                index=0,
+                content="invoice payment terms",
+                embedding=(1.0,),
+            ),
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_b,
+                document_id=doc,
+                index=1,
+                content="invoice payment terms",
+                embedding=(1.0,),
+            ),
+        ],
+    )
+    in_a = await store.keyword_search(tenant_id=tenant, kb_ids=[kb_a], query="invoice")
+    assert [h.chunk_index for h in in_a] == [0]
+    assert await store.keyword_search(tenant_id=other, kb_ids=[kb_a], query="invoice") == []
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_no_match_returns_empty() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id, doc = uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=0,
+                content="quarterly financial report",
+                embedding=(1.0,),
+            )
+        ],
+    )
+    assert await store.keyword_search(tenant_id=tenant, kb_ids=[kb_id], query="unrelated") == []
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_empty_kb_ids_returns_empty() -> None:
+    store = InMemoryKnowledgeStore()
+    assert await store.keyword_search(tenant_id=uuid4(), kb_ids=[], query="x") == []

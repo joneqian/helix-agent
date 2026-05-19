@@ -120,6 +120,52 @@ async def test_replace_chunks_and_search_orders_by_cosine(sql_store: SqlStoreFix
 
 
 @pytest.mark.asyncio
+async def test_create_base_persists_chunk_params(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        await store.create_base(
+            tenant_id=tenant, name="default", chunk_max_tokens=512, chunk_overlap_tokens=64
+        )
+        tuned = await store.create_base(
+            tenant_id=tenant, name="tuned", chunk_max_tokens=256, chunk_overlap_tokens=16
+        )
+        assert (tuned.chunk_max_tokens, tuned.chunk_overlap_tokens) == (256, 16)
+        fetched = await store.get_base(tenant_id=tenant, name="tuned")
+        assert fetched is not None
+        assert fetched.chunk_max_tokens == 256
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_ranks_by_full_text(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="d.pdf")
+        await store.replace_chunks(
+            tenant_id=tenant,
+            document_id=doc.id,
+            chunks=[
+                _make_chunk(tenant, base.id, doc.id, 0, "the quarterly invoice payment", _vec(1.0)),
+                _make_chunk(tenant, base.id, doc.id, 1, "lazy sleeping dog at noon", _vec(1.0)),
+            ],
+        )
+        hits = await store.keyword_search(
+            tenant_id=tenant, kb_ids=[base.id], query="invoice", limit=5
+        )
+        assert [h.chunk_index for h in hits] == [0]
+        # A query whose terms are not indexed yields nothing.
+        assert (
+            await store.keyword_search(tenant_id=tenant, kb_ids=[base.id], query="spaceship") == []
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_delete_base_cascades(sql_store: SqlStoreFixture) -> None:
     store, engine = sql_store
     try:
