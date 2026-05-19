@@ -81,4 +81,4 @@ def test_knowledge_chunk_rejects_negative_index() -> None:
 def test_knowledge_dtos_are_frozen() -> None:
     kb = KnowledgeBase(id=uuid4(), tenant_id=uuid4(), name="kb")
     with pytest.raises(ValidationError):
-        kb.name = "other"  # type: ignore[misc]
+        kb.name = "other"
