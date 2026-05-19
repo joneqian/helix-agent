@@ -47,6 +47,11 @@ class DockerClient(Protocol):
     async def sweep_orphans(self) -> int:
         """Remove leftover ``helix-sb-*`` containers; return the count."""
 
+    async def read_volume_file(
+        self, *, volume: str, path: str, image: str, max_bytes: int
+    ) -> bytes:
+        """Read a file from a named volume; return up to ``max_bytes + 1`` bytes."""
+
 
 class CliDockerClient:
     """:class:`DockerClient` backed by the ``docker`` CLI via asyncio subprocess."""
@@ -92,6 +97,50 @@ class CliDockerClient:
         if ids:
             logger.info("docker_client.swept_orphans count=%d", len(ids))
         return len(ids)
+
+    async def read_volume_file(
+        self, *, volume: str, path: str, image: str, max_bytes: int
+    ) -> bytes:
+        """Read ``path`` from a docker named volume (Stream J.9).
+
+        Runs a throwaway ``--rm`` container — read-only rootfs, no
+        network, all capabilities dropped — that mounts ``volume`` at
+        ``/ws`` read-only and ``head``s the file. ``head -c`` bounds the
+        output (and the supervisor's buffer) at ``max_bytes + 1`` bytes,
+        so the caller can detect an over-cap file. Raises
+        :class:`DockerError` when the file cannot be read.
+        """
+        argv = [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--volume",
+            f"{volume}:/ws:ro",
+            image,
+            "head",
+            "-c",
+            str(max_bytes + 1),
+            f"/ws/{path}",
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=max_bytes + 1024,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            msg = f"workspace file read failed for {path!r}: {detail}"
+            raise DockerError(msg)
+        return stdout
 
     @staticmethod
     async def _exec(argv: list[str]) -> tuple[str, str, int]:

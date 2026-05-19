@@ -257,6 +257,27 @@ async def test_persistent_workspace_survives_across_containers(helix: _Harness) 
     assert "persisted" in seen.stdout
 
 
+@pytest.mark.asyncio
+async def test_read_workspace_file_reads_persisted_content(helix: _Harness) -> None:
+    # J.9 — the supervisor reads an artifact's bytes out of the user's
+    # volume via a throwaway read-only container, with no sandbox running.
+    tenant, user = uuid4(), uuid4()
+    box = await helix.supervisor.acquire(
+        AcquireRequest(tenant_id=tenant, thread_id="t-rd", user_id=user)
+    )
+    written = await helix.supervisor.exec(
+        box.sandbox_id,
+        code="open('/workspace/artifact.txt', 'w').write('artifact body')",
+    )
+    await helix.supervisor.release(box.sandbox_id)
+    assert written.exit_code == 0, written.stderr
+
+    data = await helix.supervisor.read_workspace_file(
+        tenant_id=tenant, user_id=user, path="artifact.txt"
+    )
+    assert data == b"artifact body"
+
+
 # ---------------------------------------------------------------------------
 # #48 — filesystem + process isolation (gates #1 / #2)
 # ---------------------------------------------------------------------------

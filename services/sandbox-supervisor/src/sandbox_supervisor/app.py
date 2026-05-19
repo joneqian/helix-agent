@@ -29,7 +29,13 @@ from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.audit.redactor import DefaultSecretRedactor
 from helix_agent.runtime.sandbox import make_sandbox_runtime_provider
 from sandbox_supervisor.docker_client import CliDockerClient
-from sandbox_supervisor.domain import QuotaExceededError, SandboxNotFoundError, SupervisorError
+from sandbox_supervisor.domain import (
+    QuotaExceededError,
+    SandboxNotFoundError,
+    SupervisorError,
+    WorkspaceFileNotFoundError,
+    WorkspaceFileTooLargeError,
+)
 from sandbox_supervisor.reaper import SandboxReaper
 from sandbox_supervisor.schemas import (
     AcquireRequest,
@@ -159,6 +165,15 @@ def _register_routes(app: FastAPI) -> None:
             timed_out=result.timed_out,
         )
 
+    @app.get("/v1/workspaces/{tenant_id}/{user_id}/file")
+    async def read_workspace_file(
+        tenant_id: UUID, user_id: UUID, path: str, supervisor: SupervisorDep
+    ) -> Response:
+        # Stream J.9 — artifact content download. Only the supervisor can
+        # read a per-user docker volume; the control-plane proxies here.
+        data = await supervisor.read_workspace_file(tenant_id=tenant_id, user_id=user_id, path=path)
+        return Response(content=data, media_type="application/octet-stream")
+
     @app.get("/v1/health")
     async def health(supervisor: SupervisorDep) -> HealthResponse:
         docker_ok = await supervisor.docker_ok()
@@ -173,6 +188,14 @@ def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(SandboxNotFoundError)
     async def _not_found(_request: Request, exc: SandboxNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(WorkspaceFileNotFoundError)
+    async def _file_not_found(_request: Request, exc: WorkspaceFileNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(WorkspaceFileTooLargeError)
+    async def _file_too_large(_request: Request, exc: WorkspaceFileTooLargeError) -> JSONResponse:
+        return JSONResponse(status_code=413, content={"detail": str(exc)})
 
     @app.exception_handler(SupervisorError)
     async def _supervisor_error(_request: Request, exc: SupervisorError) -> JSONResponse:
