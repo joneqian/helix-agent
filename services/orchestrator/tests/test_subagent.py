@@ -7,7 +7,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from helix_agent.protocol import SubAgentSpec
 from helix_agent.runtime.cancellation import (
@@ -15,6 +16,7 @@ from helix_agent.runtime.cancellation import (
     CancellationToken,
     RunCancelledError,
 )
+from orchestrator import GraphRunner, ToolRegistry, build_react_graph
 from orchestrator.agent_factory import BuiltAgent
 from orchestrator.errors import MaxStepsExceededError
 from orchestrator.tools import (
@@ -296,3 +298,68 @@ async def test_call_picks_last_ai_message() -> None:
     result = await tool.call({"task": "x"}, ctx=_ctx())
 
     assert result.content == "final answer"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end — a parent agent delegates to a child through the real graph
+# ---------------------------------------------------------------------------
+
+
+async def _child_llm(*, messages: Any, tools: Any) -> AIMessage:
+    """Child agent's LLM — echoes the delegated task, no tool calls."""
+    del tools
+    human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    task = human.content if human is not None else "?"
+    return AIMessage(content=f"CHILD HANDLED: {task}", id="child-ai")
+
+
+class _ParentLLM:
+    """Parent agent's LLM — delegates on the first step, then finishes."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, *, messages: Any, tools: Any) -> AIMessage:
+        del messages, tools
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(
+                content="",
+                id="parent-ai-1",
+                tool_calls=[
+                    {"name": "researcher", "args": {"task": "investigate X"}, "id": "tc-1"}
+                ],
+            )
+        return AIMessage(content="PARENT DONE", id="parent-ai-2")
+
+
+@pytest.mark.asyncio
+async def test_parent_delegates_to_child_through_real_graph() -> None:
+    # Build a real child agent graph over a fake LLM.
+    child_graph = GraphRunner(checkpointer=InMemorySaver()).compile(
+        build_react_graph(llm_caller=_child_llm, tool_registry=ToolRegistry())
+    )
+    child = BuiltAgent(graph=child_graph, system_prompt="child prompt", max_steps=5)
+
+    # Parent registry carries one SubAgentTool resolving to that child.
+    registry = ToolRegistry()
+    registry.register(
+        SubAgentTool(subagent=_SUB, builder=_RecordingBuilder(built=child), child_depth=1)
+    )
+    parent_graph = GraphRunner(checkpointer=InMemorySaver()).compile(
+        build_react_graph(llm_caller=_ParentLLM(), tool_registry=registry)
+    )
+
+    result = await parent_graph.ainvoke(
+        {"messages": [HumanMessage(content="delegate this")], "step_count": 0, "max_steps": 5},
+        {"configurable": {"thread_id": str(uuid4()), "tenant_id": str(uuid4())}},
+    )
+
+    messages = result["messages"]
+    # The child's answer flowed back as the SubAgentTool's ToolMessage.
+    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    assert tool_messages[0].content == "CHILD HANDLED: investigate X"
+    # The parent then reasoned over it and finished.
+    assert isinstance(messages[-1], AIMessage)
+    assert messages[-1].content == "PARENT DONE"
