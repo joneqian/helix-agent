@@ -124,6 +124,13 @@ class ModelSpec(BaseModel):
     #: ``azure``.
     azure_api_version: str | None = None
     fallback: list[ModelSpec] = Field(default_factory=list)
+    #: Whether this model natively accepts image content blocks (J.6).
+    #: Manifest-author-declared — the platform does NOT infer it from the
+    #: model name. ``true`` selects J.6 Path A (images flow into the
+    #: ``HumanMessage`` and the model sees pixels directly); ``false``
+    #: (default) selects Path B (the ``ask_image`` tool routes to a
+    #: separate VL model declared in ``spec.vision``).
+    supports_vision: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +309,23 @@ class KnowledgeSpec(BaseModel):
         return self
 
 
+class VisionSpec(BaseModel):
+    """Manifest ``vision:`` block — Stream J.6 multimodal input (Path B).
+
+    Declared only when the agent's main ``model`` is NOT vision-capable
+    (``model.supports_vision`` is ``false``). Presence activates the
+    ``ask_image`` tool, which routes image-understanding questions to
+    ``model`` — a separate VL model — leaving the main reasoning loop on
+    the strong text model. A ``vision:`` block on a vision-capable agent
+    is rejected at agent-build time: the two J.6 paths are mutually
+    exclusive (see ``docs/streams/STREAM-J-DESIGN.md`` § 13).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: ModelSpec = Field(description="VL model the ask_image tool routes to")
+
+
 class WorkflowSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -475,6 +499,11 @@ class AgentSpecBody(BaseModel):
     knowledge: KnowledgeSpec | None = Field(
         default=None,
         description="Stream J.5 — knowledge bases (RAG) this agent may search",
+    )
+    vision: VisionSpec | None = Field(
+        default=None,
+        description="Stream J.6 — VL model for the ask_image tool (Path B); "
+        "declared only when model.supports_vision is false",
     )
     workflow: WorkflowSpec = Field(default_factory=WorkflowSpec)
     policies: PolicySpec = Field(default_factory=PolicySpec)

@@ -29,6 +29,7 @@ from helix_agent.protocol.agent_spec import (
     SystemPromptSpec,
     TenantConfig,
     ToolSpecEntry,
+    VisionSpec,
     WorkflowSpec,
     parse_agent_ref,
 )
@@ -64,6 +65,7 @@ from helix_agent.protocol.knowledge import (
     KnowledgeDocument,
 )
 from helix_agent.protocol.memory_item import MemoryItem
+from helix_agent.protocol.multimodal import ImageRef, parse_image_ref
 from helix_agent.protocol.plan import Plan, PlanStep
 from helix_agent.protocol.quota import (
     CheckRequest,
@@ -137,6 +139,7 @@ __all__ = [
     "EventType",
     "FilesystemSpec",
     "HTTPToolSpec",
+    "ImageRef",
     "JWTClaims",
     "KnowledgeBase",
     "KnowledgeChunk",
@@ -184,6 +187,8 @@ __all__ = [
     "TokenReservationRecord",
     "ToolSpecEntry",
     "UserWorkspace",
+    "VisionSpec",
     "WorkflowSpec",
     "parse_agent_ref",
+    "parse_image_ref",
 ]

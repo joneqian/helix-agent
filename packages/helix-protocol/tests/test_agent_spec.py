@@ -475,3 +475,48 @@ def test_knowledge_blank_ref_rejected() -> None:
     doc["spec"]["knowledge"] = {"knowledge_base_refs": ["   "]}
     with pytest.raises(ValidationError, match="must be non-empty"):
         AgentSpec.model_validate(doc)
+
+
+# ---------------------------------------------------------------------------
+# multimodal input — vision (Stream J.6)
+# ---------------------------------------------------------------------------
+
+
+def test_supports_vision_defaults_to_false() -> None:
+    assert AgentSpec.model_validate(_doc()).spec.model.supports_vision is False
+
+
+def test_supports_vision_accepts_explicit_true() -> None:
+    doc = _doc()
+    doc["spec"]["model"]["supports_vision"] = True
+    assert AgentSpec.model_validate(doc).spec.model.supports_vision is True
+
+
+def test_vision_block_default_is_none() -> None:
+    assert AgentSpec.model_validate(_doc()).spec.vision is None
+
+
+def test_vision_block_validates_in_manifest() -> None:
+    doc = _doc()
+    doc["spec"]["vision"] = {"model": {"provider": "qwen", "name": "qwen-vl-max"}}
+    spec = AgentSpec.model_validate(doc)
+    assert spec.spec.vision is not None
+    assert spec.spec.vision.model.provider == "qwen"
+    assert spec.spec.vision.model.name == "qwen-vl-max"
+
+
+def test_vision_block_missing_model_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["vision"] = {}
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
+
+
+def test_vision_block_extra_field_rejected() -> None:
+    doc = _doc()
+    doc["spec"]["vision"] = {
+        "model": {"provider": "qwen", "name": "qwen-vl-max"},
+        "unknown": "x",
+    }
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
