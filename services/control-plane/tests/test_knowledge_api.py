@@ -116,7 +116,8 @@ async def test_delete_base(setup: Setup) -> None:
 @pytest.mark.asyncio
 async def test_delete_missing_base_returns_404(setup: Setup) -> None:
     client, _ = setup
-    assert (await client.delete("/v1/knowledge/bases/ghost")).status_code == 404
+    resp = await client.delete("/v1/knowledge/bases/ghost")
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
