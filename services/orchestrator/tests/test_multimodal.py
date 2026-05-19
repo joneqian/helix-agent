@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import base64
+from uuid import uuid4
 
 import pytest
 
+from helix_agent.protocol.multimodal import ImageRef
+from helix_agent.runtime.storage import InMemoryObjectStore, ObjectNotFoundError
 from orchestrator.multimodal import (
     IMAGE_REF_BLOCK_TYPE,
     ImageResolver,
     InMemoryImageResolver,
+    ObjectStoreImageResolver,
     ResolvedImage,
     image_ref_block,
     split_human_content,
@@ -78,3 +82,60 @@ async def test_in_memory_resolver_raises_on_missing_ref() -> None:
 
 def test_in_memory_resolver_satisfies_protocol() -> None:
     assert isinstance(InMemoryImageResolver(), ImageResolver)
+
+
+# ---------------------------------------------------------------------------
+# ObjectStoreImageResolver (Stream J.6 / PR4)
+# ---------------------------------------------------------------------------
+
+
+def _image_ref(ext: str = ".png") -> ImageRef:
+    return ImageRef(tenant_id=uuid4(), thread_id=uuid4(), image_id=uuid4(), ext=ext)
+
+
+@pytest.mark.asyncio
+async def test_object_store_resolver_resolves_image() -> None:
+    ref = _image_ref(".png")
+    store = InMemoryObjectStore()
+    await store.put(ref.storage_key, _DATA, content_type="image/png")
+
+    resolved = await ObjectStoreImageResolver(store=store).resolve(ref.to_uri())
+
+    assert resolved.media_type == "image/png"
+    assert resolved.data == _DATA
+
+
+@pytest.mark.asyncio
+async def test_object_store_resolver_derives_media_type_from_extension() -> None:
+    ref = _image_ref(".jpg")
+    store = InMemoryObjectStore()
+    await store.put(ref.storage_key, _DATA)
+
+    resolved = await ObjectStoreImageResolver(store=store).resolve(ref.to_uri())
+
+    assert resolved.media_type == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_object_store_resolver_missing_object_raises() -> None:
+    resolver = ObjectStoreImageResolver(store=InMemoryObjectStore())
+    with pytest.raises(ObjectNotFoundError):
+        await resolver.resolve(_image_ref().to_uri())
+
+
+@pytest.mark.asyncio
+async def test_object_store_resolver_rejects_unsupported_extension() -> None:
+    resolver = ObjectStoreImageResolver(store=InMemoryObjectStore())
+    with pytest.raises(ValueError, match="unsupported image extension"):
+        await resolver.resolve(_image_ref(".bmp").to_uri())
+
+
+@pytest.mark.asyncio
+async def test_object_store_resolver_rejects_malformed_ref() -> None:
+    resolver = ObjectStoreImageResolver(store=InMemoryObjectStore())
+    with pytest.raises(ValueError, match="image ref"):
+        await resolver.resolve("not-a-helix-image-ref")
+
+
+def test_object_store_resolver_satisfies_protocol() -> None:
+    assert isinstance(ObjectStoreImageResolver(store=InMemoryObjectStore()), ImageResolver)

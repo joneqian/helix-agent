@@ -31,6 +31,7 @@ from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
 from helix_agent.runtime.runs import RunManager
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
+from helix_agent.runtime.storage import ObjectStore, ObjectStoreBackend, S3CompatibleConfig
 from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
 from orchestrator import (
     BuiltAgent,
@@ -41,6 +42,7 @@ from orchestrator import (
     build_llm_router,
 )
 from orchestrator.llm import Embedder, HTTPEmbeddingClient, OpenAICompatibleEmbedder
+from orchestrator.multimodal import ImageResolver, ObjectStoreImageResolver
 from orchestrator.tools import (
     AllowlistProvider,
     HTTPSupervisorClient,
@@ -277,14 +279,16 @@ def build_tool_env(
     mcp_pool: MCPServerPool | None = None,
     artifact_store: ArtifactStore | None = None,
     knowledge_retriever: KnowledgeRetriever | None = None,
+    image_resolver: ImageResolver | None = None,
 ) -> ToolEnv:
     """Assemble the M0 :class:`ToolEnv`.
 
     Wires the HTTP tool's per-tenant allowlist, and — when supplied —
     the ``web_search`` Tavily client, the ``exec_python`` Sandbox
     Supervisor client, the ``mcp`` server pool, the J.9 artifact store
-    backing ``save_artifact`` / ``list_artifacts``, and the J.5
-    knowledge retriever backing ``knowledge_search``.
+    backing ``save_artifact`` / ``list_artifacts``, the J.5 knowledge
+    retriever backing ``knowledge_search``, and the J.6 image resolver
+    backing multimodal input.
     """
     return ToolEnv(
         allowlist_provider=_tenant_allowlist_provider(tenant_config_service),
@@ -293,6 +297,7 @@ def build_tool_env(
         mcp_pool=mcp_pool,
         artifact_store=artifact_store,
         knowledge_retriever=knowledge_retriever,
+        image_resolver=image_resolver,
     )
 
 
@@ -310,6 +315,46 @@ def make_knowledge_retriever(
     if embedder is None:
         return None
     return KnowledgeRetriever(store=store, embedder=embedder, reranker=reranker)
+
+
+async def resolve_object_store_config(
+    *,
+    backend: ObjectStoreBackend,
+    endpoint_url: str | None,
+    region: str,
+    bucket: str,
+    access_key_ref: str | None,
+    secret_key_ref: str | None,
+    secret_store: SecretStore,
+) -> S3CompatibleConfig | None:
+    """Build the S3 config for ``make_object_store`` (Stream J.6).
+
+    ``None`` for the in-memory backend (no config needed). For
+    ``s3-compatible`` the endpoint URL + both ``secret://`` key
+    references are required; the keys are resolved through the
+    SecretStore. Missing fields fail fast with a clear error.
+    """
+    if backend != "s3-compatible":
+        return None
+    if not (endpoint_url and access_key_ref and secret_key_ref):
+        msg = (
+            "object_store_backend='s3-compatible' requires object_store_endpoint_url "
+            "+ object_store_access_key_ref + object_store_secret_key_ref"
+        )
+        raise RuntimeError(msg)
+    return S3CompatibleConfig(
+        endpoint_url=endpoint_url,
+        region=region,
+        bucket=bucket,
+        access_key=await secret_store.get(parse_secret_ref(access_key_ref)),
+        secret_key=await secret_store.get(parse_secret_ref(secret_key_ref)),
+    )
+
+
+def make_image_resolver(store: ObjectStore) -> ImageResolver:
+    """Build the J.6 image resolver over an object store — backs both
+    multimodal paths (Path A content blocks + Path B ``ask_image``)."""
+    return ObjectStoreImageResolver(store=store)
 
 
 def build_middleware_env() -> MiddlewareEnv:
