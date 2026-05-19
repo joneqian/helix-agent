@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from fastapi import FastAPI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -87,6 +87,7 @@ from control_plane.runtime import (
     resolve_web_search_client,
 )
 from control_plane.settings import Settings
+from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
 from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
@@ -346,18 +347,33 @@ def create_app(
                     model=resolved_settings.embedding_model,
                     secret_store=resolved_secret_store,
                 )
+                base_tool_env = build_tool_env(
+                    resolved_tenant_config_service,
+                    web_search_client=web_search_client,
+                    supervisor_client=resolved_supervisor_client,
+                    mcp_pool=mcp_pool,
+                    artifact_store=resolved_artifact_store,
+                )
+                middleware_env = build_middleware_env()
+                memory_env = MemoryEnv(store=resolved_memory_store, embedder=embedder)
+                # Stream J.4 — the ChildAgentBuilder lets a SubAgentTool
+                # resolve an agent_ref and recursively build the sub-agent;
+                # the top-level agent's ToolEnv carries it so delegation
+                # works at depth 0.
+                child_agent_builder = make_child_agent_builder(
+                    spec_store=resolved_repo,
+                    secret_store=resolved_secret_store,
+                    checkpointer=checkpointer,
+                    base_tool_env=base_tool_env,
+                    middleware_env=middleware_env,
+                    memory_env=memory_env,
+                )
                 resolved_agent_runtime.agent_builder = make_agent_builder(
                     resolved_secret_store,
                     checkpointer,
-                    tool_env=build_tool_env(
-                        resolved_tenant_config_service,
-                        web_search_client=web_search_client,
-                        supervisor_client=resolved_supervisor_client,
-                        mcp_pool=mcp_pool,
-                        artifact_store=resolved_artifact_store,
-                    ),
-                    middleware_env=build_middleware_env(),
-                    memory_env=MemoryEnv(store=resolved_memory_store, embedder=embedder),
+                    tool_env=replace(base_tool_env, child_agent_builder=child_agent_builder),
+                    middleware_env=middleware_env,
+                    memory_env=memory_env,
                 )
             if reaper is not None:
                 reaper.start()
