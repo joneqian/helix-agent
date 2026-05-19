@@ -32,12 +32,14 @@ from sandbox_supervisor.domain import (
     SandboxRecord,
     SandboxState,
     SupervisorError,
+    WorkspaceFileNotFoundError,
+    WorkspaceFileTooLargeError,
 )
 from sandbox_supervisor.reaper import SandboxReaper
 from sandbox_supervisor.runner_link import ExecResult, RunnerLinkError
 from sandbox_supervisor.schemas import AcquireRequest
 from sandbox_supervisor.settings import SandboxSupervisorSettings
-from sandbox_supervisor.supervisor import SandboxSupervisor
+from sandbox_supervisor.supervisor import _MAX_ARTIFACT_BYTES, SandboxSupervisor
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -85,6 +87,8 @@ class RecordingDockerClient:
         *,
         launch_error: DockerError | None = None,
         link: FakeRunnerLink | None = None,
+        volume_file: bytes = b"",
+        volume_file_error: DockerError | None = None,
     ) -> None:
         self.launches: list[list[str]] = []
         self.removed: list[str] = []
@@ -92,6 +96,9 @@ class RecordingDockerClient:
         self._launch_error = launch_error
         self._link = link
         self.links: list[FakeRunnerLink] = []
+        self._volume_file = volume_file
+        self._volume_file_error = volume_file_error
+        self.volume_reads: list[tuple[str, str]] = []
 
     async def launch(self, argv: list[str]) -> FakeRunnerLink:
         self.launches.append(argv)
@@ -110,6 +117,15 @@ class RecordingDockerClient:
     async def sweep_orphans(self) -> int:
         self.swept += 1
         return 0
+
+    async def read_volume_file(
+        self, *, volume: str, path: str, image: str, max_bytes: int
+    ) -> bytes:
+        del image, max_bytes
+        self.volume_reads.append((volume, path))
+        if self._volume_file_error is not None:
+            raise self._volume_file_error
+        return self._volume_file
 
 
 class InMemorySandboxStore:
@@ -383,6 +399,64 @@ async def test_acquire_audit_flags_persistent_workspace() -> None:
 
     await h.supervisor.acquire(_acquire_request())
     assert h.audit.entries[1].details["persistent_workspace"] is False
+
+
+# ---------------------------------------------------------------------------
+# J.9 — workspace file read (artifact content download)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_workspace_file_returns_content() -> None:
+    h = _harness(docker=RecordingDockerClient(volume_file=b"report body"))
+    data = await h.supervisor.read_workspace_file(
+        tenant_id=uuid4(), user_id=uuid4(), path="report.md"
+    )
+    assert data == b"report body"
+    # The volume name is the deterministic per-(tenant, user) identifier.
+    assert h.docker.volume_reads[0][1] == "report.md"
+
+
+@pytest.mark.asyncio
+async def test_read_workspace_file_rejects_unsafe_path() -> None:
+    h = _harness()
+    for bad in ("/etc/passwd", "../escape"):
+        with pytest.raises(WorkspaceFileNotFoundError):
+            await h.supervisor.read_workspace_file(tenant_id=uuid4(), user_id=uuid4(), path=bad)
+    # A rejected path never reaches docker.
+    assert h.docker.volume_reads == []
+
+
+@pytest.mark.asyncio
+async def test_read_workspace_file_missing_maps_to_not_found() -> None:
+    h = _harness(docker=RecordingDockerClient(volume_file_error=DockerError("no such file")))
+    with pytest.raises(WorkspaceFileNotFoundError):
+        await h.supervisor.read_workspace_file(tenant_id=uuid4(), user_id=uuid4(), path="gone.md")
+
+
+@pytest.mark.asyncio
+async def test_read_workspace_file_too_large_raises() -> None:
+    oversize = b"\0" * (_MAX_ARTIFACT_BYTES + 1)
+    h = _harness(docker=RecordingDockerClient(volume_file=oversize))
+    with pytest.raises(WorkspaceFileTooLargeError):
+        await h.supervisor.read_workspace_file(tenant_id=uuid4(), user_id=uuid4(), path="big.bin")
+
+
+def test_read_workspace_file_route_returns_content() -> None:
+    h = _harness(docker=RecordingDockerClient(volume_file=b"hi"))
+    app = create_app(SandboxSupervisorSettings(), supervisor=h.supervisor, enable_reaper=False)
+    with TestClient(app) as client:
+        resp = client.get(f"/v1/workspaces/{uuid4()}/{uuid4()}/file", params={"path": "x.txt"})
+    assert resp.status_code == 200
+    assert resp.content == b"hi"
+
+
+def test_read_workspace_file_route_404_on_missing() -> None:
+    h = _harness(docker=RecordingDockerClient(volume_file_error=DockerError("no such file")))
+    app = create_app(SandboxSupervisorSettings(), supervisor=h.supervisor, enable_reaper=False)
+    with TestClient(app) as client:
+        resp = client.get(f"/v1/workspaces/{uuid4()}/{uuid4()}/file", params={"path": "gone"})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------

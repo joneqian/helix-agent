@@ -89,3 +89,11 @@ class SandboxNotFoundError(SupervisorError):
     def __init__(self, sandbox_id: UUID) -> None:
         super().__init__(f"sandbox not found: {sandbox_id}")
         self.sandbox_id = sandbox_id
+
+
+class WorkspaceFileNotFoundError(SupervisorError):
+    """A workspace file could not be read — missing or unreadable (J.9)."""
+
+
+class WorkspaceFileTooLargeError(SupervisorError):
+    """A workspace file exceeds the supervisor's download size cap (J.9)."""

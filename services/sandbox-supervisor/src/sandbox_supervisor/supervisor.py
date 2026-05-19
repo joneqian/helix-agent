@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from helix_agent.persistence import UserWorkspaceStore
+from helix_agent.persistence import UserWorkspaceStore, workspace_volume_name
 from helix_agent.protocol import AuditEntry, UserWorkspace
 from helix_agent.protocol.audit import AuditAction, AuditResult
 from helix_agent.runtime.sandbox import SandboxResourceLimits, SandboxRuntimeProvider
@@ -29,6 +30,8 @@ from sandbox_supervisor.domain import (
     SandboxRecord,
     SandboxState,
     SupervisorError,
+    WorkspaceFileNotFoundError,
+    WorkspaceFileTooLargeError,
 )
 from sandbox_supervisor.runner_link import ExecResult, RunnerLink, RunnerLinkError
 from sandbox_supervisor.schemas import AcquireRequest, AcquireResponse
@@ -48,6 +51,25 @@ class AuditSink(Protocol):
 def _container_name(sandbox_id: UUID) -> str:
     """The deterministic ``--name`` for a sandbox's container."""
     return f"helix-sb-{sandbox_id}"
+
+
+#: Per-file download cap for the J.9 workspace-file read. Artifacts are
+#: documents / code / data — small; the cap bounds the supervisor's
+#: in-memory buffer against a pathological file.
+_MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+
+
+def _validate_workspace_path(path: str) -> str:
+    """Reject a non-relative or ``..``-bearing workspace path (J.9).
+
+    ``save_artifact`` already validates this, but the path round-trips
+    through the control-plane untrusted — re-check at this boundary.
+    """
+    cleaned = path.strip()
+    if not cleaned or cleaned.startswith("/") or ".." in PurePosixPath(cleaned).parts:
+        msg = f"workspace path must be relative and free of '..': {path!r}"
+        raise WorkspaceFileNotFoundError(msg)
+    return cleaned
 
 
 class SandboxSupervisor:
@@ -205,6 +227,31 @@ class SandboxSupervisor:
     async def docker_ok(self) -> bool:
         """Whether the Docker daemon is reachable — for the health probe."""
         return await self._docker.ping()
+
+    async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
+        """Read a file from a user's persistent workspace volume (Stream J.9).
+
+        Backs artifact content download — the control-plane proxies to
+        here because only the supervisor can read a docker volume.
+        Raises :class:`WorkspaceFileNotFoundError` when the file is
+        missing / unreadable, and :class:`WorkspaceFileTooLargeError`
+        when it exceeds the download cap.
+        """
+        safe_path = _validate_workspace_path(path)
+        volume = workspace_volume_name(tenant_id, user_id)
+        try:
+            data = await self._docker.read_volume_file(
+                volume=volume,
+                path=safe_path,
+                image=self._settings.sandbox_image,
+                max_bytes=_MAX_ARTIFACT_BYTES,
+            )
+        except DockerError as exc:
+            raise WorkspaceFileNotFoundError(str(exc)) from exc
+        if len(data) > _MAX_ARTIFACT_BYTES:
+            msg = f"workspace file {path!r} exceeds the {_MAX_ARTIFACT_BYTES}-byte download cap"
+            raise WorkspaceFileTooLargeError(msg)
+        return data
 
     # ------------------------------------------------------------------
 
