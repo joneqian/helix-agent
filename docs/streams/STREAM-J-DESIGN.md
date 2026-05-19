@@ -118,18 +118,18 @@ class AgentState(TypedDict):
 
 ### 2.6 新增持久化（迁移 0015 起）
 
-> 下一个迁移号 = `0015`（现 `0014_feedback`）。每个子项 PR 一个迁移文件,**expand-contract,只向前**（STREAM-I-DESIGN § 7 纪律）。
+> 每个子项 PR 一个迁移文件,**expand-contract,只向前**（STREAM-I-DESIGN § 7 纪律）。`0016` 是 `0016_drop_app_user`（J.14 收尾,删占位表）,故 J.3 长期记忆落在 `0017`。
 
 | 迁移 | 表 | 子项 | RLS |
 |------|-----|------|-----|
 | `0015_tenant_user` | `tenant_user` 注册表 + `thread_meta.user_id` 列 | J.14 | tenant RLS |
-| `0016_long_term_memory` | `memory_item`（pgvector）| J.3 | tenant RLS + user 防御性策略 |
-| `0017_user_workspace` | `user_workspace`、扩 `sandbox_instance` | J.15 | tenant RLS + user 列 |
-| `0018_artifact` | `artifact`、`artifact_version` | J.9 | tenant RLS + user 列 |
-| `0019_knowledge_base` | `knowledge_base`、`knowledge_chunk`（pgvector）| J.5 | tenant RLS |
-| `0020_skill` | `skill`、`skill_version` | J.7 | tenant RLS |
-| `0021_trigger` | `trigger`、`trigger_run` | J.10 | tenant RLS |
-| `0022_trajectory` | `trajectory`、`eval_dataset` | J.12 J.13 | tenant RLS |
+| `0017_long_term_memory` | `memory_item`（pgvector）| J.3 | tenant + user 组合 RLS |
+| `0018_user_workspace` | `user_workspace`、扩 `sandbox_instance` | J.15 | 无 RLS（supervisor 持有,同 `sandbox_instance`）|
+| `0019_artifact` | `artifact`、`artifact_version` | J.9 | tenant + user 组合 RLS |
+| `0020_knowledge_base` | `knowledge_base`、`knowledge_chunk`（pgvector）| J.5 | tenant RLS |
+| `0021_skill` | `skill`、`skill_version` | J.7 | tenant RLS |
+| `0022_trigger` | `trigger`、`trigger_run` | J.10 | tenant RLS |
+| `0023_trajectory` | `trajectory`、`eval_dataset` | J.12 J.13 | tenant RLS |
 
 ---
 
@@ -369,38 +369,34 @@ class MemorySpec(BaseModel):                # 扩充现有 AgentSpecBody.memory
 
 ### 9.2 设计与边界
 
-**架构：临时算力 + 持久卷**（评估 08 § 4 推荐;Mini-ADR J-9）：
+**架构：临时容器 + 持久卷**（评估 08 § 4 推荐;Mini-ADR J-9）：
 
-- **持久卷**：每个 `(tenant_id, user_id)` 一个 docker named volume,存工作区文件 / 中间产物。卷长存。
-- **临时容器**：沙盒容器仍临时,但启动时**挂载该用户的卷**到 `/workspace`（替代 `--tmpfs`）。
-- **沙盒会话生命周期**（Mini-ADR J-10）：
-  - `ACTIVE` —— 容器在跑,用户活跃。
-  - 空闲超 TTL → `IDLE` → reaper 停容器(`docker stop`,**卷保留**)→ `HIBERNATED`。
-  - 新消息进来 → 查有无 `ACTIVE` 容器,有则复用;无则 `docker start` + 挂卷 → 快速 restore。
-- **不走 CRIU 容器快照**——复杂脆弱;持久卷 + 重启容器已满足"还原工作区",进程态本就该由 checkpointer（对话）+ 卷（文件）承载。
+- **持久卷**：每个 `(tenant_id, user_id)` 一个 docker named volume,存工作区文件 / 中间产物。卷长存,由 `user_workspace` 表登记。
+- **临时容器**：沙盒容器维持 per-run 临时（Mini-ADR F-2 不变）,但启动时**挂载该用户的卷**到 `/workspace`（替代 `--tmpfs`）。run 结束容器即销毁,卷保留。
+- **"restore" = 新容器挂暖卷**（Mini-ADR J-10）：新会话 / 新 run 进来 → 解析该用户的 `user_workspace` → 全新 `docker run` 挂载已有卷。上一轮的文件就在卷里,无需任何容器还原动作。
+- **不做容器 hibernate 状态机**:held-pipe 传输（`docker run -i` 持管道）把容器寿命绑死在 attached 子进程上,`docker stop` / `docker start` 同一容器无法重连;且容器本就 per-run 即销毁,run 之间算力已归零 —— IDLE / HIBERNATED 容器状态机解决的是不存在的问题。算力释放靠"容器随 run 销毁",工作区还原靠"卷长存"。
+- **不走 CRIU 容器快照**——复杂脆弱;持久卷 + 新容器已满足"还原工作区",进程态本就该由 checkpointer（对话）+ 卷（文件）承载。
 
 ### 9.3 接口与数据模型
 
 ```python
-# 迁移 0017_user_workspace
-class UserWorkspaceRow(Base):               # 表 user_workspace
+# 迁移 0018_user_workspace
+class UserWorkspaceRow(Base):               # 表 user_workspace —— tenant + user RLS
     id: UUID
     tenant_id, user_id: UUID
-    volume_name: str                        # docker volume 标识
-    size_bytes: int
+    volume_name: str                        # docker named volume 标识,(tenant,user) 唯一
+    size_bytes: int                         # 最近一次测量,M0 可选
     created_at, last_accessed_at: datetime
 
-# 扩 sandbox_instance：加 user_id、workspace_id、session_state
-class SandboxState(StrEnum):                # 扩现有枚举
-    CREATING, IN_USE, DESTROYED, FAILED     # 现有
-    IDLE, HIBERNATED                        # 新增
+# 扩 sandbox_instance：加 user_id（裸列）、workspace_id（→ user_workspace.id,可空）
+# SandboxState 不变 —— 容器仍 CREATING / IN_USE / DESTROYED / FAILED
 ```
 
-sandbox-supervisor 新增：`SandboxSupervisor.resume(workspace_id)`（start 容器 + 挂卷）、idle reaper 循环（扫 `IN_USE` 超 TTL → `IDLE` → stop）、`acquire` 改为"先查 HIBERNATED 可复用"。
+sandbox-supervisor 变更：`acquire` 解析（或创建）调用方的 `user_workspace` 卷 → 经 runtime_provider 把 named volume 挂到 `/workspace`（替 tmpfs）;`AcquireRequest` 加 `user_id`;无 `user_id` 时退回今天的 tmpfs 临时工作区（向后兼容）。
 
 ### 9.4 整合点
 
-`sandbox-supervisor/supervisor.py`（生命周期 + reaper）、`sandbox-supervisor/runtime_provider`（卷挂载替 tmpfs）、`sandbox_instance` 模型、`exec_python` 工具（按 `(tenant,user)` 找会话）、`SandboxSpec`（`filesystem` 块加 `persistent_workspace: bool`）。
+`sandbox-supervisor/supervisor.py`（`acquire` 解析用户卷）、`sandbox-supervisor/runtime_provider`（named volume 挂载替 tmpfs）、`sandbox_instance` 模型、`exec_python` 工具（透传 user 作用域）、`SandboxSpec`（`filesystem` 块加 `persistent_workspace: bool`）。
 
 > **对标**：hermes Daytona / Modal 持久后端（托管平台）、deer-flow 无。helix 自托管,用 docker named volume + 生命周期状态机自建 —— 不引外部托管沙盒依赖。
 
@@ -721,7 +717,7 @@ J.13 排**最后**,评估并落实升级（Mini-ADR J-20）：
 > 格式：决策 / 背景 / 备选 / 取舍。编号 J-1 起。
 
 **J-1｜隔离硬边界 = 租户,user_id 走一等列 + 应用层授权**
-背景：per-user 持久 agent 要求"用户"成为一等实体。备选：(a) 给所有表加用户级 RLS;(b) user_id 一等列 + 应用层授权,仅 per-user 数据表加防御性用户级 RLS。取舍：选 (b) —— 同租户用户 = 同公司同信任域,硬隔离边界本就是租户;全表用户级 RLS 增加每查询开销且语义过严（同租户审计 / 客服需跨用户读）。per-user **数据表**（记忆 / 工作区 / 产物）泄漏后果重,加用户级 RLS 做纵深。`thread_meta` 维持租户级 RLS —— `user_id` 是裸列,所有权在 store / 应用层校验;`app.user_id` GUC 推迟到 J.3 首个用户级 RLS 表。
+背景：per-user 持久 agent 要求"用户"成为一等实体。备选：(a) 给所有表加用户级 RLS;(b) user_id 一等列 + 应用层授权,仅 per-user 数据表加防御性用户级 RLS。取舍：选 (b) —— 同租户用户 = 同公司同信任域,硬隔离边界本就是租户;全表用户级 RLS 增加每查询开销且语义过严（同租户审计 / 客服需跨用户读）。per-user **数据表**里,**control-plane 持有的**（记忆 `memory_item` / 产物元数据 `artifact`）泄漏后果重,加用户级 RLS 做纵深 —— control-plane 的 RLS session 设 `app.tenant_id` + `app.user_id` 两个 GUC。**例外:`user_workspace` 不加 RLS** —— 它由 sandbox-supervisor 持有,与 `sandbox_instance` 同属系统服务表;supervisor 经 mTLS 认证调用方 + 应用层按 `(tenant,user)` scope,DB session 不设 `app.*` GUC,套 RLS 会让 supervisor 每次查询失败。`thread_meta` 维持租户级 RLS —— `user_id` 是裸列,所有权在 store / 应用层校验;`app.user_id` GUC 推迟到 J.3 首个用户级 RLS 表。
 
 **J-1a｜J.14 新建 `tenant_user`,不复用 Stream C 的 `app_user`**
 背景：Stream C 迁移 0004 已建占位表 `app_user`（"local + OIDC-federated end users",但无 ORM、无 store、auth 代码未消费）。备选：(a) 复用 `app_user`;(b) 新建 `tenant_user`。取舍：选 (b) —— `app_user` 的 `username` 是**全局唯一**（多租户下两租户不能同名用户,是缺陷）、identity key 仅 `(oidc_issuer, oidc_subject)`（不适配 api-key / mTLS 主体）,且它是 Stream C 平台 auth 的预留 schema。复用需 `ALTER` 改动 Stream C 的表（违背 surgical 原则）。`tenant_user` 是干净的、多租户正确的注册表：`(tenant_id, subject_type, subject_id)` 复合唯一,`id` = 代理 `user_id`。`thread_meta.user_id` 用裸 UUID 列、无 FK —— 匹配仓库 FK-light 风格（cf. `feedback.thread_id`),并规避 `FORCE` RLS 表上 FK 引用完整性校验的已知 footgun。
@@ -750,8 +746,8 @@ J.13 排**最后**,评估并落实升级（Mini-ADR J-20）：
 **J-9｜有状态执行环境 = 临时算力 + 持久卷,不走 CRIU**
 背景：要"还原用户环境"。备选：(a) CRIU 容器进程快照;(b) 持久卷 + 重启容器。决策：(b)。取舍：CRIU 复杂脆弱、跨内核 / 镜像版本易碎;对话态归 checkpointer、文件态归持久卷,进程态无需快照。
 
-**J-10｜沙盒会话生命周期状态机,空闲 stop 容器、卷保留**
-背景：per-user 沙盒要"空闲释放算力、来消息快速还原"。决策：`SandboxState` 加 `IDLE` / `HIBERNATED`;reaper 停空闲容器,卷保留;新消息 `docker start` + 挂卷。取舍：停容器即释放算力（CPU/内存归零),卷保留即零数据损失,start 比 run 快 —— 满足"快速 restore"。
+**J-10｜restore = 新容器挂暖卷,不做容器 hibernate 状态机**
+背景：per-user 沙盒要"空闲释放算力、来消息快速还原"。备选：(a) 容器生命周期状态机,空闲 `docker stop` → HIBERNATED,新消息 `docker start`;(b) 容器维持 per-run 临时,持久的只有卷,restore = 新容器挂已有卷。决策：(b)。取舍：(a) 与 held-pipe 传输冲突 —— 沙盒经 `docker run -i` 持管道通信,容器寿命绑死在 attached 子进程,`docker stop` / `docker start` 同一容器无法重连管道,要改就得重做 Stream F 传输核心;且容器本就随 run 销毁,run 之间算力已归零,hibernate 状态机解决的是不存在的问题。(b) 零传输改动,算力释放（容器随 run 销毁）与数据保留（卷长存）都满足,`docker run` 挂暖卷即快速 restore。
 
 **J-11｜artifact 由 agent 显式登记,不自动扫工作区**
 背景：工作区会有大量中间文件。决策：`save_artifact` 工具显式登记。取舍：自动扫会把临时文件当产物,噪声大;显式登记语义清晰、可版本化。

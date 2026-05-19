@@ -28,6 +28,12 @@ class SandboxInstanceRow(Base):
         server_default=text("gen_random_uuid()"),
     )
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    #: Owning user (Stream J.15). ``None`` for the pre-J.15 ephemeral
+    #: tmpfs path — a sandbox acquired without a user scope.
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    #: The per-user persistent workspace this container mounts
+    #: (``user_workspace.id``). ``None`` when ``user_id`` is ``None``.
+    workspace_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     image_ref: Mapped[str] = mapped_column(Text, nullable=False)
     node: Mapped[str] = mapped_column(Text, nullable=False)
     #: ``None`` while ``CREATING`` — set once ``docker run`` returns an id.

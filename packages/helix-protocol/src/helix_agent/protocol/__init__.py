@@ -84,6 +84,7 @@ from helix_agent.protocol.tenant_config import (
 )
 from helix_agent.protocol.tenant_user import TenantUser
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
+from helix_agent.protocol.user_workspace import UserWorkspace
 
 __all__ = [
     "API_KEY_STORED_PREFIX_LEN",
@@ -159,5 +160,6 @@ __all__ = [
     "ThreadStatus",
     "TokenReservationRecord",
     "ToolSpecEntry",
+    "UserWorkspace",
     "WorkflowSpec",
 ]
