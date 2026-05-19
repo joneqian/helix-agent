@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     #: ``HELIX_AGENT_EMBEDDING_DIM``).
     embedding_model: str = "text-embedding-v4"
 
+    #: Knowledge-retrieval reranker (Stream J.5). ``rerank_api_key_ref``
+    #: ``None`` → no reranker; hybrid search then returns the RRF-fused
+    #: order without an LLM rerank pass. ``rerank_provider`` is an
+    #: OpenAI-compatible provider id (``ModelSpec.provider``).
+    rerank_api_key_ref: str | None = None
+    rerank_provider: str = "qwen"
+    rerank_model: str = "qwen-plus"
+
     # ------------------------------------------------------------------ auth (C.1)
     # OIDC issuer used to validate the ``iss`` JWT claim and to derive
     # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default

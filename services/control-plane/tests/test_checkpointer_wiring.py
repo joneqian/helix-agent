@@ -31,10 +31,13 @@ from control_plane.runtime import (
 )
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigNotConfiguredError
+from helix_agent.persistence import InMemoryKnowledgeStore
 from helix_agent.runtime.secret_store import LocalDevSecretStore
+from orchestrator.llm import FakeEmbedder
 from orchestrator.tools import (
     HTTPSupervisorClient,
     HTTPTavilyClient,
+    KnowledgeRetriever,
     MCPClient,
     MCPServerConfig,
     RecordingMCPClient,
@@ -209,6 +212,12 @@ def test_build_tool_env_carries_supervisor_client() -> None:
     client = build_supervisor_client("http://sandbox-supervisor:8000")
     env = build_tool_env(_FakeTenantConfigService(allowlist=[]), supervisor_client=client)
     assert env.supervisor_client is client
+
+
+def test_build_tool_env_carries_knowledge_retriever() -> None:
+    retriever = KnowledgeRetriever(store=InMemoryKnowledgeStore(), embedder=FakeEmbedder())
+    env = build_tool_env(_FakeTenantConfigService(allowlist=[]), knowledge_retriever=retriever)
+    assert env.knowledge_retriever is retriever
 
 
 # ---------------------------------------------------------------------------
