@@ -1,8 +1,40 @@
-"""Tests for J.5 structure-aware Markdown chunking."""
+"""Tests for J.5 structure-aware + semantic Markdown chunking."""
 
 from __future__ import annotations
 
-from control_plane.knowledge.chunking import chunk_markdown, count_tokens
+from collections.abc import Sequence
+
+import pytest
+
+from control_plane.knowledge.chunking import (
+    _cosine_distance,
+    chunk_markdown,
+    chunk_markdown_semantic,
+    count_tokens,
+)
+
+
+class _ScriptedEmbedder:
+    """Embedder test double — vector chosen by a topic marker in the text."""
+
+    def __init__(self, markers: dict[str, tuple[float, ...]]) -> None:
+        self._markers = markers
+
+    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        return [self._vector(text) for text in texts]
+
+    def _vector(self, text: str) -> tuple[float, ...]:
+        for marker, vector in self._markers.items():
+            if marker in text:
+                return vector
+        return (0.0, 0.0)
+
+
+class _FailEmbedder:
+    """Embedder that raises if used — proves a code path skips embedding."""
+
+    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        raise AssertionError("embedder must not be called")
 
 
 def test_count_tokens() -> None:
@@ -96,3 +128,62 @@ def test_consecutive_paragraphs_pack_into_one_chunk() -> None:
     assert len(chunks) == 1
     assert "first short paragraph" in chunks[0]
     assert "second short paragraph" in chunks[0]
+
+
+# ---------------------------------------------------------------------------
+# semantic refinement
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_distance() -> None:
+    assert _cosine_distance((1.0, 0.0), (1.0, 0.0)) == pytest.approx(0.0)
+    assert _cosine_distance((1.0, 0.0), (0.0, 1.0)) == pytest.approx(1.0)
+    assert _cosine_distance((0.0, 0.0), (1.0, 0.0)) == 1.0  # zero vector
+
+
+@pytest.mark.asyncio
+async def test_semantic_split_at_topic_shift() -> None:
+    src = "TOPICA first.\n\nTOPICA second.\n\nTOPICB third.\n\nTOPICB fourth."
+    embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0), "TOPICB": (0.0, 1.0)})
+    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    # The A→B topic shift splits a section structural chunking keeps whole.
+    assert len(chunks) == 2
+    assert "TOPICA first" in chunks[0]
+    assert "TOPICA second" in chunks[0]
+    assert "TOPICB third" in chunks[1]
+    assert "TOPICB fourth" in chunks[1]
+    assert len(chunk_markdown(src, max_tokens=512, overlap_tokens=0)) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_no_split_when_section_is_coherent() -> None:
+    src = "TOPICA one.\n\nTOPICA two.\n\nTOPICA three."
+    embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0)})
+    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    assert len(chunks) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_still_flushes_on_heading_change() -> None:
+    # Same topic marker → no semantic break, but the heading change flushes.
+    src = "# A\n\nTOPICA content.\n\n# B\n\nTOPICA other."
+    embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0)})
+    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    assert len(chunks) == 2
+
+
+@pytest.mark.asyncio
+async def test_semantic_skips_embedding_for_single_block() -> None:
+    # < 2 blocks → no topic shift possible → embedder is never called.
+    chunks = await chunk_markdown_semantic(
+        "just one paragraph.", max_tokens=512, overlap_tokens=0, embedder=_FailEmbedder()
+    )
+    assert len(chunks) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_empty_input() -> None:
+    chunks = await chunk_markdown_semantic(
+        "", max_tokens=512, overlap_tokens=64, embedder=_FailEmbedder()
+    )
+    assert chunks == []
