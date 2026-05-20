@@ -65,6 +65,17 @@ class LLMNetworkError(LLMError):
     """Connection / timeout / TLS error — treated as retryable server-side."""
 
 
+class LLMStreamStaleError(LLMServerError):
+    """Stream L.L3 — the provider call exceeded the wall-clock deadline.
+
+    Raised by :class:`~orchestrator.llm.router.LLMRouter._call_one` when
+    a provider hangs past ``stream_deadline_s`` (default 90s). Inherits
+    :class:`LLMServerError` so the router treats it as retryable and
+    falls back to the next provider — a hung provider should not lock
+    the run; another provider on the chain may still respond.
+    """
+
+
 class CircuitOpenError(LLMError):
     """Breaker is OPEN; raised immediately without dispatching the call.
 
