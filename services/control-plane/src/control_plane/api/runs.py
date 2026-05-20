@@ -24,14 +24,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from control_plane.api._quota_admission import check_admission
 from control_plane.api._user_scope import (
@@ -42,27 +42,106 @@ from control_plane.api._user_scope import (
 from control_plane.audit import emit
 from control_plane.quota.base import QuotaService
 from control_plane.runtime import AgentRuntime
+from control_plane.settings import Settings
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.agent_spec import AgentSpecStore
 from helix_agent.persistence.rls import current_user_id_var
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import AuditAction, ThreadStatus
+from helix_agent.protocol.multimodal import parse_image_ref
 from helix_agent.runtime.audit.logger import AuditLogger
 from orchestrator import AgentFactoryError, run_agent, sse_consumer
+from orchestrator.multimodal import image_ref_block
 
 logger = logging.getLogger("helix.control_plane.runs")
 
 
 class RunRequest(BaseModel):
-    """POST body. ``input`` is the user's prompt for this run."""
+    """POST body. ``input`` is the user's prompt for this run;
+    ``image_refs`` is the list of J.6 ``helix://image/...`` references
+    uploaded via ``POST /v1/sessions/{thread_id}/uploads``."""
 
     model_config = ConfigDict(extra="forbid")
 
     input: str | None = Field(default=None, max_length=8192)
+    image_refs: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("image_refs")
+    @classmethod
+    def _parse_image_refs(cls, value: list[str]) -> list[str]:
+        for ref in value:
+            parse_image_ref(ref)  # raises ValueError if malformed → 422
+        return value
 
 
 def _get_thread_repo(request: Request) -> object:
     return request.app.state.thread_meta_repo
+
+
+def _get_settings(request: Request) -> Settings:
+    settings: Settings = request.app.state.settings
+    return settings
+
+
+def _validate_image_refs(
+    refs: list[str],
+    *,
+    tenant_id: UUID,
+    thread_id: UUID,
+    supports_vision: bool,
+    has_vision_block: bool,
+    max_per_run: int,
+) -> None:
+    """Enforce the J.6 run-time image-ref constraints.
+
+    Raises :class:`HTTPException` with the right status:
+    * **422** when the agent is image-incapable and no ``vision:`` block
+      is declared, or when the count exceeds ``max_per_run``;
+    * **404** when a ref belongs to a different tenant or thread —
+      hides cross-scope existence per the J.14 pattern.
+    """
+    if not refs:
+        return
+    if not supports_vision and not has_vision_block:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "agent does not accept image input: model.supports_vision is "
+                "false and no 'vision' block is declared"
+            ),
+        )
+    if len(refs) > max_per_run:
+        raise HTTPException(
+            status_code=422,
+            detail=f"too many images: max {max_per_run} per run",
+        )
+    for ref_str in refs:
+        ref = parse_image_ref(ref_str)
+        if ref.tenant_id != tenant_id or ref.thread_id != thread_id:
+            raise HTTPException(status_code=404, detail="image ref not found")
+
+
+def _build_human_message(
+    *, input_text: str | None, image_refs: list[str], supports_vision: bool
+) -> HumanMessage:
+    """Assemble the ``HumanMessage`` for a J.6 multimodal run input.
+
+    Path A (``supports_vision=True``) — emit a content-block list with
+    the text followed by one ``image_ref`` block per upload, so the
+    provider adapter resolves them to native multimodal payloads.
+
+    Path B and the no-images case — emit plain text. (Path B's
+    text-reference assembly lands with the ``ask_image`` tool in PR7.)
+    """
+    text = input_text or ""
+    if not image_refs or not supports_vision:
+        return HumanMessage(content=text)
+    content: list[dict[str, Any]] = []
+    if text:
+        content.append({"type": "text", "text": text})
+    for ref in image_refs:
+        content.append(image_ref_block(ref))
+    return HumanMessage(content=content)
 
 
 def _get_audit(request: Request) -> AuditLogger:
@@ -95,6 +174,7 @@ def build_runs_router() -> APIRouter:
         quota: Annotated[QuotaService, Depends(_get_quota)],
         agent_repo: Annotated[AgentSpecStore, Depends(_get_agent_repo)],
         runtime: Annotated[AgentRuntime, Depends(_get_agent_runtime)],
+        settings: Annotated[Settings, Depends(_get_settings)],
     ) -> StreamingResponse | JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         actor_id: str = request.state.actor_id
@@ -152,6 +232,16 @@ def build_runs_router() -> APIRouter:
                 status_code=422, detail=f"agent manifest cannot be built: {exc}"
             ) from exc
 
+        # Stream J.6 — enforce image-ref invariants before any side effects.
+        _validate_image_refs(
+            payload.image_refs,
+            tenant_id=tenant_id,
+            thread_id=thread_id,
+            supports_vision=built.supports_vision,
+            has_vision_block=record.spec.spec.vision is not None,
+            max_per_run=settings.multimodal_max_images_per_run,
+        )
+
         await emit(
             audit,
             tenant_id=tenant_id,
@@ -172,7 +262,11 @@ def build_runs_router() -> APIRouter:
         graph_input = {
             "messages": [
                 SystemMessage(content=built.system_prompt),
-                HumanMessage(content=payload.input or ""),
+                _build_human_message(
+                    input_text=payload.input,
+                    image_refs=payload.image_refs,
+                    supports_vision=built.supports_vision,
+                ),
             ],
             "step_count": 0,
             "max_steps": built.max_steps,

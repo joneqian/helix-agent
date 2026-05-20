@@ -85,6 +85,10 @@ class BuiltAgent:
     graph: CompiledStateGraph[Any, Any, Any, Any]
     system_prompt: str
     max_steps: int
+    #: Whether the main model accepts image content blocks (J.6 Path A).
+    #: The control-plane run assembler uses this to decide whether to
+    #: emit a multimodal ``HumanMessage`` or a plain-text one.
+    supports_vision: bool = False
 
 
 @dataclass(frozen=True)
@@ -149,18 +153,22 @@ async def build_agent(
     (missing ``api_key_ref``, an unsupported provider, an
     un-assemblable ``tools:`` entry, …).
     """
+    env = tool_env or ToolEnv()
     chains = build_middleware_chains(spec, env=middleware_env)
     # Stream J.11 — resolve the LLM router for each step class; the
     # planner / reflect nodes may route to a different model than the
-    # agent loop.
+    # agent loop. Stream J.6 — the image resolver threads into every
+    # provider so ``image_ref`` content blocks resolve to bytes at call
+    # time (Path A).
     routers = await build_step_routers(
         spec,
         secret_store=secret_store,
         around_llm_chain=chains.around_llm_call,
+        image_resolver=env.image_resolver,
     )
     registry = await build_tool_registry(
         spec.spec.tools,
-        tool_env=tool_env or ToolEnv(),
+        tool_env=env,
         # Stream J.15 — opt the exec_python sandbox into the run user's
         # persistent workspace volume when the manifest asks for it.
         persistent_workspace=spec.spec.sandbox.filesystem.persistent_workspace,
@@ -205,6 +213,7 @@ async def build_agent(
         graph=compiled,
         system_prompt=spec.spec.system_prompt.template,
         max_steps=spec.spec.workflow.max_iterations,
+        supports_vision=spec.spec.model.supports_vision,
     )
 
 
@@ -248,15 +257,22 @@ async def build_step_routers(
     *,
     secret_store: SecretStore,
     around_llm_chain: MiddlewareChain | None = None,
+    image_resolver: ImageResolver | None = None,
 ) -> StepRouters:
     """Resolve the LLM router for each step class (Stream J.11).
 
     The agent's top-level ``model`` is the default router; each
     ``routing`` rule overrides one step class with its own model +
     fallback chain. A class with no rule reuses the default.
+
+    ``image_resolver`` is threaded into every router so ``image_ref``
+    content blocks resolve to bytes at call time (Stream J.6 Path A).
     """
     default = await build_llm_router(
-        spec.spec.model, secret_store=secret_store, around_llm_chain=around_llm_chain
+        spec.spec.model,
+        secret_store=secret_store,
+        around_llm_chain=around_llm_chain,
+        image_resolver=image_resolver,
     )
     planning = default
     reflection = default
@@ -264,7 +280,10 @@ async def build_step_routers(
     if routing is not None:
         for rule in routing.rules:
             routed = await build_llm_router(
-                rule.model, secret_store=secret_store, around_llm_chain=around_llm_chain
+                rule.model,
+                secret_store=secret_store,
+                around_llm_chain=around_llm_chain,
+                image_resolver=image_resolver,
             )
             if rule.when == "planning":
                 planning = routed
