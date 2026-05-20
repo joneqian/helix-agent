@@ -25,6 +25,7 @@
 | **Phase 0 — Pre-flight** | 1 周 | 2-3 周 | monorepo、CI/CD 骨架、Phase 0 决策、ADR backlog |
 | **M0 — Product-grade MVP** | 8-10 周 | **5-7 个月** | 1 个 dogfood 业务 E2E + 全 24 P0 |
 | **Stream K — Capability Hardening Sprint** | — | **7-10 周** | 13 条 (c) 类弱版补到生产级；先于 Stream J 剩余子项 |
+| **Stream L — Hermes-derived 单 turn 能力强化 sprint** | — | **4-6 周** | 8 条 Hermes 单 turn 成熟能力补到生产级；与 Stream J 剩余子项并行 |
 | **M0→M1 Gate** | — | 2-4 周 | dogfood 平行运行 30 天，参数对比 |
 | **M1 — 生产化** | 10-12 周 | **6-8 个月** | 多租户、Sub-Agent、Python 插槽、Envoy/Vault dynamic、可观测、Admin UI 全功能 |
 | **M2 — Durable + Multi-agent** | 8-10 周 | **5-6 个月** | 长会话恢复、Plan-Execute、HITL、Memory 三层、Eval gate |
@@ -387,6 +388,25 @@
 
 PR 链（main 上 14 个 squash commits + 1 docs PR）：#172（设计）→ #182 K3 → #183 K5 → #184 K2 → #185 K4 → #186 K1 → #187 K9 → #188 K8 → #189 K6 → #190 K7 → #191 K10 → #192 K11 → #193 K13 → #194 K12 → #195 K14 → #196 K15。Stream J 剩余子项现可开始。
 
+### Stream L — Hermes-derived 单 turn 能力强化 sprint（临时；与 Stream J 剩余子项并行）
+
+参考：[streams/STREAM-L-DESIGN](./streams/STREAM-L-DESIGN.md)（设计先行）
+
+> 2026-05-20 Stream K 收尾后做了一次跨仓 architecture review：把 Hermes-Agent（`/Users/mac/src/github/hermes-agent`）的 `run_agent.py` + `agent/conversation_loop.py`（各 4000+ 行）与我们 `services/orchestrator/`（LangGraph 因子化）做对比。形态分歧不重要 —— 真正学得到的是 Hermes 在**单 turn 之内**积累的 8 条生产能力，每条都是我们完全缺失但任何长 session / per-user 持久 agent（[memory:target-product-form](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_target_product_form.md)）必备的。按 [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) 红线属 (c) 类弱版必补。
+> 与 Stream K 的关系：K 补"已勾完 stream 的弱版"，L 补"agent loop 单 turn 内的成熟度"；两者都属于 (c) 类弱版红线。
+
+**P0 — 阻塞 M0→M1 Gate 第一次真生产 release**
+- [ ] **L1 Anthropic prompt caching** — adapter 注入 `cache_control` system_and_3 layout + `BuiltAgent.system_prompt` build-once 冻结不变式 + plan/recalled_memories 改注入 last user message。验收：`helix:llm:anthropic_cache_read_ratio:5m` ≥ 0.5；system message SHA-256 跨 turn 一致。STREAM-L-DESIGN § 3.L1 / Mini-ADR L-1。
+- [ ] **L2 Token preflight + context compressor** — 新 `context/compressor.py`（rough char/4 estimate + middle-turn summarize）+ `agent_node` 入口 preflight + manifest `policies.context_compression`。验收：50-turn 长对话不撞 422；3-pass 不死循环抛 ContextOverflowError。STREAM-L-DESIGN § 3.L2 / Mini-ADR L-2。
+- [ ] **L3 Stream stale-detection** — `agent_node` LLM call 套 `asyncio.wait_for(stream_deadline_s=90)`；`LLMStreamStaleError` 归 retryable 触发 fallback chain。验收：mock provider sleep 100s → 90s fail-fast。STREAM-L-DESIGN § 3.L3 / Mini-ADR L-3。
+- [ ] **L4 File-mutation verifier footer** — `tools_node` 聚合 mutation 结果到 `AgentState.failed_mutations` + `agent_node` 下一 turn 注入 `<mutation-advisory>` footer 到 last user message。验收：mock write_file 失败 → 下一 turn prompt 含 footer；footer 不在 system message（守 L-1 不变式）。STREAM-L-DESIGN § 3.L4 / Mini-ADR L-4。
+- [ ] **L5 Iteration budget refund** — `ToolResult.refund_iterations` + `AgentState.step_count_refund_pending` narrow channel；`update_plan` tool 填 refund。与 K.8 配套。验收：`update_plan` 调用后 step_count 不增加；step_count 永不到 0。STREAM-L-DESIGN § 3.L5 / Mini-ADR L-5。
+- [ ] **L6 Adaptive tool parallelization** — `ToolSpec.is_read_only` + `path_args`；`tools_node` 按 conflict 分组（同组顺序 / 跨组并行）；MAX_WORKERS=8。所有 builtin tools 标注。验收：2 read-only 并行 / 同 path write 顺序。STREAM-L-DESIGN § 3.L6 / Mini-ADR L-6。
+- [ ] **L7 Trajectory recording** — 新 `trajectory/recorder.py` 写 ObjectStore `trajectories/{tenant_id}/{outcome}/{YYYY}/{MM}/{DD}/{thread_id}.jsonl`；4 outcome 分流（success / failed / max_steps / cancelled）；manifest `PoliciesSpec.trajectory_recording` opt-out。验收：run 完结 → ObjectStore 出现对应 key + 可被 `tools/eval/` 加载（J.13 数据源）。STREAM-L-DESIGN § 3.L7 / Mini-ADR L-7。
+- [ ] **L8 OAuth 401 自动 refresh + 重试一次** — 新 `OAuthCapableProvider` Protocol + `LLMRouter` 检测 401 调 `refresh_credentials()` 重试 1 次；强制 ≤ 1 次防 401 loop。验收：fake OAuth provider 401 → refresh → 200；`AnthropicProvider` 不实现 Protocol 不影响 happy path。STREAM-L-DESIGN § 3.L8 / Mini-ADR L-8。
+
+**Stream L Verification（待落实）**：8 条 gap 全部 PR 合入 main，零债 6 条核验全过；§ 1.4 列的 8 个 Prom counter / recording rule 均 emit；与 Stream K 同验收模板。
+
 ### Stream J — Agent Harness 能力补全（大里程碑；canonical agent + dogfood 的前置）
 
 参考：[architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)、[streams/STREAM-J-DESIGN](./streams/STREAM-J-DESIGN.md)（设计先行）
@@ -417,6 +437,7 @@ PR 链（main 上 14 个 squash commits + 1 docs PR）：#172（设计）→ #18
 
 - [ ] 24 项 P0 全部勾选完成（参考 [architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §"Gap 严重性矩阵"）
 - [x] **Stream K（Capability Hardening Sprint）15 子项完成** —— 13 条 (c) 类弱版全部补到生产级（[STREAM-K-DESIGN](./streams/STREAM-K-DESIGN.md)）；零债 6 条核验 ✅，PR #172 + #182–#196 全部 squash 合入 main（2026-05-20）
+- [ ] **Stream L（Hermes-derived 单 turn 能力强化）8 子项完成** —— L1-L8 全部补到生产级（[STREAM-L-DESIGN](./streams/STREAM-L-DESIGN.md)）；零债 6 条核验通过
 - [ ] **Stream J（Agent Harness 能力补全）15 子项完成** —— 26 维能力矩阵无缺口
 - [ ] canonical 能力 agent 跑通 + staging 冒烟（便宜模型端到端真实 run）
 - [ ] 测试金字塔达标：unit ≥ 85%、integration ≥ 70% 关键路径、E2E 5-10 场景
