@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from helix_agent.persistence import ArtifactStore
 from helix_agent.protocol import (
@@ -27,6 +28,7 @@ from helix_agent.protocol import (
     MCPToolSpec,
     SubAgentSpec,
     ToolSpecEntry,
+    VisionSpec,
 )
 from orchestrator.errors import AgentFactoryError
 from orchestrator.multimodal import ImageResolver
@@ -37,7 +39,12 @@ from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
 from orchestrator.tools.registry import ToolRegistry
 from orchestrator.tools.sandbox import ExecPythonTool, SupervisorClient
 from orchestrator.tools.subagent import MAX_SUBAGENT_DEPTH, ChildAgentBuilder, SubAgentTool
+from orchestrator.tools.vision import AskImageTool
 from orchestrator.tools.web_search import DEFAULT_MAX_RESULTS, TavilyClient, WebSearchTool
+
+if TYPE_CHECKING:
+    # Imported under TYPE_CHECKING only to avoid an ``llm → tools`` cycle.
+    from orchestrator.llm import LLMCaller
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +98,8 @@ async def build_tool_registry(
     subagents: Sequence[SubAgentSpec] = (),
     subagent_depth: int = 0,
     knowledge: KnowledgeSpec | None = None,
+    vision: VisionSpec | None = None,
+    vl_caller: LLMCaller | None = None,
 ) -> ToolRegistry:
     """Build a :class:`ToolRegistry` from a manifest's ``tools:`` entries.
 
@@ -108,10 +117,15 @@ async def build_tool_registry(
     ``knowledge`` is the manifest's ``spec.knowledge`` block (Stream J.5);
     its presence activates the ``knowledge_search`` tool.
 
+    ``vision`` is the manifest's ``spec.vision`` block (Stream J.6 Path B);
+    its presence activates the ``ask_image`` tool, which routes to the
+    declared VL model via ``vl_caller``.
+
     :raises AgentFactoryError: an entry names an unknown builtin, declares
         a tool whose ``ToolEnv`` dependency is not configured, declares
-        ``subagents`` with no ``ToolEnv.child_agent_builder``, or declares
-        ``knowledge`` with no ``ToolEnv.knowledge_retriever``.
+        ``subagents`` with no ``ToolEnv.child_agent_builder``, declares
+        ``knowledge`` with no ``ToolEnv.knowledge_retriever``, or declares
+        ``vision`` with no ``ToolEnv.image_resolver`` / ``vl_caller``.
     """
     registry = ToolRegistry()
     for entry in tool_specs:
@@ -123,6 +137,7 @@ async def build_tool_registry(
             await _register_mcp(registry, entry, tool_env)
     _register_subagents(registry, subagents, tool_env, subagent_depth)
     _register_knowledge_search(registry, knowledge, tool_env)
+    _register_ask_image(registry, vision, tool_env, vl_caller)
     return registry
 
 
@@ -145,6 +160,31 @@ def _register_knowledge_search(
             knowledge_base_refs=tuple(knowledge.knowledge_base_refs),
         )
     )
+
+
+def _register_ask_image(
+    registry: ToolRegistry,
+    vision: VisionSpec | None,
+    env: ToolEnv,
+    vl_caller: LLMCaller | None,
+) -> None:
+    """Register the ``ask_image`` tool when the manifest declares a
+    ``vision:`` block — Stream J.6 Path B. A declared block missing
+    either the image resolver or the VL caller is an un-buildable
+    manifest."""
+    if vision is None:
+        return
+    if env.image_resolver is None:
+        raise AgentFactoryError(
+            "manifest declares 'vision' but no image resolver is configured "
+            "(ToolEnv.image_resolver)"
+        )
+    if vl_caller is None:
+        raise AgentFactoryError(
+            "manifest declares 'vision' but no VL llm_caller was built — "
+            "this is an agent-factory bug, not a manifest defect"
+        )
+    registry.register(AskImageTool(vl_caller=vl_caller, image_resolver=env.image_resolver))
 
 
 def _register_subagents(

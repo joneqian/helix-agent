@@ -138,9 +138,17 @@ def test_build_human_message_path_a_omits_empty_text_block() -> None:
     assert msg.content == [{"type": "image_ref", "ref": ref}]
 
 
-def test_build_human_message_path_b_falls_through_to_text_only() -> None:
-    """PR6 stage: vision-incapable manifest gets a plain-text message;
-    PR7 will add the Path B text-reference assembly that mentions the
-    refs to the agent for ``ask_image`` to consume."""
-    msg = _build_human_message(input_text="describe", image_refs=[_ref()], supports_vision=False)
-    assert msg.content == "describe"
+def test_build_human_message_path_b_mentions_refs_inline() -> None:
+    """Path B — text-only model with images: each ref is mentioned in
+    the message body so the agent can call ``ask_image(image_ref, ...)``."""
+    ref = _ref()
+    msg = _build_human_message(input_text="describe", image_refs=[ref], supports_vision=False)
+    assert isinstance(msg.content, str)
+    assert "describe" in msg.content
+    assert f"[image attached: {ref}]" in msg.content
+
+
+def test_build_human_message_path_b_with_only_images_and_no_text() -> None:
+    ref = _ref()
+    msg = _build_human_message(input_text=None, image_refs=[ref], supports_vision=False)
+    assert msg.content == f"[image attached: {ref}]"

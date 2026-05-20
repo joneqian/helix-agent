@@ -130,18 +130,26 @@ def _build_human_message(
     the text followed by one ``image_ref`` block per upload, so the
     provider adapter resolves them to native multimodal payloads.
 
-    Path B and the no-images case — emit plain text. (Path B's
-    text-reference assembly lands with the ``ask_image`` tool in PR7.)
+    Path B (``supports_vision=False`` with images) — emit plain text
+    with each ref mentioned as ``[image attached: helix://...]``. The
+    agent has the ``ask_image`` tool in its catalogue and uses these
+    refs to call it.
+
+    No-images case — emit plain text unchanged.
     """
     text = input_text or ""
-    if not image_refs or not supports_vision:
+    if not image_refs:
         return HumanMessage(content=text)
-    content: list[dict[str, Any]] = []
-    if text:
-        content.append({"type": "text", "text": text})
-    for ref in image_refs:
-        content.append(image_ref_block(ref))
-    return HumanMessage(content=content)
+    if supports_vision:
+        content: list[dict[str, Any]] = []
+        if text:
+            content.append({"type": "text", "text": text})
+        for ref in image_refs:
+            content.append(image_ref_block(ref))
+        return HumanMessage(content=content)
+    mentions = "\n".join(f"[image attached: {ref}]" for ref in image_refs)
+    body = f"{text}\n\n{mentions}" if text else mentions
+    return HumanMessage(content=body)
 
 
 def _get_audit(request: Request) -> AuditLogger:

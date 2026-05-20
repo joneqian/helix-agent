@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from langchain_core.messages import AIMessage, BaseMessage
 
 from helix_agent.persistence import InMemoryKnowledgeStore
 from helix_agent.protocol import (
@@ -14,12 +15,16 @@ from helix_agent.protocol import (
     HTTPToolSpec,
     KnowledgeSpec,
     MCPToolSpec,
+    ModelSpec,
     SubAgentSpec,
+    VisionSpec,
 )
 from orchestrator import AgentFactoryError
 from orchestrator.llm import FakeEmbedder
+from orchestrator.multimodal import InMemoryImageResolver
 from orchestrator.tools import (
     MAX_SUBAGENT_DEPTH,
+    AskImageTool,
     HTTPTool,
     KnowledgeRetriever,
     KnowledgeSearchTool,
@@ -242,3 +247,55 @@ async def test_no_knowledge_block_registers_no_search_tool() -> None:
     env = ToolEnv(knowledge_retriever=_knowledge_retriever())
     registry = await build_tool_registry([], tool_env=env)
     assert registry.get("knowledge_search") is None
+
+
+# ---------------------------------------------------------------------------
+# vision — ask_image activation (Stream J.6 Path B)
+# ---------------------------------------------------------------------------
+
+
+async def _stub_vl_caller(*, messages: Sequence[BaseMessage], tools: Sequence[Any]) -> AIMessage:
+    """Conforms to :class:`LLMCaller`; never invoked by assembly tests."""
+    raise AssertionError("VL caller must not be called during assembly")
+
+
+def _vision_spec() -> VisionSpec:
+    return VisionSpec(model=ModelSpec(provider="qwen", name="qwen-vl-max"))
+
+
+@pytest.mark.asyncio
+async def test_vision_block_activates_ask_image_tool() -> None:
+    env = ToolEnv(image_resolver=InMemoryImageResolver())
+    registry = await build_tool_registry(
+        [],
+        tool_env=env,
+        vision=_vision_spec(),
+        vl_caller=_stub_vl_caller,
+    )
+    tool = registry.get("ask_image")
+    assert isinstance(tool, AskImageTool)
+
+
+@pytest.mark.asyncio
+async def test_vision_block_without_image_resolver_raises() -> None:
+    with pytest.raises(AgentFactoryError, match="image resolver"):
+        await build_tool_registry(
+            [],
+            tool_env=ToolEnv(),
+            vision=_vision_spec(),
+            vl_caller=_stub_vl_caller,
+        )
+
+
+@pytest.mark.asyncio
+async def test_vision_block_without_vl_caller_raises() -> None:
+    env = ToolEnv(image_resolver=InMemoryImageResolver())
+    with pytest.raises(AgentFactoryError, match="VL llm_caller"):
+        await build_tool_registry([], tool_env=env, vision=_vision_spec(), vl_caller=None)
+
+
+@pytest.mark.asyncio
+async def test_no_vision_block_registers_no_ask_image_tool() -> None:
+    env = ToolEnv(image_resolver=InMemoryImageResolver())
+    registry = await build_tool_registry([], tool_env=env)
+    assert registry.get("ask_image") is None

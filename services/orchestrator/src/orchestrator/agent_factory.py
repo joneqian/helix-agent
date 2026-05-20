@@ -154,6 +154,15 @@ async def build_agent(
     un-assemblable ``tools:`` entry, …).
     """
     env = tool_env or ToolEnv()
+    # Stream J.6 — Path A and Path B are mutually exclusive. A ``vision:``
+    # block on a manifest whose main model already accepts images would
+    # leave the route ambiguous; refuse to build (the guard runs before
+    # any router work so the manifest defect is the surfaced error).
+    if spec.spec.vision is not None and spec.spec.model.supports_vision:
+        raise AgentFactoryError(
+            "manifest declares 'vision' block but model.supports_vision is true; "
+            "Path A (content blocks) and Path B (ask_image) are mutually exclusive"
+        )
     chains = build_middleware_chains(spec, env=middleware_env)
     # Stream J.11 — resolve the LLM router for each step class; the
     # planner / reflect nodes may route to a different model than the
@@ -166,6 +175,16 @@ async def build_agent(
         around_llm_chain=chains.around_llm_call,
         image_resolver=env.image_resolver,
     )
+    # Stream J.6 Path B — build the VL router when a ``vision:`` block is
+    # declared; ``ask_image`` will route through it.
+    vl_caller: LLMCaller | None = None
+    if spec.spec.vision is not None:
+        vl_caller = await build_llm_router(
+            spec.spec.vision.model,
+            secret_store=secret_store,
+            around_llm_chain=chains.around_llm_call,
+            image_resolver=env.image_resolver,
+        )
     registry = await build_tool_registry(
         spec.spec.tools,
         tool_env=env,
@@ -178,6 +197,9 @@ async def build_agent(
         subagent_depth=subagent_depth,
         # Stream J.5 — a ``knowledge:`` block activates the knowledge_search tool.
         knowledge=spec.spec.knowledge,
+        # Stream J.6 Path B — a ``vision:`` block activates the ask_image tool.
+        vision=spec.spec.vision,
+        vl_caller=vl_caller,
     )
     # Stream J.1 — a ``plan_execute`` manifest front-loads a planner node
     # that decomposes the task before the ReAct loop runs.
