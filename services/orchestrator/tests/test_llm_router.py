@@ -6,6 +6,7 @@ fallback), #22 (all exhausted) from STREAM-E-DESIGN § 5.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -18,6 +19,7 @@ from helix_agent.runtime.middleware import (
     LLMNetworkError,
     LLMRateLimitError,
     LLMServerError,
+    LLMStreamStaleError,
 )
 from orchestrator.llm import (
     AllProvidersExhaustedError,
@@ -281,3 +283,135 @@ def test_handle_is_frozen() -> None:
 def test_scripted_provider_satisfies_protocol() -> None:
     """Confidence check on the test helper itself."""
     assert isinstance(_ScriptedProvider(response=AIMessage(content="x")), LLMProvider)
+
+
+# ---------------------------------------------------------------------------
+# Stream L.L3 — provider-level stream stale-detection
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _HangingProvider:
+    """LLMProvider stub that sleeps ``sleep_s`` before returning.
+
+    Used by L3 tests to exercise the ``stream_deadline_s`` wall-clock cap
+    in :class:`LLMRouter._call_one`.
+    """
+
+    sleep_s: float
+    response: AIMessage = field(default_factory=lambda: AIMessage(content=""))
+    calls: list[dict[str, object]] = field(default_factory=list)
+
+    async def complete(
+        self,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolSpec],
+    ) -> AIMessage:
+        self.calls.append({"messages": list(messages), "tools": list(tools)})
+        await asyncio.sleep(self.sleep_s)
+        return self.response
+
+
+@pytest.mark.asyncio
+async def test_stream_deadline_triggers_stale_error_on_single_provider() -> None:
+    """A provider that hangs past the deadline raises :class:`LLMStreamStaleError`
+    rather than the call locking forever."""
+    hanger = _HangingProvider(sleep_s=10)
+    router = LLMRouter(
+        providers=[_handle(hanger, "slow")],
+        stream_deadline_s=0.05,
+    )
+
+    with pytest.raises(AllProvidersExhaustedError) as exc_info:
+        await router(messages=_msgs(), tools=[])
+
+    assert isinstance(exc_info.value.last_exc, LLMStreamStaleError)
+    assert "slow" in str(exc_info.value.last_exc)
+    assert len(hanger.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_stale_falls_back_to_next_provider() -> None:
+    """``LLMStreamStaleError`` inherits :class:`LLMServerError`, so the
+    router treats it as retryable and tries the next provider — Mini-ADR
+    L-3's central guarantee that a hung provider doesn't lock the chain."""
+    primary = _HangingProvider(sleep_s=10)
+    fallback = _ScriptedProvider(response=AIMessage(content="recovered"))
+    router = LLMRouter(
+        providers=[_handle(primary, "slow"), _handle(fallback, "fast")],
+        stream_deadline_s=0.05,
+    )
+
+    result = await router(messages=_msgs(), tools=[])
+
+    assert result.content == "recovered"
+    assert len(primary.calls) == 1
+    assert len(fallback.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_deadline_zero_disables_timeout() -> None:
+    """``stream_deadline_s=None`` (or ``0``) skips ``asyncio.wait_for`` —
+    dev / long-batch paths can run without an upper bound when explicitly
+    configured."""
+    # A short sleep that would normally clear the 50ms deadline if
+    # deadline were active — we let it complete to confirm the wait_for
+    # wrap is bypassed.
+    slow = _HangingProvider(sleep_s=0.1)
+    router = LLMRouter(
+        providers=[_handle(slow, "slow")],
+        stream_deadline_s=None,
+    )
+    result = await router(messages=_msgs(), tools=[])
+    assert result is slow.response
+
+
+@pytest.mark.asyncio
+async def test_stream_deadline_zero_explicit_int_disables_timeout() -> None:
+    """Manifest-level ``stream_deadline_s: 0`` propagates through
+    :func:`build_step_routers` as ``None`` — but the router also accepts
+    a literal ``0`` and treats it the same way (defense in depth)."""
+    slow = _HangingProvider(sleep_s=0.1)
+    router = LLMRouter(
+        providers=[_handle(slow, "slow")],
+        stream_deadline_s=0,
+    )
+    result = await router(messages=_msgs(), tools=[])
+    assert result is slow.response
+
+
+@pytest.mark.asyncio
+async def test_fast_provider_under_deadline_succeeds() -> None:
+    """Happy-path regression — a provider that finishes well inside the
+    deadline runs without interference from the wait_for wrap."""
+    fast = _ScriptedProvider(response=AIMessage(content="quick"))
+    router = LLMRouter(
+        providers=[_handle(fast, "fast")],
+        stream_deadline_s=5.0,
+    )
+    result = await router(messages=_msgs(), tools=[])
+    assert result.content == "quick"
+    assert len(fast.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_stale_emits_counter() -> None:
+    """L3 verification — a stale event increments
+    ``helix_llm_stream_stale_total{provider_key=...}``."""
+    from prometheus_client import REGISTRY
+
+    metric = "helix_llm_stream_stale_total"
+    labels = {"provider_key": "counter-test"}
+    before = REGISTRY.get_sample_value(metric, labels=labels) or 0.0
+
+    hanger = _HangingProvider(sleep_s=10)
+    router = LLMRouter(
+        providers=[_handle(hanger, "counter-test")],
+        stream_deadline_s=0.05,
+    )
+    with pytest.raises(AllProvidersExhaustedError):
+        await router(messages=_msgs(), tools=[])
+
+    after = REGISTRY.get_sample_value(metric, labels=labels) or 0.0
+    assert after == before + 1

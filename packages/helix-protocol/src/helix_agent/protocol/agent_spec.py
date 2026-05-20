@@ -540,6 +540,18 @@ class AgentSpecBody(BaseModel):
             "agents with time-sensitive prompts must set ``enabled: false``."
         ),
     )
+    stream_deadline_s: int = Field(
+        default=90,
+        ge=0,
+        le=3600,
+        description=(
+            "Stream L.L3 — wall-clock cap on a single LLM provider call. "
+            "Default 90s (matches Hermes-derived stale-stream timeout). "
+            "Hits trigger LLMStreamStaleError so the router falls back to "
+            "the next provider rather than locking the run. Set ``0`` to "
+            "disable (dev / long-batch paths)."
+        ),
+    )
     policies: PolicySpec = Field(default_factory=PolicySpec)
     code: CodePackageSpec | None = None
     hooks: dict[str, str] = Field(default_factory=dict)

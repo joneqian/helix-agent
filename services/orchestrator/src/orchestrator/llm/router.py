@@ -38,22 +38,33 @@ mode for early-stage runs that haven't booted the chain yet.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from helix_agent.common.observability import helix_counter
 from helix_agent.runtime.middleware import (
     LLMClientError,
     LLMError,
+    LLMStreamStaleError,
     MiddlewareChain,
     MiddlewareContext,
 )
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
+
+# Stream L.L3 — counter for provider-level stream stale timeouts. Labeled by
+# ``provider_key`` so dashboards can show which upstream is hanging.
+_llm_stream_stale_total = helix_counter(
+    "helix_llm_stream_stale_total",
+    "Provider calls that exceeded LLMRouter.stream_deadline_s (Stream L.L3).",
+    ("provider_key",),
+)
 
 
 @runtime_checkable
@@ -138,6 +149,13 @@ class LLMRouter:
 
     providers: Sequence[ProviderHandle]
     around_llm_chain: MiddlewareChain | None = field(default=None)
+    #: Stream L.L3 — wall-clock cap on a single provider's ``complete()``
+    #: call. ``None`` or ``0`` disables the timeout (dev / long batch
+    #: paths); positive values wrap each provider attempt in
+    #: ``asyncio.wait_for`` and translate ``TimeoutError`` into
+    #: :class:`LLMStreamStaleError` so the router falls back to the next
+    #: provider rather than locking the run.
+    stream_deadline_s: float | None = field(default=None)
 
     async def __call__(
         self,
@@ -196,7 +214,12 @@ class LLMRouter:
         ``ctx.payload["response"]``.
         """
         if self.around_llm_chain is None:
-            return await handle.provider.complete(messages=messages, tools=tools)
+            result = await self._invoke_with_deadline(
+                handle,
+                handle.provider.complete(messages=messages, tools=tools),
+            )
+            assert isinstance(result, AIMessage)  # noqa: S101 - provider Protocol contract
+            return result
 
         ctx = MiddlewareContext(
             payload={
@@ -213,7 +236,7 @@ class LLMRouter:
             )
             c.payload["response"] = response
 
-        await self.around_llm_chain.invoke(ctx, terminal)
+        await self._invoke_with_deadline(handle, self.around_llm_chain.invoke(ctx, terminal))
         response = ctx.payload.get("response")
         if not isinstance(response, AIMessage):
             # Middleware mis-handled the terminal (didn't call call_next, or
@@ -224,3 +247,33 @@ class LLMRouter:
                 f"response for provider_key={handle.key!r}"
             )
         return response
+
+    async def _invoke_with_deadline(
+        self,
+        handle: ProviderHandle,
+        coro: Awaitable[Any],
+    ) -> Any:
+        """Stream L.L3 — wrap a provider invocation in ``asyncio.wait_for``.
+
+        ``stream_deadline_s`` is per-provider (Mini-ADR L-3): a hung
+        provider trips the timeout, raises :class:`LLMStreamStaleError`
+        (a retryable :class:`LLMServerError` subclass), and the surrounding
+        :meth:`__call__` loop falls back to the next provider rather than
+        locking the run. When ``stream_deadline_s`` is ``None`` or ``0``
+        the call is awaited directly (dev / long-batch path).
+        """
+        deadline = self.stream_deadline_s
+        if deadline is None or deadline <= 0:
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, timeout=deadline)
+        except TimeoutError as exc:
+            _llm_stream_stale_total.labels(provider_key=handle.key).inc()
+            logger.warning(
+                "llm_router.stream_stale key=%s deadline_s=%.1f",
+                handle.key,
+                deadline,
+            )
+            raise LLMStreamStaleError(
+                f"provider {handle.key!r} exceeded stream_deadline_s={deadline:.1f}"
+            ) from exc

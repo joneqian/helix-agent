@@ -218,32 +218,23 @@ spec:
 
 ---
 
-### L3. Stream stale-detection（agent_node 加 wall-clock deadline）
+### L3. Stream stale-detection（router 加 per-provider wall-clock deadline）
 
-**改动**：`services/orchestrator/src/orchestrator/graph_builder/builder.py:agent_node`
+**实装位点（按 Mini-ADR L-3 per-provider 语义）**：`services/orchestrator/src/orchestrator/llm/router.py`
 
-```python
-# 之前
-response = await token.run_cancellable(llm_caller(messages=messages, tools=tools))
+`LLMRouter` 加 `stream_deadline_s: float | None` 字段；`_call_one` 在调 `provider.complete()` 或 around-LLM 中间件链时套 `_invoke_with_deadline(handle, coro)` helper —— 内部 `asyncio.wait_for(coro, timeout=stream_deadline_s)` 捕 `TimeoutError` 转为 `LLMStreamStaleError(...)`（继承 `LLMServerError`，retryable）。router 的 fallback 循环看到这个 error 自动尝试下一 provider。
 
-# 之后
-try:
-    response = await asyncio.wait_for(
-        token.run_cancellable(llm_caller(messages=messages, tools=tools)),
-        timeout=stream_deadline_s,
-    )
-except asyncio.TimeoutError as exc:
-    _llm_stream_stale_counter.inc()
-    raise LLMStreamStaleError(deadline_s=stream_deadline_s) from exc
-```
+**为什么 per-provider 而非 agent_node**：Mini-ADR L-3 写 "用 `asyncio.wait_for(complete(), timeout=90)` 在整个调用上套 deadline" —— `complete()` 是 provider 级。若放 agent_node 外层 wrap `llm_caller(...)`，timeout 会盖住整个 router 链，hung 的 primary provider 吃掉所有预算让 fallback 没时间。per-provider 是正确语义。
 
-**LLMStreamStaleError**：新增于 `services/orchestrator/src/orchestrator/llm/router.py`，继承 `LLMServerError`（已是 retryable 类）→ 自动进 fallback chain。
+**LLMStreamStaleError**：新增于 `packages/helix-runtime/src/helix_agent/runtime/middleware/llm_error_handling.py`，继承 `LLMServerError`（已是 retryable 类）→ 自动进 fallback chain。从 `helix_agent.runtime.middleware` 导出。
 
 **Manifest schema**（`packages/helix-protocol/src/helix_agent/protocol/agent_spec.py`）：
 ```yaml
 spec:
-  stream_deadline_s: 90   # 默认 90s；可关（设 0 = 无超时）
+  stream_deadline_s: 90   # 默认 90s；可关（设 0 = 无超时）；上限 3600s
 ```
+
+**`agent_factory.build_step_routers`**：从 `spec.spec.stream_deadline_s` 推导 `float | None`（>0 转 float，=0 转 None），把 deadline 统一传到 default / planning / reflection 三个 router；J.6 vision router 同样共享该 deadline。
 
 **Mini-ADR L-3**：
 - 默认 90s 来自 Hermes 实测（`conversation_loop.py:1030` 90s stale-stream timeout），覆盖 OpenAI/Anthropic 95% 正常请求
@@ -251,16 +242,21 @@ spec:
 - 当 `stream_deadline_s=0` 时关掉超时（dev / 长 batch 场景）；manifest 校验拒 < 0
 - Stale 错误归类 retryable 触发 fallback 而非直接终止 —— provider B 在 provider A hang 时可能正常
 
-**测试**：
-- `test_agent_node_stream_deadline_triggers_stale_error` —— mock provider 等 100s，断言 90s 后 raise `LLMStreamStaleError`
-- `test_stream_stale_triggers_fallback_chain` —— router 收到 stale 错误 → 切到 fallback provider 成功
-- `test_stream_deadline_zero_disables_timeout` —— manifest 设 0 时 mock 慢 provider 不抛
+**测试**（落在 `services/orchestrator/tests/test_llm_router.py` 新增 6 条 L3 section）：
+- `test_stream_deadline_triggers_stale_error_on_single_provider`
+- `test_stream_stale_falls_back_to_next_provider` —— 验证 fallback chain 触发
+- `test_stream_deadline_zero_disables_timeout` —— `None` 关闭
+- `test_stream_deadline_zero_explicit_int_disables_timeout` —— `0` 关闭（manifest 路径）
+- `test_fast_provider_under_deadline_succeeds` —— happy path 不退化
+- `test_stream_stale_emits_counter` —— `helix_llm_stream_stale_total` +1
 
 **关键文件**：
-- `services/orchestrator/src/orchestrator/graph_builder/builder.py:agent_node`
-- `services/orchestrator/src/orchestrator/llm/router.py`（`LLMStreamStaleError`）
-- `packages/helix-protocol/src/helix_agent/protocol/agent_spec.py`（`stream_deadline_s`）
-- `services/orchestrator/tests/test_builder_react.py`（新增 deadline 测试）
+- `services/orchestrator/src/orchestrator/llm/router.py`（`stream_deadline_s` 字段 + `_invoke_with_deadline` helper + counter）
+- `services/orchestrator/src/orchestrator/agent_factory.py`（`build_llm_router` / `build_step_routers` 透传 deadline）
+- `packages/helix-runtime/src/helix_agent/runtime/middleware/llm_error_handling.py`（`LLMStreamStaleError`）
+- `packages/helix-runtime/src/helix_agent/runtime/middleware/__init__.py`（导出）
+- `packages/helix-protocol/src/helix_agent/protocol/agent_spec.py`（`AgentSpecBody.stream_deadline_s`）
+- `services/orchestrator/tests/test_llm_router.py`（6 个新测试）
 
 ---
 

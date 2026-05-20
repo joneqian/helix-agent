@@ -87,6 +87,9 @@ from helix_agent.runtime.middleware.llm_error_handling import (
 from helix_agent.runtime.middleware.llm_error_handling import (
     LLMServerError as LLMServerError,
 )
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMStreamStaleError as LLMStreamStaleError,
+)
 from helix_agent.runtime.middleware.loop_detection import (
     DEFAULT_REMINDER_TEXT as DEFAULT_REMINDER_TEXT,
 )
@@ -141,6 +144,7 @@ __all__ = [
     "LLMNetworkError",
     "LLMRateLimitError",
     "LLMServerError",
+    "LLMStreamStaleError",
     "LangfuseClient",
     "LangfuseMiddleware",
     "LangfuseSpan",

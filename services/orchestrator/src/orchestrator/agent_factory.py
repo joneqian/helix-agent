@@ -185,14 +185,18 @@ async def build_agent(
         image_resolver=env.image_resolver,
     )
     # Stream J.6 Path B — build the VL router when a ``vision:`` block is
-    # declared; ``ask_image`` will route through it.
+    # declared; ``ask_image`` will route through it. Stream L.L3 — the VL
+    # router shares the agent's wall-clock cap so a hung VL provider doesn't
+    # outlive an otherwise-cancelled run.
     vl_caller: LLMCaller | None = None
     if spec.spec.vision is not None:
+        vl_deadline_s = spec.spec.stream_deadline_s
         vl_caller = await build_llm_router(
             spec.spec.vision.model,
             secret_store=secret_store,
             around_llm_chain=chains.around_llm_call,
             image_resolver=env.image_resolver,
+            stream_deadline_s=float(vl_deadline_s) if vl_deadline_s > 0 else None,
         )
     registry = await build_tool_registry(
         spec.spec.tools,
@@ -265,6 +269,7 @@ async def build_llm_router(
     secret_store: SecretStore,
     around_llm_chain: MiddlewareChain | None = None,
     image_resolver: ImageResolver | None = None,
+    stream_deadline_s: float | None = None,
 ) -> LLMRouter:
     """Build an :class:`LLMRouter` from a ``ModelSpec`` + its fallback tree.
 
@@ -279,6 +284,10 @@ async def build_llm_router(
 
     ``image_resolver`` is threaded into every provider so ``image_ref``
     content blocks resolve to bytes at call time (J.6 Path A).
+
+    ``stream_deadline_s`` (Stream L.L3) caps each provider's ``complete()``
+    call in wall-clock time; ``None`` / ``0`` disables. See
+    :class:`LLMRouter.stream_deadline_s`.
     """
     handles: list[ProviderHandle] = []
     for entry in _flatten_chain(model):
@@ -291,7 +300,11 @@ async def build_llm_router(
         provider = _build_provider(entry, api_key, image_resolver=image_resolver)
         rate_limited = RateLimitedProvider.with_rpm(provider, rate_limit_rpm=entry.rate_limit_rpm)
         handles.append(ProviderHandle(provider=rate_limited, key=f"{entry.provider}:{entry.name}"))
-    return LLMRouter(providers=handles, around_llm_chain=around_llm_chain)
+    return LLMRouter(
+        providers=handles,
+        around_llm_chain=around_llm_chain,
+        stream_deadline_s=stream_deadline_s,
+    )
 
 
 async def build_step_routers(
@@ -309,12 +322,19 @@ async def build_step_routers(
 
     ``image_resolver`` is threaded into every router so ``image_ref``
     content blocks resolve to bytes at call time (Stream J.6 Path A).
+
+    Stream L.L3 — ``spec.spec.stream_deadline_s`` is applied uniformly
+    to every router (default + planning + reflection); a hung provider
+    on any step class trips the same wall-clock cap.
     """
+    deadline_s = spec.spec.stream_deadline_s
+    deadline: float | None = float(deadline_s) if deadline_s > 0 else None
     default = await build_llm_router(
         spec.spec.model,
         secret_store=secret_store,
         around_llm_chain=around_llm_chain,
         image_resolver=image_resolver,
+        stream_deadline_s=deadline,
     )
     planning = default
     reflection = default
@@ -326,6 +346,7 @@ async def build_step_routers(
                 secret_store=secret_store,
                 around_llm_chain=around_llm_chain,
                 image_resolver=image_resolver,
+                stream_deadline_s=deadline,
             )
             if rule.when == "planning":
                 planning = routed
