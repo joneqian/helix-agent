@@ -135,6 +135,9 @@ from orchestrator.tools.subagent import (
 from orchestrator.tools.subagent import (
     SubAgentTool as SubAgentTool,
 )
+from orchestrator.tools.vision import (
+    AskImageTool as AskImageTool,
+)
 from orchestrator.tools.web_search import (
     DEFAULT_CONTENT_CHAR_CAP as DEFAULT_CONTENT_CHAR_CAP,
 )
@@ -165,6 +168,7 @@ __all__ = [
     "KNOWN_BUILTINS",
     "MAX_SUBAGENT_DEPTH",
     "AllowlistProvider",
+    "AskImageTool",
     "ChildAgentBuilder",
     "ExecPythonTool",
     "HTTPSupervisorClient",

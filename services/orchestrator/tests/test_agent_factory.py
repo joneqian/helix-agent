@@ -298,6 +298,20 @@ async def test_build_agent_supports_vision_propagates_from_manifest() -> None:
     assert built.supports_vision is True
 
 
+@pytest.mark.asyncio
+async def test_build_agent_rejects_vision_block_on_visual_model() -> None:
+    """Stream J.6 symmetric guard — Path A (content blocks) and Path B
+    (ask_image) are mutually exclusive. A ``vision:`` block on a
+    vision-capable manifest is an un-buildable agent."""
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["model"]["supports_vision"] = True
+    doc["spec"]["vision"] = {"model": {"provider": "qwen", "name": "qwen-vl-max"}}
+    spec = AgentSpec.model_validate(doc)
+    async with make_checkpointer("memory") as cp:
+        with pytest.raises(AgentFactoryError, match="mutually exclusive"):
+            await build_agent(spec, secret_store=_secret_store(), checkpointer=cp)
+
+
 class _StubChildBuilder:
     """Conforms to ``ChildAgentBuilder``; never invoked by ``build_agent``
     (assembly only *registers* SubAgentTools)."""
