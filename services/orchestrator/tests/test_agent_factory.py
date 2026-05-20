@@ -279,6 +279,25 @@ async def test_build_agent_max_steps_from_workflow() -> None:
     assert built.max_steps == 5
 
 
+@pytest.mark.asyncio
+async def test_build_agent_supports_vision_defaults_to_false() -> None:
+    """``ModelSpec.supports_vision`` default → ``BuiltAgent.supports_vision`` False."""
+    async with make_checkpointer("memory") as cp:
+        built = await build_agent(_spec(), secret_store=_secret_store(), checkpointer=cp)
+    assert built.supports_vision is False
+
+
+@pytest.mark.asyncio
+async def test_build_agent_supports_vision_propagates_from_manifest() -> None:
+    """Stream J.6 — the manifest's ``model.supports_vision`` reaches BuiltAgent."""
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["model"]["supports_vision"] = True
+    spec = AgentSpec.model_validate(doc)
+    async with make_checkpointer("memory") as cp:
+        built = await build_agent(spec, secret_store=_secret_store(), checkpointer=cp)
+    assert built.supports_vision is True
+
+
 class _StubChildBuilder:
     """Conforms to ``ChildAgentBuilder``; never invoked by ``build_agent``
     (assembly only *registers* SubAgentTools)."""
