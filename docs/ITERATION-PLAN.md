@@ -373,7 +373,7 @@
 
 **P3 — 阻塞 M1 入口**
 - [ ] **K12 memory recall eval gate**（补 G2c）— `tools/eval/sets/memory_recall_zh_en/` 中英文 benchmark + `recall@5 >= 0.7` SLO
-- [ ] **K13 KMS 轮换演练**（补 G5）— fake KMS endpoint 切换 + cache invalidate 集成测试
+- [x] **K13 KMS 轮换演练**（补 G5）— `FakeKmsBackend` 已支持 reseed（new value/version），加 3 个轮换 drill 测试：rotation 后 cache TTL 过期内仍返旧值（设计预期 stale-by-TTL）→ 过期后取到新值；`put()` 路径立即 invalidate；dynamic kind 用半 TTL 提前收敛。覆盖 \"轮换后 60s 内取新值 < TTL\" 的核心 invariant。
 - [ ] **K14 WORM 恢复演练**（补 G6）— `docs/runbooks/audit-restore.md` + `tools/persistence/restore_audit.py` + 演练脚本
 - [ ] **K15 PG 恢复演练**（补 G7）— 定位备份现状 → `docs/runbooks/pg-restore.md` + 演练脚本 + RTO/RPO 实测
 
