@@ -85,8 +85,10 @@ from control_plane.runtime import (
     build_tool_env,
     make_agent_builder,
     make_agent_runtime,
+    make_image_resolver,
     make_knowledge_retriever,
     resolve_embedder,
+    resolve_object_store_config,
     resolve_reranker,
     resolve_web_search_client,
 )
@@ -165,6 +167,7 @@ from helix_agent.persistence.thread_meta import (
 from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.checkpointer import make_checkpointer
 from helix_agent.runtime.secret_store import make_secret_store
+from helix_agent.runtime.storage import make_object_store
 from orchestrator import MemoryEnv
 
 __all__ = ["create_app"]
@@ -357,6 +360,25 @@ def create_app(
                 mcp_pool = await stack.enter_async_context(
                     build_mcp_pool(resolved_settings.mcp_servers_config_file)
                 )
+                # Stream J.6 — object store for uploaded images + the
+                # image resolver both multimodal paths draw on (Path A
+                # content blocks / Path B ask_image).
+                object_store = await stack.enter_async_context(
+                    make_object_store(
+                        resolved_settings.object_store_backend,
+                        await resolve_object_store_config(
+                            backend=resolved_settings.object_store_backend,
+                            endpoint_url=resolved_settings.object_store_endpoint_url,
+                            region=resolved_settings.object_store_region,
+                            bucket=resolved_settings.object_store_bucket,
+                            access_key_ref=resolved_settings.object_store_access_key_ref,
+                            secret_key_ref=resolved_settings.object_store_secret_key_ref,
+                            secret_store=resolved_secret_store,
+                        ),
+                    )
+                )
+                _app.state.object_store = object_store
+                image_resolver = make_image_resolver(object_store)
                 # Stream J.3 — long-term memory backend for the agent.
                 embedder = await resolve_embedder(
                     api_key_ref=resolved_settings.embedding_api_key_ref,
@@ -381,6 +403,7 @@ def create_app(
                     mcp_pool=mcp_pool,
                     artifact_store=resolved_artifact_store,
                     knowledge_retriever=knowledge_retriever,
+                    image_resolver=image_resolver,
                 )
                 middleware_env = build_middleware_env()
                 memory_env = MemoryEnv(store=resolved_memory_store, embedder=embedder)
@@ -451,6 +474,9 @@ def create_app(
     app.state.feedback_store = resolved_feedback
     app.state.artifact_store = resolved_artifact_store
     app.state.knowledge_store = resolved_knowledge_store
+    # Stream J.6 — the object store is created in the lifespan (it goes on
+    # the AsyncExitStack); the upload endpoint reads it from app.state.
+    app.state.object_store = None
     # The ingestion runner is built in the lifespan (it needs the resolved
     # embedder); tests inject one. ``None`` → document upload returns 503.
     app.state.knowledge_ingestion_runner = knowledge_ingestion_runner

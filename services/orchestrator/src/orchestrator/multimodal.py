@@ -20,8 +20,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, runtime_checkable
 
+from helix_agent.protocol.multimodal import parse_image_ref
+from helix_agent.runtime.storage.base import ObjectStore
+
 #: ``content`` block discriminator for an uploaded-image reference.
 IMAGE_REF_BLOCK_TYPE: Final = "image_ref"
+
+#: Image media type per file extension — the J.6 supported set. The
+#: upload endpoint sets the extension from the validated content type,
+#: so every reference resolves to exactly one of these.
+_MEDIA_TYPE_BY_EXT: Final[dict[str, str]] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
 
 
 def image_ref_block(uri: str) -> dict[str, str]:
@@ -79,8 +93,8 @@ class ImageResolver(Protocol):
     async def resolve(self, ref: str) -> ResolvedImage:
         """Fetch the referenced image.
 
-        Raises ``ValueError`` if the reference is malformed or ``KeyError``
-        if the object is missing.
+        Raises an error if the reference is malformed or the object is
+        missing — the exact type is implementation-specific.
         """
 
 
@@ -96,3 +110,24 @@ class InMemoryImageResolver:
         except KeyError as exc:
             msg = f"no image for ref {ref!r}"
             raise KeyError(msg) from exc
+
+
+@dataclass(frozen=True)
+class ObjectStoreImageResolver:
+    """:class:`ImageResolver` backed by an :class:`ObjectStore` — Stream J.6.
+
+    The media type is derived from the reference's file extension:
+    ``ObjectStore.get`` returns only bytes, and the upload endpoint sets
+    the extension from the validated content type.
+    """
+
+    store: ObjectStore
+
+    async def resolve(self, ref: str) -> ResolvedImage:
+        image_ref = parse_image_ref(ref)
+        media_type = _MEDIA_TYPE_BY_EXT.get(image_ref.ext.lower())
+        if media_type is None:
+            msg = f"unsupported image extension {image_ref.ext!r} in ref {ref!r}"
+            raise ValueError(msg)
+        data = await self.store.get(image_ref.storage_key)
+        return ResolvedImage(media_type=media_type, data=data)

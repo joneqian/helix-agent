@@ -33,7 +33,9 @@ from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigNotConfiguredError
 from helix_agent.persistence import InMemoryKnowledgeStore
 from helix_agent.runtime.secret_store import LocalDevSecretStore
+from helix_agent.runtime.storage import InMemoryObjectStore
 from orchestrator.llm import FakeEmbedder
+from orchestrator.multimodal import ObjectStoreImageResolver
 from orchestrator.tools import (
     HTTPSupervisorClient,
     HTTPTavilyClient,
@@ -218,6 +220,12 @@ def test_build_tool_env_carries_knowledge_retriever() -> None:
     retriever = KnowledgeRetriever(store=InMemoryKnowledgeStore(), embedder=FakeEmbedder())
     env = build_tool_env(_FakeTenantConfigService(allowlist=[]), knowledge_retriever=retriever)
     assert env.knowledge_retriever is retriever
+
+
+def test_build_tool_env_carries_image_resolver() -> None:
+    resolver = ObjectStoreImageResolver(store=InMemoryObjectStore())
+    env = build_tool_env(_FakeTenantConfigService(allowlist=[]), image_resolver=resolver)
+    assert env.image_resolver is resolver
 
 
 # ---------------------------------------------------------------------------

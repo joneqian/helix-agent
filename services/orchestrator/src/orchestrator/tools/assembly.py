@@ -29,6 +29,7 @@ from helix_agent.protocol import (
     ToolSpecEntry,
 )
 from orchestrator.errors import AgentFactoryError
+from orchestrator.multimodal import ImageResolver
 from orchestrator.tools.artifact import ListArtifactsTool, SaveArtifactTool
 from orchestrator.tools.http import AllowlistProvider, HTTPTool
 from orchestrator.tools.knowledge import KnowledgeRetriever, KnowledgeSearchTool
@@ -75,6 +76,11 @@ class ToolEnv:
     #: manifest that declares ``knowledge`` with this left ``None`` raises
     #: :class:`AgentFactoryError`.
     knowledge_retriever: KnowledgeRetriever | None = None
+    #: Resolves ``image_ref`` content blocks to bytes (Stream J.6). Both
+    #: Path A (image into the ``HumanMessage``) and Path B (the
+    #: ``ask_image`` tool) draw on it; ``None`` → no image input is
+    #: available in this deployment.
+    image_resolver: ImageResolver | None = None
 
 
 async def build_tool_registry(

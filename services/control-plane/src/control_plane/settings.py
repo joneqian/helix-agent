@@ -138,6 +138,33 @@ class Settings(BaseSettings):
     rerank_provider: str = "qwen"
     rerank_model: str = "qwen-plus"
 
+    # ------------------------------------------------------------------ object storage (J.6)
+    #: Object-store backend for uploaded images (Stream J.6). ``"memory"``
+    #: (default) keeps a fresh checkout / CI booting without MinIO;
+    #: ``"s3-compatible"`` points at MinIO / OSS / S3 and requires the
+    #: ``object_store_*`` fields below.
+    object_store_backend: Literal["memory", "s3-compatible"] = "memory"
+    object_store_endpoint_url: str | None = None
+    object_store_region: str = "us-east-1"
+    object_store_bucket: str = "helix-agent"
+    #: ``secret://`` references to the S3 access / secret keys — required
+    #: when ``object_store_backend`` is ``"s3-compatible"``.
+    object_store_access_key_ref: str | None = None
+    object_store_secret_key_ref: str | None = None
+
+    # ------------------------------------------------------------------ multimodal input (J.6)
+    #: Per-image upload size cap (default 10 MiB) and per-run image count
+    #: cap — boundary limits enforced by the image upload endpoint.
+    multimodal_max_image_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    multimodal_max_images_per_run: int = Field(default=8, gt=0)
+    #: Accepted image content types for upload.
+    multimodal_allowed_content_types: tuple[str, ...] = (
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+    )
+
     # ------------------------------------------------------------------ auth (C.1)
     # OIDC issuer used to validate the ``iss`` JWT claim and to derive
     # the JWKS endpoint when ``oidc_jwks_uri`` is not set. The default
