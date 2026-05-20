@@ -229,6 +229,9 @@ class KnowledgeSearchTool:
                 },
                 "required": ["query"],
             },
+            # Stream L.L6 — vector retrieval is a pure read; multiple
+            # ``knowledge_search`` calls in one batch parallelise.
+            is_read_only=True,
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:

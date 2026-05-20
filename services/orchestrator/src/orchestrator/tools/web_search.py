@@ -160,6 +160,9 @@ class WebSearchTool:
                 },
                 "required": ["query"],
             },
+            # Stream L.L6 — pure read; safe to dispatch concurrently with
+            # other read-only tools.
+            is_read_only=True,
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:

@@ -51,6 +51,7 @@ Stream E.12.5 wires the middleware chain into both nodes. Anchor calls
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 from collections.abc import Mapping
@@ -61,6 +62,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolM
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
+from helix_agent.common.observability import helix_counter
 from helix_agent.protocol import MemoryItem, Plan
 from helix_agent.runtime.middleware import (
     MiddlewareChain,
@@ -80,8 +82,27 @@ from orchestrator.tools.registry import (
     ToolNotFoundError,
     ToolRegistry,
 )
+from orchestrator.tools.scheduling import MAX_TOOL_WORKERS, plan_stages
 
 logger = logging.getLogger(__name__)
+
+# Stream L.L6 — counters for the adaptive tool scheduler. ``stages_total``
+# counts every stage execution; ``dispatched_total`` counts the underlying
+# tool calls. The ratio dispatched / stages gives the average per-stage
+# concurrency (1.0 == fully sequential, MAX_TOOL_WORKERS == max parallel).
+# Two counters instead of a histogram because validate_metric_name reserves
+# histograms for duration-shaped ``_seconds`` metrics.
+_tools_stages_total = helix_counter(
+    "helix_tools_stages_total",
+    "Tool-call stages executed (Stream L.L6).",
+)
+_tools_dispatched_total = helix_counter(
+    "helix_tools_dispatched_total",
+    (
+        "Individual tool calls dispatched within L6 stages — divide by "
+        "stages to get average concurrency."
+    ),
+)
 
 #: Truncate raw exception strings before they go to the LLM. Avoids
 #: dumping multi-MB tracebacks into messages. Per-tool truncation
@@ -220,28 +241,35 @@ def build_react_graph(
             return {}
 
         ctx_obj = _build_tool_context(config, plan=state.get("plan"))
-        new_messages: list[BaseMessage] = []
-        # Stream K.K8 — collect per-tool state writes so we can promote
-        # allowlisted ones to the AgentState update dict below. Order
-        # follows ``tool_calls``: a later call's update wins, matching
-        # the LLM's intent (each subsequent ``update_plan`` revises the
-        # previous one).
+        # Stream L.L6 — group tool_calls into stages of mutually-non-
+        # conflicting calls. Within a stage we ``asyncio.gather`` (capped
+        # at MAX_TOOL_WORKERS); stages execute sequentially so any
+        # state-mutating call (``update_plan``, ``save_artifact`` on a
+        # contested path) still observes the LLM's intended ordering.
+        specs_by_name = {spec.name: spec for spec in tool_registry.specs()}
+        stages = plan_stages(tool_calls, specs_by_name)
+        results: dict[int, tuple[ToolMessage, Mapping[str, Any], int]] = {}
+        # Stream K.K8 — collect per-tool state writes for promotion to
+        # the AgentState update dict. Order follows the LLM's original
+        # tool_call sequence: a later call's update wins. L6 preserves
+        # that because we apply updates in original-index order after
+        # stages complete.
         accumulated_state: dict[str, Any] = {}
-        # Stream L.L5 — accumulate iteration refunds across the batch
-        # (Mini-ADR L-5). The next agent node subtracts the total from
-        # ``step_count`` before bumping it. Refunds are additive across
-        # parallel tool calls in the same turn: two ``update_plan``
-        # calls in one batch refund 2 iterations.
+        # Stream L.L5 — accumulate iteration refunds across the batch.
+        # Refunds are commutative, so stage ordering doesn't affect the
+        # total. Seed from any pending refund the previous node left
+        # unconsumed (defence-in-depth — agent_node also resets).
         refund_total = state.get("step_count_refund_pending", 0)
-        for tc in tool_calls:
+
+        async def _run_call(
+            tc: dict[str, Any],
+        ) -> tuple[ToolMessage, Mapping[str, Any], int]:
+            # Per-call cancel check + ``run_cancellable`` mirror the M0
+            # sequential path so cancellation semantics stay identical:
+            # a cancel mid-batch interrupts every in-flight tool via
+            # the shared token.
             token.raise_if_cancelled()
-            # ``run_cancellable`` interrupts a slow tool mid-dispatch. A
-            # cancel surfaces as ``asyncio.CancelledError`` inside
-            # ``_dispatch_tool`` — which is *not* an ``Exception``, so
-            # the tool's own ``except Exception`` won't swallow it into
-            # a ToolMessage; ``run_cancellable`` re-raises it as
-            # ``RunCancelledError``.
-            tool_message, tool_state, refund_inc = await token.run_cancellable(
+            return await token.run_cancellable(
                 _dispatch_tool(
                     tc,
                     tool_registry,
@@ -249,11 +277,38 @@ def build_react_graph(
                     before_tool_dispatch_chain=before_tool_dispatch_chain,
                 )
             )
+
+        semaphore = asyncio.Semaphore(MAX_TOOL_WORKERS)
+
+        async def _bounded(tc: dict[str, Any]) -> tuple[ToolMessage, Mapping[str, Any], int]:
+            async with semaphore:
+                return await _run_call(tc)
+
+        for stage in stages:
+            _tools_stages_total.inc()
+            _tools_dispatched_total.inc(len(stage))
+            # ``return_exceptions=False`` — any exception from a tool
+            # already comes back wrapped as a ToolMessage by
+            # ``_dispatch_tool``; reaching gather with a raw exception
+            # would be ``RunCancelledError`` (cancellation) or a
+            # programmer error, both of which should propagate.
+            stage_results = await asyncio.gather(
+                *(_bounded(tool_calls[call.index]) for call in stage)
+            )
+            for call, result in zip(stage, stage_results, strict=True):
+                results[call.index] = result
+
+        # Re-assemble in original tool_call order. L5 / K8 invariants
+        # require a stable iteration order downstream.
+        new_messages: list[BaseMessage] = []
+        for idx in range(len(tool_calls)):
+            tool_message, tool_state, refund_inc = results[idx]
             new_messages.append(tool_message)
             for key, value in tool_state.items():
                 if key in TOOL_ALLOWED_STATE_KEYS:
                     accumulated_state[key] = value
             refund_total += refund_inc
+
         return {
             "messages": new_messages,
             "step_count_refund_pending": refund_total,
