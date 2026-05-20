@@ -70,6 +70,9 @@ from helix_agent.runtime.middleware.llm_error_handling import (
     CircuitOpenError as CircuitOpenError,
 )
 from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMAuthError as LLMAuthError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
     LLMClientError as LLMClientError,
 )
 from helix_agent.runtime.middleware.llm_error_handling import (
@@ -89,6 +92,9 @@ from helix_agent.runtime.middleware.llm_error_handling import (
 )
 from helix_agent.runtime.middleware.llm_error_handling import (
     LLMStreamStaleError as LLMStreamStaleError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMUnauthorizedError as LLMUnauthorizedError,
 )
 from helix_agent.runtime.middleware.loop_detection import (
     DEFAULT_REMINDER_TEXT as DEFAULT_REMINDER_TEXT,
@@ -136,6 +142,7 @@ __all__ = [
     "CircuitOpenError",
     "DuplicateMiddlewareError",
     "DynamicContextMiddleware",
+    "LLMAuthError",
     "LLMCacheLookupMiddleware",
     "LLMCacheStoreMiddleware",
     "LLMClientError",
@@ -145,6 +152,7 @@ __all__ = [
     "LLMRateLimitError",
     "LLMServerError",
     "LLMStreamStaleError",
+    "LLMUnauthorizedError",
     "LangfuseClient",
     "LangfuseMiddleware",
     "LangfuseSpan",

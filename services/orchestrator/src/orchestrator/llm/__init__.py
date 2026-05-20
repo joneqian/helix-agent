@@ -20,6 +20,9 @@ from orchestrator.llm.embedder import EmbeddingClient as EmbeddingClient
 from orchestrator.llm.embedder import FakeEmbedder as FakeEmbedder
 from orchestrator.llm.embedder import HTTPEmbeddingClient as HTTPEmbeddingClient
 from orchestrator.llm.embedder import OpenAICompatibleEmbedder as OpenAICompatibleEmbedder
+from orchestrator.llm.oauth_provider import (
+    OAuthCapableProvider as OAuthCapableProvider,
+)
 from orchestrator.llm.providers import (
     DEEPSEEK_BASE_URL as DEEPSEEK_BASE_URL,
 )
@@ -136,6 +139,7 @@ __all__ = [
     "LLMCaller",
     "LLMProvider",
     "LLMRouter",
+    "OAuthCapableProvider",
     "OpenAIClient",
     "OpenAICompatibleEmbedder",
     "OpenAIProvider",

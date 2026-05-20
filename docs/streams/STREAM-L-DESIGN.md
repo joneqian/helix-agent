@@ -523,10 +523,12 @@ class OAuthCapableProvider(Protocol):
 ```
 
 **Router 改动**（`llm/router.py`）：
-- 当前 wrap：检测 `LLMClientError` 且 status_code == 401 → 调 `provider.refresh_credentials()` (if `isinstance(provider, OAuthCapableProvider)`) → 重试 1 次
-- 第二次仍 401 → 抛 `LLMAuthError`（新增；归 retryable=False → 触发 fallback chain）
+- 检测**新的** `LLMUnauthorizedError`（继承 `LLMClientError`，由 anthropic/openai adapter 对 401 raise）→ if `isinstance(provider, OAuthCapableProvider)` → 调 `refresh_credentials()` → 重试 1 次
+- non-OAuth provider 401：re-raise `LLMUnauthorizedError`（仍是 `LLMClientError` 子类，4xx-no-fallback 语义不变）
+- refresh `False` / 实现抛异常 → 立刻 raise `LLMAuthError`（继承 `LLMServerError`，**retryable** → 触发 fallback chain；Mini-ADR L-8 笔误更正，`LLMServerError` 子类才 retryable）
+- 第二次仍 401 → wrap 为 `LLMAuthError`，同样 fallback
 - 不进 401 loop —— 严格"至多 refresh 1 次"
-- emit `helix_llm_auth_refresh_total{provider, result=success|fail}` counter
+- emit `helix_llm_auth_refresh_total{provider_key, result=success|fail}` counter
 
 **Mini-ADR L-8**：
 - 用 Protocol 而非基类 —— `AnthropicProvider` / `OpenAIProvider` M0 不需实现（API key 不刷）；只有 OAuth-based provider 才 opt-in
