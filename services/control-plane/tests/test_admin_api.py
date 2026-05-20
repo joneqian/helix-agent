@@ -224,6 +224,187 @@ async def test_revoked_api_key_no_longer_authenticates(
 
 
 # ---------------------------------------------------------------------------
+# /v1/api_keys/{id}/rotate — Stream K.K1 double-active rotation
+# ---------------------------------------------------------------------------
+
+
+async def _mint_key(admin_client: AsyncClient) -> dict[str, object]:
+    """Helper: create a service account + an API key, return the
+    ``data`` envelope from the create_api_key response (with plaintext)."""
+    sa = (
+        await admin_client.post(
+            "/v1/service_accounts",
+            json={"name": f"rot-{uuid4().hex[:8]}", "description": ""},
+            headers=_admin_headers(),
+        )
+    ).json()["data"]
+    create_key = await admin_client.post(
+        f"/v1/service_accounts/{sa['id']}/api_keys",
+        json={"scopes": ["admin"]},
+        headers=_admin_headers(),
+    )
+    assert create_key.status_code == 201
+    return create_key.json()["data"]  # type: ignore[no-any-return]
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_returns_new_plaintext_and_marks_old_rotated(
+    admin_client: AsyncClient, audit_store: InMemoryAuditLogStore
+) -> None:
+    """``/rotate`` mints a fresh bearer and stamps ``rotated_at`` on the old row."""
+    minted = await _mint_key(admin_client)
+    old_key_id = minted["api_key"]["id"]
+    old_plaintext = minted["plaintext"]
+
+    response = await admin_client.post(
+        f"/v1/api_keys/{old_key_id}/rotate",
+        json={"grace_period_s": 300},
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()["data"]
+
+    # Old row carries rotated_at + grace_period_s, same id.
+    assert body["old_api_key"]["id"] == old_key_id
+    assert body["old_api_key"]["rotated_at"] is not None
+    assert body["old_api_key"]["grace_period_s"] == 300
+
+    # New row is a different ApiKey with a fresh plaintext.
+    new_plaintext = body["new_api_key"]["plaintext"]
+    assert new_plaintext.startswith("aforge_pat_")
+    assert new_plaintext != old_plaintext
+    assert body["new_api_key"]["api_key"]["id"] != old_key_id
+    # Scopes / service_account_id inherited from the old key.
+    assert (
+        body["new_api_key"]["api_key"]["service_account_id"]
+        == minted["api_key"]["service_account_id"]
+    )
+    assert body["new_api_key"]["api_key"]["scopes"] == ["admin"]
+
+    # Audit row landed.
+    page = await audit_store.query(AuditQuery(tenant_id=_TENANT))
+    rotate_rows = [r for r in page.entries if r.action is AuditAction.API_KEY_ROTATE]
+    assert len(rotate_rows) == 1
+    assert rotate_rows[0].resource_id == old_key_id
+    assert rotate_rows[0].details["new_api_key_id"] == body["new_api_key"]["api_key"]["id"]
+    assert rotate_rows[0].details["grace_period_s"] == 300
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_double_active_during_grace(
+    admin_client: AsyncClient,
+) -> None:
+    """Inside the grace window both old and new bearers authenticate.
+
+    Uses ``grace_period_s=3600`` so the window is wide open during the
+    test (no clock manipulation needed).
+    """
+    minted = await _mint_key(admin_client)
+    old_plaintext = minted["plaintext"]
+
+    response = await admin_client.post(
+        f"/v1/api_keys/{minted['api_key']['id']}/rotate",
+        json={"grace_period_s": 3600},
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 201
+    new_plaintext = response.json()["data"]["new_api_key"]["plaintext"]
+
+    # Both verify.
+    old_resp = await admin_client.get(
+        "/v1/agents", headers={"Authorization": f"Bearer {old_plaintext}"}
+    )
+    new_resp = await admin_client.get(
+        "/v1/agents", headers={"Authorization": f"Bearer {new_plaintext}"}
+    )
+    assert old_resp.status_code == 200, "old bearer must still verify inside grace"
+    assert new_resp.status_code == 200, "new bearer must verify immediately"
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_old_rejected_after_grace_expires(
+    admin_client: AsyncClient,
+) -> None:
+    """With ``grace_period_s=0`` the old bearer is dead immediately.
+
+    This is the corner case for emergency rotation — the operator
+    wanted an effective immediate revocation but with a paired
+    replacement minted in one call. After grace=0, the old bearer
+    fails to authenticate while the new bearer works.
+    """
+    minted = await _mint_key(admin_client)
+    old_plaintext = minted["plaintext"]
+
+    response = await admin_client.post(
+        f"/v1/api_keys/{minted['api_key']['id']}/rotate",
+        json={"grace_period_s": 0},
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 201
+    new_plaintext = response.json()["data"]["new_api_key"]["plaintext"]
+
+    old_resp = await admin_client.get(
+        "/v1/agents", headers={"Authorization": f"Bearer {old_plaintext}"}
+    )
+    new_resp = await admin_client.get(
+        "/v1/agents", headers={"Authorization": f"Bearer {new_plaintext}"}
+    )
+    assert old_resp.status_code == 401, "old bearer must die when grace=0"
+    assert new_resp.status_code == 200, "new bearer must work"
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_unknown_id_returns_404(admin_client: AsyncClient) -> None:
+    response = await admin_client.post(
+        f"/v1/api_keys/{uuid4()}/rotate",
+        json={"grace_period_s": 300},
+        headers=_admin_headers(),
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_refuses_already_rotated_key(
+    admin_client: AsyncClient,
+) -> None:
+    """Rotating an already-rotated key returns 404 — operators pick one
+    action at a time so the audit trail stays unambiguous."""
+    minted = await _mint_key(admin_client)
+    key_id = minted["api_key"]["id"]
+
+    first = await admin_client.post(
+        f"/v1/api_keys/{key_id}/rotate",
+        json={"grace_period_s": 300},
+        headers=_admin_headers(),
+    )
+    assert first.status_code == 201
+
+    second = await admin_client.post(
+        f"/v1/api_keys/{key_id}/rotate",
+        json={"grace_period_s": 300},
+        headers=_admin_headers(),
+    )
+    assert second.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_refuses_revoked_key(admin_client: AsyncClient) -> None:
+    """``DELETE`` followed by ``/rotate`` returns 404 — same reason."""
+    minted = await _mint_key(admin_client)
+    key_id = minted["api_key"]["id"]
+
+    revoke = await admin_client.delete(f"/v1/api_keys/{key_id}", headers=_admin_headers())
+    assert revoke.status_code == 204
+
+    rotated = await admin_client.post(
+        f"/v1/api_keys/{key_id}/rotate",
+        json={"grace_period_s": 300},
+        headers=_admin_headers(),
+    )
+    assert rotated.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # /v1/role_bindings
 # ---------------------------------------------------------------------------
 

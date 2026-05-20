@@ -61,11 +61,15 @@ class ApiKeyScope(StrEnum):
 
 
 #: Stored prefix length. The full bearer string is
-#: ``aforge_pat_<5hex>_<32 random>`` (50 chars total); the prefix column
-#: persists the recognisable ``aforge_pat_<5hex>_`` segment for index
-#: lookup. Keep this constant in sync with
+#: ``aforge_pat_<5hex>_<32 random>`` (49 chars total); the prefix column
+#: persists ``aforge_pat_<5hex>_<8 random>`` (25 chars). The 8 random
+#: hex from the tail belong to the prefix segment so that two API keys
+#: sharing the same tenant do not collide on the column's ``UNIQUE``
+#: constraint — Stream K.K1 surfaced this latent Stream C.3 bug while
+#: implementing rotation (which is structurally "create a second key").
+#: Keep this constant in sync with
 #: :data:`control_plane.auth.api_key_verifier.API_KEY_PREFIX_LEN`.
-API_KEY_STORED_PREFIX_LEN: int = 17
+API_KEY_STORED_PREFIX_LEN: int = 25
 
 
 class ApiKey(BaseModel):
@@ -87,11 +91,25 @@ class ApiKey(BaseModel):
     expires_at: datetime | None = None
     last_used_at: datetime | None = None
     revoked_at: datetime | None = None
+    #: Stream K.K1 — set when a /rotate call replaces this key. While
+    #: ``now() < rotated_at + grace_period_s`` the bearer still verifies
+    #: (double-active window). The verifier stops accepting the bearer
+    #: once the window closes; the row is left in place for audit /
+    #: traceability and reaped by ``retention-cleanup-job`` on its own
+    #: schedule.
+    rotated_at: datetime | None = None
+    grace_period_s: int | None = None
     created_at: datetime
     created_by: str
 
     @property
     def is_active(self) -> bool:
+        """``revoked_at`` is empty.
+
+        Stream K.K1 grace-window check (``rotated_at + grace_period_s``)
+        lives in :meth:`ApiKeyVerifier.verify` so this property stays a
+        cheap, time-free predicate suitable for UI listings.
+        """
         return self.revoked_at is None
 
 
