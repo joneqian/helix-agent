@@ -10,6 +10,8 @@
 
 > **对标纪律**：deer-flow / hermes-agent 作能力基线，校准"成熟长什么样"+ 找差距。**结论是独立设计,不照抄**（[memory:general-platform-positioning](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_general_platform_positioning.md)）。
 
+> **2026-05-20 未交付项审计补强**：按 [memory:complete-not-minimal](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) + [memory:no-design-choice-disguise](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md) 对 J 剩余 8 项的 (c) 维度做补强，新增 Mini-ADR J-21 ~ J-29（见 § 19 末尾）。补强点：J.4 trajectory + budget telemetry / J.5 拆 4 PR + SLO / J.7 范围缩到 J.7a / J.8 必加超时 + audit trail + UI / J.9 lifecycle + quota / J.10 重试 + quota + event + persistence / J.12 与 L7 修剪 / J.13 拆 3 子项 / J.15 volume quota + backup + encryption。各项实施前 PR 必须先修订对应 § 9-§ 18 反映本次补强。
+
 ---
 
 ## 1. 范围 & 边界
@@ -824,6 +826,39 @@ J.13 排**最后**,评估并落实升级（Mini-ADR J-20）：
 
 **J-20｜J.13 排最后,eval-set 格式与 J.12 统一**
 背景：eval 要覆盖 J.1–J.14 全部能力。决策：J.13 收尾,逐能力写 eval 场景;`eval_dataset` 表 J.12 / J.13 共用。取舍：能力没实现完无法写其 eval 场景;统一格式避免两套数据 schema。
+
+---
+
+### 2026-05-20 未交付项审计补充（J-21 ~ J-29）
+
+> 按 [memory:complete-not-minimal](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) + [memory:no-design-choice-disguise](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md) 红线对 J 剩余 8 项的 (c) 维度补强。每条 Mini-ADR 都指向 § 20 的具体修订点。
+
+**J-21｜J.4 sub-agent trajectory 单独记录 + budget telemetry 回传父**
+背景：J-12 原文只覆盖 cancellation / 深度上限 / agent-as-tool 接口；trajectory 单独记录 + budget 统计性回传未列。决策：(1) 子 agent run 各自调 L7 `TrajectoryRecorder.record()`，落 ObjectStore 单独 key（`{prefix}/{tenant}/{outcome}/{date}/{sub_thread_id}.jsonl`）；(2) 子 agent 结束时把 iteration_used / llm_call_count / wall_clock_ms 汇总写入 `ToolResult.meta`，父 audit 链可见。取舍：(c) 红线 —— 没 trajectory 就 J.13 eval 时整树黑盒；没 budget telemetry 就父无法做成本归因。
+
+**J-22｜J.5 RAG 执行层拆 4 PR + 加 SLO 列表**
+背景：J-13 原文已是 (c) 强版（生产级 RAG 设施），但单 PR ~5000 LOC 会撑爆 "一 PR 一子任务" 原则。决策：J.5 实施拆 4 个独立 PR：J.5a 数据层 + 异步摄取 / J.5b 解析 + 切块 / J.5c 混合检索 + rerank / J.5d 文档运维 API；同时锁定 SLO baseline（摄取延迟 P95 / 文档 ready 时间 / 查询 P95 / 重摄取幂等性 / recall@k）。取舍：拆颗粒度不增范围；K12 memory recall eval gate 模板可复用为 J.5 recall SLO。
+
+**J-23｜J.7 M0 仅做 J.7a 静态启用，J.7b 进化 + code 字段推 M1+**
+背景：J-16/J-17 原文虽然有 draft 闸门，但未明确 skill 可观测、冲突合并语义、code 字段执行边界 3 个安全 footgun。决策：(1) M0 仅做 J.7a —— skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 / 版本化 / draft 闸门保留；(2) J.7b 进化（`author_skill` / `refine_skill`）+ code 字段执行边界推 M1+；(3) M0 J.7a 内必含 skill telemetry（调用频次 / 错误率 counter）+ 冲突合并语义文档化（prompt 拼接顺序 = manifest 声明顺序，tools 集合并 conflict 拒绝构建）。取舍：(c) 红线 —— 把"code 字段"和"skill 进化"硬塞 M0 = 安全债；J.7a 已有独立价值。
+
+**J-24｜J.8 审批超时 fallback + audit trail + Admin UI 审批面板接入（M0 必含）**
+背景：J-15 原文写 "M0 不做超时 / 异步通知" —— 按 [[no-design-choice-disguise]] 不允许把"无超时 run 永远占 checkpointer 槽"包装成设计选择。决策：(1) M0 审批必含**默认 24h 超时 fallback**（manifest 可配，超时自动 reject + audit）；(2) 审批 trail 进 `audit_log` schema：审批人 / 时间 / 决策 / 修改入参；(3) Admin UI H.3 必含审批面板接入。取舍：(c) 红线 —— 无超时 = 资源泄漏 + 用户感知"agent 卡死"；无 audit trail = 不可追溯；无 UI = 审批门只能 API 操作。
+
+**J-25｜J.9 artifact lifecycle + quota；病毒扫描 (a) 推 M2**
+背景：J-11 原文只覆盖版本化 + RLS + supervisor 读取，lifecycle / quota / 病毒扫描三个维度未列。决策：(1) M0 加 artifact 保留期（manifest 可配 / 默认 90 天）+ DELETE / PATCH API + 卷满 / 用户超 quota 时的清理策略；(2) 下载频次 + 体积配额接入 Stream C.5 `QuotaService`；(3) 病毒扫描显式 **(a) 推 M2**（M0 用户 = 同公司风险低，但**必须显式决策**，不留空）。取舍：(c) 红线 —— 无 lifecycle 卷会爆；无 quota 单个用户能拖垮平台。
+
+**J-26｜J.10 触发器 failure handling + quota + event 源 + persistence 4 条**
+背景：J-18 原文只覆盖单副本推 M1+ + webhook 认证，failure handling / scheduler quota / event 源选型 / APScheduler 持久性未列。决策：(1) failed trigger run → K7 模式的 DLQ 重试（backoff 1m→5m→30m→2h→6h，5 次失败入死信）；(2) scheduler quota 接入 Stream C.5（单用户 / 单租户最大 cron 数）；(3) trigger event 源选型 = PG NOTIFY（M0 单 control-plane 副本下足够，M1+ 多副本时考虑 outbox 表）；(4) APScheduler 必须 `SQLAlchemyJobStore` 持久化到 PG，control-plane 重启不丢 cron tick。取舍：(c) 红线 —— 四项缺一 trigger 系统就是弱版。
+
+**J-27｜J.12 与 L7 trajectory 分工修剪 —— J.12 不再写 trajectory PG 表**
+背景：L7 已经把 trajectory 写 ObjectStore（JSONL / ShareGPT / 4 outcome 分流，PR #202 已合）；J-19 原文还要写 `trajectory` PG 表 + `after_llm_call` 中间件 = 重复实现。决策：修订 J.12 分工 —— L7 ObjectStore trajectory = **eval / 训练数据底座**（完整 messages，J.13 离线 eval 消费）；J.12 PG `eval_dataset` 表 = **策划后的 dataset**（人工 / 规则筛选 trajectory + expected 标注）；J.12 不再写 `trajectory` PG 表，middleware 改为"读 L7 ObjectStore + 关联 G.6 feedback → 策划"。取舍：(c) 红线 —— 重复实现违反"功能可少、能力不可弱"的反面（不是弱，是冗余）。
+
+**J-28｜J.13 拆 3 子项：J.13a baseline (M0) / J.13b 在线采样 (M1) / J.13c CI 回归门 (M1)**
+背景：J-20 原文工作量超大（14 套 eval 场景 + 在线采样 LLM-judge + CI 回归门 + 配额 + flakiness），M0 内难以一次性交付。决策：拆 3 个子项：(1) **J.13a 逐能力 eval 场景集**（M0 必交，锁定 canonical agent baseline，作为 Stream M Gate 锚点）；(2) **J.13b 在线采样 + LLM-judge 配额 + budget cap**（M1 早期）；(3) **J.13c CI 回归门 + flakiness 缓解**（N 次重跑 + 阈值软门设计，M1 早期 / 合并到 M2-D）。取舍：(c) 框架达标但**通过拆分而非缩减能力**保住 M0 进度。
+
+**J-29｜J.15 volume quota + backup + at-rest encryption（生产级数据保护）；跨 host (b) 推 M1-A**
+背景：J-9/J-10 原文只覆盖热会话生命周期 + TTL reaper，volume 自身的数据保护三个维度全缺。决策：(1) volume quota（单用户工作区最大 GB，manifest 可配 / 默认 10 GB）+ 准入检查（写文件前查 quota）；(2) volume backup（每天对所有 active user_workspace 卷 rsync 到对象存储 + 保留 7 天 + restore 演练 runbook）；(3) volume at-rest 加密（依赖宿主机 LUKS / 云厂托管磁盘加密，落实 P0 #9）；(4) 跨 host 调度 **(b) 推 M1-A**（与 sandbox warm pool 同期，M0 单机部署合理）。取舍：(c) 红线 —— 用户数据丢失 / 单用户爆磁盘 / 卷无加密都是产品级事故，M0 不能下移。
 
 ---
 

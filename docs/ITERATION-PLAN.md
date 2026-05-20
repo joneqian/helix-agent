@@ -175,28 +175,28 @@
 | **A.10-A.13 可靠性基础** | [subsystems/28-reliability-primitives](./architecture/subsystems/28-reliability-primitives.md) **🆕** |
 
 **数据层基础**
-- [ ] **A.1 Postgres schema**（event_log、thread_meta、checkpoint）— 落实 ADR-0002
-- [ ] **A.2 Vendor DeerFlow P0 基础设施**（~3.4K LOC，参考文档 06）：
+- [x] **A.1 Postgres schema**（event_log、thread_meta、checkpoint）— 落实 ADR-0002（迁移 0001/0002）
+- [x] **A.2 Vendor DeerFlow P0 基础设施**（~3.4K LOC，参考文档 06）：
   - event_log 表与读写路径
   - persistence 工厂
   - PostgresSaver/InMemorySaver 抽象
   - stream_bridge（last-event-id 重连 + 心跳）
   - run_manager
 - [ ] **A.3 PgBouncer + 连接池规划**（落实 P0 #29；设计：23-postgres-scalability）
-- [ ] **A.4 audit_log 表**（与 event_log 分表，落实 P0 #5；设计：17-audit-log）— 让后续 Stream B/C 的事件从首次上线起就有审计落地
-- [ ] **A.5 对象存储抽象**（落实 P0 #16；设计：ADR-0004）— S3 接口；MinIO 自托管 dev；uploads / snapshots / 归档共用基底
-- [ ] **A.6 Postgres 自动备份 + WAL**（落实 P0 #17；设计：22-disaster-recovery）— RPO/RTO 文档
+- [x] **A.4 audit_log 表**（与 event_log 分表，落实 P0 #5；设计：17-audit-log）— 让后续 Stream B/C 的事件从首次上线起就有审计落地
+- [x] **A.5 对象存储抽象**（落实 P0 #16；设计：ADR-0004）— S3 接口；MinIO 自托管 dev；J.6 多模态首消费者（uploads 端点 + ObjectStoreImageResolver）
+- [x] **A.6 Postgres 自动备份 + WAL**（落实 P0 #17；设计：22-disaster-recovery）— `docs/dr/RUNBOOK.md` RPO/RTO 文档 + K15 PG 恢复演练 testcontainers 集成测试
 
 **可观测三件套**（日志 + trace + 指标必须同步建，否则后续代码 metric emit 缺失；统一设计：20-observability）
-- [ ] **A.7 结构化日志规范**（落实 P0 #10）— 字段标准 + redaction 中间层
-- [ ] **A.8 W3C Trace Context 规范**（落实 P0 #11）+ OpenTelemetry SDK 接入
-- [ ] **A.9 指标体系**（落实 P0 #12）— Prometheus + 业务指标 + 技术指标 schema；让 A→F 所有新代码从第一天就 emit metric
+- [~] **A.7 结构化日志规范**（落实 P0 #10）— 字段标准 + redaction 中间层。`ObservabilityMiddleware` 骨架在；字段规范文档化待 M0 收尾补
+- [~] **A.8 W3C Trace Context 规范**（落实 P0 #11）+ OpenTelemetry SDK 接入。OTel SDK 接入有；W3C header 传播 + cross-service 验证待补
+- [~] **A.9 指标体系**（落实 P0 #12）— Prometheus + 业务指标 + 技术指标 schema。`helix_*` counter/histogram validator 已锁；metrics schema 文档化待 M0 收尾补
 
 **网络与可靠性基础**（统一设计：28-reliability-primitives）
-- [ ] **A.10 全链路 TLS**（落实 P0 #9 in-transit）— Stream B 暴露 endpoint 前必须生效；mTLS 前提
-- [ ] **A.11 Health checks**（落实 P0 #22）— liveness/readiness/startup probe + 依赖健康（DB/Redis/Vault）
-- [ ] **A.12 Graceful shutdown**（落实 P0 #23）— SIGTERM、completer-in-flight、超时强制
-- [ ] **A.13 超时分层**（落实 P0 #24）— request > session > tool > LLM 级联
+- [~] **A.10 全链路 TLS**（落实 P0 #9 in-transit）— Stream B 暴露 endpoint 前必须生效；mTLS 前提。应用层 mTLS (MTLSVerifier + XFCC) 已有；docker-compose nginx TLS 终止待补
+- [x] **A.11 Health checks**（落实 P0 #22）— liveness/readiness/startup probe + 依赖健康（DB/Redis/Vault）
+- [x] **A.12 Graceful shutdown**（落实 P0 #23）— SIGTERM、completer-in-flight、超时强制（FastAPI `lifespan` + `Lifecycle`）
+- [x] **A.13 超时分层**（落实 P0 #24）— request > session > tool > LLM 级联（cancellation_token 全链路 + K9 reflect deadline + L3 stream deadline）
 
 **Stream A Verification**：起 docker-compose + insert 1 条 event + 1 条 audit_log；shutdown 优雅完成；trace_id 在日志中可串联；`/metrics` 可抓 ≥10 个核心 metric；对象存储 putObject/getObject 可调；Postgres 备份脚本恢复成功；TLS 拦截非加密连接
 
@@ -204,13 +204,13 @@
 
 参考：[architecture/03-MONOREPO-LAYOUT](./architecture/03-MONOREPO-LAYOUT.md)、[architecture/02-AGENT-MANIFEST](./architecture/02-AGENT-MANIFEST.md)
 
-- [ ] **B.1 FastAPI 骨架** + Pydantic v2 + SQLAlchemy 2.0
-- [ ] **B.2 网关层限流 middleware**（落实 P0 #27 第 1 层）— per IP / per API key；与 B.1 同步装上，避免后期回炉
-- [ ] **B.3 请求取消信号链 — API 层**（落实 P0 #25 第 1 段）— FastAPI request 断开 → 生成 cancellation token；与 B.1 同步装上
-- [ ] **B.4 Manifest 加载与 Pydantic 校验**（含 `dynamic_context` 字段）
-- [ ] **B.5 Agent CRUD API**（`services/control-plane/api/agents.py`）
-- [ ] **B.6 Session CRUD API**（`services/control-plane/api/sessions.py`）
-- [ ] **B.7 Run trigger API**（`services/control-plane/api/runs.py`，先返回 fake stream）
+- [x] **B.1 FastAPI 骨架** + Pydantic v2 + SQLAlchemy 2.0
+- [x] **B.2 网关层限流 middleware**（落实 P0 #27 第 1 层）— per IP / per API key；与 B.1 同步装上，避免后期回炉
+- [x] **B.3 请求取消信号链 — API 层**（落实 P0 #25 第 1 段）— FastAPI request 断开 → 生成 cancellation token；与 B.1 同步装上
+- [x] **B.4 Manifest 加载与 Pydantic 校验**（含 `dynamic_context` 字段）
+- [x] **B.5 Agent CRUD API**（`services/control-plane/api/agents.py`）
+- [x] **B.6 Session CRUD API**（`services/control-plane/api/sessions.py`）
+- [x] **B.7 Run trigger API**（`services/control-plane/api/runs.py`，先返回 fake stream）
 
 **Stream B Verification**：可通过 HTTPS 创建 agent + session + 触发 run 拿到 SSE stream；限流压测得到 429；客户端断开连接后服务端 context 在 200ms 内收到 cancellation；所有 admin 动作有 audit_log 落地（A.4）
 
@@ -218,13 +218,13 @@
 
 参考：[architecture/07-INFRASTRUCTURE-GAPS](./architecture/07-INFRASTRUCTURE-GAPS.md) §2、§7
 
-- [ ] **C.1 OIDC + JWT** 认证（落实 P0 #1）— Keycloak 本地 dev 环境
-- [ ] **C.2 mTLS 服务间认证**（落实 P0 #2）— Control Plane ↔ Orchestrator ↔ Sandbox-Supervisor（基于 A.10 全链路 TLS）
-- [ ] **C.3 API Key 管理**（落实 P0 #3）— 创建/吊销/轮换/限流
-- [ ] **C.4 会话授权完整化**（落实 P0 #4）+ Postgres RLS
-- [ ] **C.5 租户级 quota**（落实 P0 #20）— token / sandbox 实例数 / 准入控制
-- [ ] **C.6 业务层限流**（落实 P0 #27 第 2 层）— per-tenant / per-agent / per-route，由 C.5 quota 引擎驱动
-- [ ] **C.7 租户级配置隔离**（落实 P0 #21）— 每租户 model key / Vault path / MCP 白名单
+- [~] **C.1 OIDC + JWT** 认证（落实 P0 #1）— Keycloak 本地 dev 环境。`JWTVerifier` + `HTTPJWKSProvider` 代码已有；docker-compose Keycloak service + dev realm 配置待补
+- [x] **C.2 mTLS 服务间认证**（落实 P0 #2）— Control Plane ↔ Orchestrator ↔ Sandbox-Supervisor（基于 A.10 全链路 TLS）
+- [x] **C.3 API Key 管理**（落实 P0 #3）— 创建/吊销/轮换/限流（K1 PR #186 补 rotation + grace window + audit）
+- [x] **C.4 会话授权完整化**（落实 P0 #4）+ Postgres RLS（`build_rls_sessionmaker` + `RLSContextMiddleware`）
+- [x] **C.5 租户级 quota**（落实 P0 #20）— token / sandbox 实例数 / 准入控制（`TenantQuotaStore` + `QuotaService` + `ReservationReaper`）
+- [x] **C.6 业务层限流**（落实 P0 #27 第 2 层）— per-tenant / per-agent / per-route，由 C.5 quota 引擎驱动（`TenantRateLimitMiddleware`）
+- [x] **C.7 租户级配置隔离**（落实 P0 #21）— 每租户 model key / Vault path / MCP 白名单
 
 **Stream C Verification**：跨租户访问被 RLS 拒绝；超 quota 返回 429；mTLS 握手失败的请求被拒；所有 auth 事件已写入 A.4 audit_log
 
@@ -317,21 +317,23 @@
 - [x] **G.6 用户反馈收集**（落实 P0 #37）— 👍/👎 关联 turn + trace
 - [x] **G.7 第一版 Grafana 大盘**
 - [x] **G.8 event_log 冷归档 pipeline**（落实 P0 #18）— 半年后归档 S3，归档后查询路径
+- [ ] **G.9 token_usage_middleware**（从 M1-D 提前到 M0；2026-05-20 未交付项审计开出）— `after_llm_call` 中间件累计 input/output/cached tokens per (tenant, agent, model)；emit `helix_llm_token_usage_total{tenant,agent,model,type}` counter；写入 `token_usage` 持久表（与 C.5 `TokenBudgetLedger` 合并或并存待 M1-D 评估）。**为什么提前**：dogfood 跑通后必须看见每租户每 agent 的成本，否则 M0→M1 Gate 期间无法做成本评估（[memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md)）
 
-**Stream G Verification**：触发已知错误 → 告警弹出；跑 eval 集 → 拿到 score；feedback 写入并能溯源到 trace；归档脚本可恢复一条历史 event
+**Stream G Verification**：触发已知错误 → 告警弹出；跑 eval 集 → 拿到 score；feedback 写入并能溯源到 trace；归档脚本可恢复一条历史 event；`helix_llm_token_usage_total` counter 在大盘可见，按 (tenant, agent, model) 维度可拆
 
-### Stream H — Admin UI + Dogfood 准备（~3 周）
+### Stream H — Admin UI（~3-4 周；产品级 UI/UX）
 
-参考：[architecture/00-OVERVIEW](./architecture/00-OVERVIEW.md)、[architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"Dogfood 计划"
+参考：[architecture/00-OVERVIEW](./architecture/00-OVERVIEW.md)、新建 [streams/STREAM-H-DESIGN](./streams/STREAM-H-DESIGN.md)（设计先行）
 
-> **排序与 dogfood 重构**（评估 08 + Stream J 决策）：H.5 / H.6 的 dogfood 部分由 **canonical 能力 agent** 取代（与具体 Dify 业务解耦），且排在 **Stream J 之后**；H.1–H.4 Admin UI 不受影响、不依赖 Stream J。Admin UI 须做到产品级 UI/UX。
+> **2026-05-20 范围重写**（按 [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) + [memory:admin-ui-product-grade](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_admin_ui_product_grade.md)）：原 H.1–H.4 范围过于通用、没接入 J/K 已交付的能力面 → 重写为五子项，每项显式锚定一个能力面。原 H.5/H.6 dogfood 已经由 canonical 能力 agent 取代（与具体 Dify 业务解耦，见 [architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)）；H.5 docker-compose dev.yml 已经在 I.1 落地。Admin UI 必须**产品级 UI/UX**（先出设计规范文档再实现，不堆 Antd 默认组件）。
 
-- [ ] **H.1 React 19 + Vite + Antd 骨架**
-- [ ] **H.2 Agent 列表 + Monaco YAML 编辑器**
-- [ ] **H.3 Session 时间线（只读）**
-- [ ] **H.4 docker-compose `dev.yml` 单机一键启**
-- [ ] **H.5 Phase 0.1 选定的 dogfood 业务 manifest 编写**
-- [ ] **H.6 平行运行测试 harness**（Dify + Helix 同流量对比脚本）
+- [ ] **H.1 React 19 + Vite + Antd 5 骨架 + 设计规范文档**（`docs/design/admin-ui-guidelines.md`：色板 / 字体 / 间距 / 组件库 / 交互模式）+ 国际化（中 / 英）+ 路由 + 鉴权（JWT / API Key）
+- [ ] **H.2 Agent / Manifest 管理**：agent 列表 / Monaco YAML 编辑器（manifest 编辑 + Pydantic 校验实时回显）/ 版本对比 / 历史回滚。接 B.5 Agent CRUD API
+- [ ] **H.3 Run 时间线 + Trace + 审批面板**：thread / run 列表 / SSE 实时事件回放 / Langfuse trace 嵌入 / **J.8 审批请求列表 + 批准 / 拒绝 / 修改入参面板**。接 B.6/B.7 + E.5 Langfuse + **J.8**
+- [ ] **H.4 用户面（per-user 持久 agent 形态）**：memory 列表 / 编辑 / 删除（接 **K6 memory CRUD**）+ artifact 浏览 / 下载（接 **J.9**）+ 用户活跃沙盒会话查看（接 J.15）
+- [x] **H.5 docker-compose dev.yml 单机一键启** — 已经在 I.1 `--profile full` 落地
+
+**Stream H Verification**：UI/UX 设计规范文档先于实现合入；每个子项有产品级体验（不仅"能用"），含响应式 / 键盘可达 / a11y / 性能（首屏 < 2s）；UI 集成测试覆盖 happy path；接入的 B/E/J/K 能力面在 UI 上端到端可见。
 
 ### Stream I — 部署与发布闭环（~2 周；承接 Phase 0.3 CI/CD）
 
@@ -427,18 +429,18 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [x] **J.1 规划 / 任务分解** — `planner` 图节点:`workflow.type==plan_execute` 时 `START→planner→agent⇄tools`,planner 一次 LLM 调用把任务拆成结构化 `Plan`(进 `AgentState.plan`),agent 每步把计划渲染进 system context。先拆解再执行。运行中重规划(`update_plan`)与 J.2 反思耦合,随 J.2 一并落。STREAM-J-DESIGN § 5。
 - [x] **J.2 反思 / 自我修正** — `reflect` 图节点:`reflection:` 块激活,agent 无 tool_call 退出时经 `reflect` 自我批判 —— `accept` 结束 / `revise` 回 agent 带 critique;`budget` 上限封 reflect↔agent 环;unparseable 回复 fail-safe 到 accept。含运行中重规划(`revise` verdict 可带 `revised_steps` 改写 `Plan`)。与 `loop_detection` 中间件正交。STREAM-J-DESIGN § 6。
 - [x] **J.3 长期记忆** — 跨会话记忆 store + 检索,接入上下文组装。PR1:`memory_item` 表(pgvector,迁移 0017)+ `MemoryStore` + 用户级 RLS GUC;PR2a:`Embedder`(qwen `text-embedding-v4` 兼容 `/v1/embeddings`);PR2b:`memory_recall`/`memory_writeback` 图终端节点 + `MemoryEnv` 装配;PR2c:control-plane 注入 store/embedder + run config 携带 `user_id`。STREAM-J-DESIGN § 8。
-- [ ] **J.4 Sub-agent / 多智能体委派** — agent 派生 / 委派 / agent-as-tool，隔离 + 取消 + token 预算
-- [ ] **J.5 知识 / 检索（RAG）** — 检索增强；工具检索 vs 向量库由 STREAM-J-DESIGN 定
-- [ ] **J.6 多模态输入** — 图像 / 文件输入
-- [ ] **J.7 Skill + skill 进化** — skill 概念 + 习得 / 进化机制
-- [ ] **J.8 人在回路 / 审批** — 运行中可中断 / 纠偏 / 危险操作审批
-- [ ] **J.9 产物 / Artifact 管理** — agent 产出物(文件/文档/代码)的创建 / 存储 / 版本 / 回传
-- [ ] **J.10 调度 / 触发** — 定时 / 事件 / webhook 触发的 agent,非纯请求-响应
+- [ ] **J.4 Sub-agent / 多智能体委派** — agent-as-tool 顺序委派树 + 取消链穿透 + 构建期深度上限 3 × max_iterations；并行 fan-out 推 M2-B。**2026-05-20 修订（Mini-ADR J-21）**：补 sub-agent trajectory 单独记录（L7 ObjectStore 单独 key）+ budget telemetry 回传父（iteration_used / llm_call_count / wall_clock_ms 写 `ToolResult.meta`）。STREAM-J-DESIGN § 11 + Mini-ADR J-12 / J-21
+- [ ] **J.5 知识 / 检索（RAG）** — 生产级 RAG：pgvector + 全文检索 + RRF + LLM-rerank + 强解析 + 结构 / 语义 / 表格感知切块 + 异步摄取 + 文档运维；`knowledge_search` 工具按需查（不自动注入）。**2026-05-20 修订（Mini-ADR J-22）**：实施拆 4 PR（J.5a 数据层 + 异步摄取 / J.5b 解析 + 切块 / J.5c 混合检索 + rerank / J.5d 文档运维 API）+ 加 SLO baseline（摄取延迟 / ready 时间 / 查询 P95 / recall@k）。STREAM-J-DESIGN § 12 + Mini-ADR J-13 / J-22
+- [x] **J.6 多模态输入** — 图像输入能力解析式双路:`ModelSpec.supports_vision: true` 走 content block(主模型直看像素), `supports_vision: false` 走 `ask_image` 工具路由到 `vision:` 块单独声明的 VL 模型;统一经 `POST /v1/sessions/{thread_id}/uploads` 对象存储摄取(`helix://image/...` ref + base64 不进 checkpointer);构建期按 `ModelSpec.supports_vision` 决议、能力不匹配则 422 / `AgentFactoryError`。PR #167–#171 全合(对象存储 wiring → LLM adapter content blocks → upload 端点 → Path A → Path B)。STREAM-J-DESIGN § 13 / Mini-ADR J-14。
+- [ ] **J.7a Skill 静态启用（M0）** — skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 + 版本化 + draft 闸门 + 调用 telemetry + 冲突合并语义。**2026-05-20 修订（Mini-ADR J-23）**：M0 缩范围只做 J.7a，J.7b 进化 + code 字段推 M1+。STREAM-J-DESIGN § 15 + Mini-ADR J-16 / J-17 / J-23
+- [ ] **J.8 人在回路 / 审批** — LangGraph `interrupt()` 审批节点 + control-plane resume 端点 + `PolicySpec` 门控。**2026-05-20 修订（Mini-ADR J-24）**：M0 必含**审批超时 fallback**（manifest 可配 / 默认 24h 自动 reject + audit）+ audit trail（审批人 / 时间 / 决策 / 修改入参）+ Admin UI H.3 审批面板接入。STREAM-J-DESIGN § 14 + Mini-ADR J-15 / J-24
+- [ ] **J.9 产物 / Artifact 管理** — artifact + artifact_version 两表 + tenant+user 组合 RLS + 内容经 supervisor 代理读取 + 惰性回填 size/sha256。**2026-05-20 修订（Mini-ADR J-25）**：M0 加 lifecycle（保留期 / DELETE/PATCH API / 卷满清理策略）+ quota 接入 Stream C.5；病毒扫描显式 (a) 推 M2。STREAM-J-DESIGN § 10 + Mini-ADR J-11 / J-25
+- [ ] **J.10 调度 / 触发** — cron + event + webhook 三类 trigger + scheduler 单副本（APScheduler）+ trigger_run 表；分布式 scheduler 推 M1+。**2026-05-20 修订（Mini-ADR J-26）**：补 4 维 —— failed run 重试 / DLQ（K7 模式）+ scheduler quota（Stream C.5）+ trigger event 源 = PG NOTIFY（M0）+ APScheduler `SQLAlchemyJobStore` 持久化。STREAM-J-DESIGN § 16 + Mini-ADR J-18 / J-26
 - [x] **J.11 Model 路由** — `routing:` 块按步骤类别声明式选模型(`RouteRule.when` → `ModelSpec`):planner / reflect 节点可路由到与 agent 循环不同的模型,各带自己的 fallback 链。构造期 `build_step_routers` 给每个节点绑定对应 router;无规则的步骤类别复用默认。声明式规则,非动态难度估计(Mini-ADR J-6)。`vision` 步骤类别随 J.6 多模态加入。STREAM-J-DESIGN § 7。
-- [ ] **J.12 学习 / 反馈闭环** — 从生产 feedback / trajectory 数据迭代改进 agent(区别于 skill 进化)
-- [ ] **J.13 eval 强化** — 评估 G.4 骨架是否需升级（canonical agent 的度量工具）
+- [ ] **J.12 学习 / 反馈闭环** — 把 L7 trajectory ObjectStore + G.6 feedback → 策划 `eval_dataset` 表（与 J.13 共用）；不含训练 / 微调（推 M2+）。**2026-05-20 修订（Mini-ADR J-27）**：与 L7 trajectory 分工修剪 —— J.12 不再写 `trajectory` PG 表（L7 ObjectStore 已是底座），middleware 改为"读 L7 + 关联 feedback → 策划"。STREAM-J-DESIGN § 17 + Mini-ADR J-19 / J-27
+- [ ] **J.13a 逐能力 eval 场景集（M0）** — J.1-J.14 各一套 eval 场景；锁定 canonical agent baseline 作为 Stream M Gate 锚点；`eval_dataset` 表 J.12 / J.13 共用。**2026-05-20 修订（Mini-ADR J-28）**：J.13 拆 3 子项，**M0 仅交付 J.13a**；~~J.13b 在线采样 + LLM-judge 配额 + budget cap~~ → M1 早期 / 并入 M2-D；~~J.13c CI 回归门 + flakiness 缓解~~ → M1 早期 / 并入 M2-D。STREAM-J-DESIGN § 18 + Mini-ADR J-20 / J-28
 - [x] **J.14 租户内 per-user 隔离** — `(tenant_id, user_id)` 复合 scope;thread / 长期记忆 / 工作区按用户隔离(多租户深化,Stream C 性质)。PR1:`tenant_user` 注册表(迁移 0015)+ `TenantUserStore` + `thread_meta.user_id`;PR2:control-plane 接入 —— 会话创建 stamp `user_id`、读 / run / 状态流转的用户所有权强制隔离(`caller_owns_thread`,admin 旁路、机器主体租户级)。STREAM-J-DESIGN § 4。
-- [ ] **J.15 有状态 per-user 执行环境** — 持久工作区(per-user 卷)+ 沙盒会话生命周期(活沙盒复用 / 空闲 hibernate / 快速 restore);Stream F 沙盒模型演进,关联 J.9 产物
+- [ ] **J.15 有状态 per-user 执行环境** — docker named volume per user + 热沙盒会话 + 空闲 TTL reaper（default 15min）+ restore = 冷启动挂暖卷；不走 CRIU（held-pipe 限制）。**2026-05-20 修订（Mini-ADR J-29）**：补生产级数据保护三维 —— volume quota（默认 10 GB / manifest 可配）+ volume backup（每天 rsync 到对象存储 + 7 天保留 + restore 演练 runbook）+ volume at-rest 加密（依赖宿主机 LUKS / 云厂托管磁盘加密，落实 P0 #9）；跨 host 调度 (b) 推 M1-A。STREAM-J-DESIGN § 9 + Mini-ADR J-9 / J-10 / J-29
 
 **Stream J Verification**：每子项接入 live agent 路径、单测 + 集成测试 80% 覆盖；26 维能力矩阵无"缺失 / 骨架"遗留（eval 按 J.13 结论）；canonical per-user 持久 agent 端到端跑通。
 
@@ -456,29 +458,57 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
-## M0→M1 Gate（2-4 周，dogfood 平行运行）
+## M0→M1 Gate（4-6 周）—— 重构为绝对数值化 + canonical agent + eval baseline
 
-> **前置**：Gate 顺延到 **Stream J 之后**（先补全 harness 能力，再 dogfood）。
-> **退出标准待重构**：当前"相对 Dify"框架（token 偏差、p95 倍数、质量对比）将改为**绝对目标 / eval-set 驱动** —— helix 是通用平台，dogfood 用 canonical 能力 agent、与具体 Dify 业务解耦（见 [architecture/08-AGENT-CAPABILITY-ASSESSMENT](./architecture/08-AGENT-CAPABILITY-ASSESSMENT.md)）。重构随 canonical agent 落地。
+参考：[streams/STREAM-M-DESIGN](./streams/STREAM-M-DESIGN.md)（设计先行；2026-05-20 落地）
+
+> **2026-05-20 重构**（按 [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) + [memory:general-platform-positioning](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_general_platform_positioning.md)）：原"相对 Dify"框架（token ±10% / p95 1.2x / 质量评估）被 Stream M 整段替换为**绝对数值化 SLO + canonical agent 端到端 + eval-set baseline + 安全验收 + 数据保护演练**五类 Exit Criteria。helix 已定位通用 agent 平台、不绑用户 Dify 业务；dogfood 仍可平行跑作 sanity check，不再作 Exit Criteria。
 
 ### 目标
-证明 Helix 在真实流量下与 Dify 参数对齐。
+
+锁定 helix 已交付能力达到生产强度，进 M1 真生产 release 安全。
 
 ### 工作清单
 
-- [ ] 灰度切流：Dify 100% → Helix 1% → 10% → 50% → 100%
-- [ ] **每日对比报表**：token 消耗、p95 延迟、TTFT、回答质量人工评估
-- [ ] 手工渗透测试：sandbox 内 `cat /run/secrets/*`、`curl 169.254.169.254` 必须失败
-- [ ] 跑 Garak / HouYi prompt injection 套件
-- [ ] 30 天稳定性观察
+- [ ] **30 天稳定性观察期**（K10 G.7 大盘 + G.2 告警实时采集 § Exit Criteria 全部 SLO 指标）
+- [ ] **dogfood 平行运行**（可选 sanity check，不阻塞决策；选项 [[target-product-form]] canonical agent 或 Phase 0.1 Dify 业务任一）
+- [ ] **eval baseline 周期跑**（J.13a 逐能力 eval 场景集每周一次，分数写入 `tools/eval/baselines/`）
+- [ ] **手工渗透测试 + 沙盒 7/7 用例 staging Linux 跑通**（K5 已锁定不允许"软推迟"）
+- [ ] **数据保护演练**（PG / WORM / KMS 各 staging 1 次）
 
-### Exit Criteria
-- [ ] token 消耗与 Dify 偏差 < ±10%
-- [ ] p95 延迟 < Dify 的 1.2 倍
-- [ ] 回答质量人工评估不劣于 Dify
-- [ ] 30 天无 P0 事故
-- [ ] **gVisor 7/7 沙盒安全用例在 staging Linux 全部跑通** —— 含 `test_gvisor_cve_2019_5736_poc_fails`、`test_gvisor_timing_isolation`；M0 因 macOS dev 限制把这两条推 Gate（Stream F.3 § 1.3），Gate Exit Criteria 锁定它们必须真跑通，**不允许"软推迟"**（Stream K.K5 写入）
-- [ ] **决策点**：是否进入 M1（继续）/暂停（修复后再上量）/回退（架构问题）
+### Exit Criteria（细节见 STREAM-M-DESIGN § 2）
+
+**系统级 SLO（绝对数值）**：
+- [ ] 可用性 < 0.1% 5xx in 30d
+- [ ] TTFT P95 < 2.0s
+- [ ] End-to-end P95 < 30s（canonical agent runs）
+- [ ] SSE 流断裂率 < 0.05% in 30d
+- [ ] Sandbox 冷启动 P95 < 5s
+- [ ] Durable resume P95 < 1.0s
+- [ ] Memory recall@5 ≥ 0.7（K12 中 / 英文 seed set against real embedder）
+- [ ] **P0 事故数 = 0**（30 天观察期；P0 触发立刻 retro + 修复 + 30 天计数器重置）
+
+**Canonical agent 端到端**（[memory:target-product-form](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_target_product_form.md)）：
+- [ ] 多轮对话跨会话保持记忆
+- [ ] 持久工作区跨 run 留存
+- [ ] 空闲 hibernate + 快速 restore
+- [ ] artifact 跨 thread 可访问
+- [ ] 审批门跑通 + audit trail
+- [ ] 多模态输入 Path A + Path B 真实图像在 staging 跑通
+
+**Eval baseline**：
+- [ ] J.13a 逐能力 eval 场景集 baseline 锁定（写入 `tools/eval/baselines/m0_gate_baseline.yaml`）
+
+**安全验收**：
+- [ ] **gVisor 7/7 沙盒安全用例 staging Linux 全部跑通**（含 `test_gvisor_cve_2019_5736_poc_fails`、`test_gvisor_timing_isolation`；K5 锁定不允许"软推迟"）
+- [ ] cross-tenant SSE / memory recall / artifact 全部 reject
+
+**数据保护演练**：
+- [ ] K15 PG 恢复 staging 1 次
+- [ ] K14 WORM 恢复 staging 1 次
+- [ ] K13 KMS 轮换 staging 1 次
+
+**决策点**：全部勾完 → 进 M1；否则选项 A 再走一轮 30 天 / B 暂停修复 / C 回退架构
 
 ---
 
@@ -500,23 +530,34 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] Trivy/Grype 扫描 CI gate（落实 P1 镜像扫描）
 - [ ] cosign 签名 manifest + image（落实 P1 supply chain）
 
-#### M1-B 数据生命周期硬化（~3 周）
+#### M1-B 数据生命周期硬化（~3-4 周；拆 B1 / B2）
+
+> **2026-05-20 拆分**：原 M1-B 把"跨 AZ DR + IaC（大投入，Terraform + 多 AZ 跃迁）"与"zero-downtime migration + 归档（中等投入）"混在一起。按 [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) 拆为两个子组，独立排期。
+
+**M1-B1 中等投入项**（~1.5 周）：
+- [ ] DB zero-downtime migration 规范（Alembic + expand-contract）
+- [ ] 数据归档完整 pipeline（含 audit_log / event_log / memory 各自归档窗口）
+
+**M1-B2 大投入项**（~2.5 周）：
 - [ ] 跨 AZ DR 演练（落实 P1 跨 AZ）
 - [ ] IaC（Terraform）描述基础设施
-- [ ] DB zero-downtime migration 规范（Alembic + expand-contract）
-- [ ] 数据归档完整 pipeline
-- [ ] ~~**retention-cleanup-job CI-only `permission denied` 收尾**~~ → 已移入 **Stream K.K3**（P0 Gate 阻塞）。M0 零技术债盘点 + [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) 审计认定为 (c) 类弱版必须 M0 内补；不再留到 M1-B。
 
-#### M1-C Credential Proxy 升级（~3 周）
+> 历史项：~~**retention-cleanup-job CI-only `permission denied` 收尾**~~ → 已移入 **Stream K.K3**（P0 Gate 阻塞），M0 闭环。
+
+#### M1-C Credential Proxy 升级（~3-4 周；加 C0 评估前置）
 参考：[architecture/subsystems/11-credential-proxy.md](./architecture/subsystems/11-credential-proxy.md)（如有）
-- [ ] Envoy + Lua + Vault dynamic secrets
-- [ ] 自动密钥轮换 + 短 TTL
 
-#### M1-D Vendor P1 中间件（~3 周）
+> **2026-05-20 加 C0 评估前置**：F.5 aiohttp 自研版 + F.6 KMS static + K13 KMS 轮换演练已有，先做"M1-C0 评估"再决定 Envoy 上不上。按 [memory:no-design-choice-disguise](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md) 不允许"Envoy 是设计选择"包装"aiohttp 已经够用但还是上 Envoy"的过度工程。
+
+- [ ] **M1-C0 评估**（~3 天）：aiohttp 自研版在 M0 dogfood + Gate 期间的真实表现 vs Vault dynamic secrets 强需求；产物 `docs/decisions/m1-credential-proxy.md` 决定上 Envoy 还是继续 aiohttp + 加 dynamic 能力
+- [ ] **C1**（基于 C0 决策）：Envoy + Lua + Vault dynamic secrets / 或 aiohttp 加 dynamic secrets 路径
+- [ ] **C2**：自动密钥轮换 + 短 TTL（接入 K13 演练经验）
+
+#### M1-D Vendor P1 中间件（~2 周；token_usage 已提前到 M0 G.9）
 参考：[architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"M1 vendor P1"
-- [ ] `thread_data_middleware`（118 LOC）
-- [ ] `deferred_tool_filter_middleware`（107 LOC）
-- [ ] `token_usage_middleware`（303 LOC）
+- [ ] `thread_data_middleware`（118 LOC）—— M0 dogfood + Gate 跑通后回看实际需求再决定
+- [ ] `deferred_tool_filter_middleware`（107 LOC）—— 同上
+- [ ] ~~`token_usage_middleware`（303 LOC）~~ → **提前到 M0 Stream G.9**（让 dogfood 看见成本；2026-05-20 未交付项审计）
 - [ ] ~~`uploads_middleware`~~ → 提前至 **Stream J.6**（多模态输入）
 - [ ] ~~`reflection/resolvers.py`~~ → 提前至 **Stream J.2**（反思 / 自我修正）
 - [ ] ~~subagent executor + guardrails~~ → 提前至 **Stream J.4**（Sub-agent）
@@ -526,12 +567,20 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] Langfuse 业务大盘
 - [ ] 成本可视化大盘（基于 token_usage_middleware）
 
-#### M1-F 多租户 + Sub-Agent + Python 插槽（~6 周；建立在 M1-A/B/C/D 硬化基础上）
+#### M1-F 多租户深化 + Python 插槽（~5-6 周；拆 F1 / F2）
+
+> **2026-05-20 拆分**：Sub-Agent 已提前到 J.4；剩下两块（tenant_id 深化 / 多租户测试 中等投入）+ Python 插槽（重大新能力面，依赖 M1-A cosign）。按 [memory:complete-not-minimal](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) 拆为两个子组独立排期。
+
+**M1-F1 多租户深化 + 测试**（~2 周）：
+- [ ] tenant_id 全链路贯通深化（依赖 M1-C Vault dynamic / 或 aiohttp dynamic）
+- [ ] 多租户隔离自动化测试（cross-tenant 数据泄漏检测；K2 SSE + J.14 thread/memory/artifact 已铺基础，本项扩到全表）
+
+**M1-F2 Python 插槽**（~3-4 周；依赖 M1-A cosign 供应链）：
 参考：[architecture/02-AGENT-MANIFEST](./architecture/02-AGENT-MANIFEST.md) §"Python 插槽"
-- [ ] ~~Sub-Agent YAML 声明 + LangGraph subgraph 实现~~ → 提前至 **Stream J.4**（Sub-agent / 多智能体委派）
-- [ ] Python 插槽：`code.package` + `tool/graph/hook` 入口（依赖 M1-A cosign 供应链）
-- [ ] tenant_id 全链路贯通深化（依赖 M1-C Vault dynamic）
-- [ ] 多租户隔离自动化测试（cross-tenant 数据泄漏检测）
+- [ ] Python 插槽：`code.package` + `tool/graph/hook` 入口
+- [ ] 插槽代码安全审查 + 沙盒化（含 J.15 持久卷集成 / 或独立 sandbox 隔离）
+
+历史项：~~Sub-Agent YAML 声明 + LangGraph subgraph 实现~~ → 提前至 **Stream J.4**（Sub-agent / 多智能体委派）
 
 #### M1-G 灰度 + Canary + 回滚（~3 周）
 - [ ] manifest 版本灰度面板
@@ -578,30 +627,54 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ### 工作清单
 
-#### M2-A Durable Execution（~5 周）
+#### M2-A Durable Execution — hardening（~3 周；范围明确化）
+
+> **2026-05-20 范围明确化**：L2 context compressor + E.1 PostgresSaver 已交付 80%；M2-A 实际是 hardening 而非从零做。原"Context window 压缩策略（summarization）"已被 L2 覆盖，本子组只补真正新的部分。
+
 参考：[architecture/subsystems/19-durable-execution.md](./architecture/subsystems/19-durable-execution.md)（如有）
-- [ ] Long-running session（小时级）
-- [ ] 引擎重启可恢复（PostgresSaver + replay 加固）
-- [ ] Context window 压缩策略（summarization）
+- [ ] **小时级 long-running session 加固**（与 L2 compressor 集成；现状 50-turn 测试通过，扩到 100+turn / 小时级）
+- [ ] **引擎重启可恢复加固**（E.1 PostgresSaver replay 在 stale checkpoint / partial state 下的边界场景）
 
-#### M2-B Plan-Execute + HITL（~4 周）
-- [ ] Plan-Execute 工作流模板（lead → fan-out → fan-in）
-- [ ] LangGraph interrupt + 审批 UI
-- [ ] 全局 deadline + sub-agent 调用图静态检查
+历史项（已覆盖）：~~Context window 压缩策略（summarization）~~ → 已在 **Stream L.L2** 落地（PR #206）
 
-#### M2-C Memory 三层（~3 周）
+#### M2-B Multi-Agent Orchestration（~4 周；重命名）
+
+> **2026-05-20 重命名 + 范围明确化**：原 "M2-B Plan-Execute + HITL"，但 J.1 plan_execute + J.2 reflect + J.8 HITL 已经在 M0 Stream J 落地。M2-B 真正新的是 multi-agent fan-out + 静态检查 + 全局 deadline，故重命名 "Multi-Agent Orchestration"。
+
+- [ ] **fan-out 并行 sub-agent**（J.4 M0 仅做顺序委派树；本项加并行扇出 + fan-in 聚合）
+- [ ] **sub-agent 调用图静态检查**（构建期检测循环 / 深度爆炸 / 资源死锁）
+- [ ] **全局 deadline 跨 agent 树**（父 deadline 自动下推到子 agent，超时整树取消）
+
+历史项（已覆盖）：~~Plan-Execute 工作流模板~~ → 已在 **J.1**（PR M0）；~~LangGraph interrupt + 审批 UI~~ → 已在 **J.8**（M0）+ **H.3**（Admin UI 审批面板）
+
+#### M2-C Memory archive 层（~2 周；范围明确化）
+
+> **2026-05-20 范围明确化**：J.3 long-term memory + K6/K7 CRUD/DLQ + L2 summarization 已覆盖 working + summarization；M2-C 真正新的只是 archive 层（冷热分层 + 自动晋升 / 召回）。
+
 参考：[research/04-deerflow-source-analysis.md](./research/04-deerflow-source-analysis.md) §"Memory"
-- [ ] working / archive / summarization 三层实现
-- [ ] 自动晋升与召回策略
+- [ ] **memory archive 表 + 冷热分层**（working hot in pgvector / archive cold in S3）
+- [ ] **自动晋升策略**（按访问频次 / 时间衰减 → archive）
+- [ ] **archive 召回路径**（按需 promote 回 working）
 
-#### M2-D Eval Gate + 持续改进 pipeline（~3 周）
-- [ ] A/B Eval gate：新版本上线前自动跑
-- [ ] 用户反馈 → 自动加入 eval → 触发 prompt 改进 → 验证 → 上线
-- [ ] Quality dashboard（每个 agent 当前质量得分）
+历史项（已覆盖）：~~working layer~~ → 已在 **J.3 + K6/K7**；~~summarization layer~~ → 已在 **L2 ContextCompressor**
 
-#### M2-E Trace 时间线 + Session 回放（~3 周）
-- [ ] LangSmith 风格 trace 时间线视图
-- [ ] event_log 重放（time travel）
+#### M2-D Eval Gate + 持续改进 pipeline（~3 周；合并 J.12 + J.13b/c）
+
+> **2026-05-20 合并**：J.12 是 M2-D 的数据底座；J.13b 在线采样 + J.13c CI 回归门 也归到本子组。M0 内只交付 J.13a baseline 集 + L7 trajectory ObjectStore；M2-D 把它们接成完整 pipeline。
+
+- [ ] **A/B Eval gate 上线前自动跑**（基于 J.13a baseline + L7 ObjectStore trajectory）
+- [ ] **用户反馈（G.6）→ 自动加入 eval → 触发 prompt 改进 → 验证 → 上线**（来自 J.12 的 `eval_dataset` 策划层）
+- [ ] **Quality dashboard**（每个 agent 当前质量得分；接入 K10 G.7 大盘）
+- [ ] **J.13b 在线采样 + LLM-as-judge 配额**（M0 内可推迟到此处）
+- [ ] **J.13c CI 回归门 + flakiness 缓解**（N 次重跑 + 阈值软门设计）
+
+#### M2-E event_log Replay（~1.5 周；trace UI 砍）
+
+> **2026-05-20 拆分 + 砍**：原 "M2-E Trace 时间线 + Session 回放" 两块。LangSmith 风格 trace 时间线 → Langfuse UI 已经提供，砍掉自建（属 (a) 重复造轮子）。保留 event_log replay（time travel）—— 是新能力。
+
+- [ ] **event_log replay（time travel）**：基于 A.1/A.2 event_log + checkpointer 还原任意历史时刻 session 状态
+
+历史项（已砍）：~~LangSmith 风格 trace 时间线视图~~ → **(a) 砍**：Langfuse UI（E.5）已提供，自建是重复造轮子
 
 #### M2-F Chaos 工程（~3 周）
 - [ ] toxiproxy / chaos-mesh 集成
