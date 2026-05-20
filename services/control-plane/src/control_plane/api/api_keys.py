@@ -1,9 +1,13 @@
-"""``/v1/service_accounts/{id}/api_keys`` + ``/v1/api_keys`` endpoints — Stream C.3."""
+"""``/v1/service_accounts/{id}/api_keys`` + ``/v1/api_keys`` endpoints — Stream C.3.
+
+Stream K.K1 added ``POST /v1/api_keys/{api_key_id}/rotate`` for
+double-active rotation (Mini-ADR K-1).
+"""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -24,11 +28,34 @@ from helix_agent.runtime.audit.logger import AuditLogger
 
 logger = logging.getLogger("helix.control_plane.api.api_keys")
 
+# Stream K.K1 (Mini-ADR K-1) — double-active rotation grace bounds.
+_DEFAULT_GRACE_PERIOD_S: int = 300
+_MAX_GRACE_PERIOD_S: int = 3600
+_MIN_GRACE_PERIOD_S: int = 0
+
 
 class CreateApiKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scopes: list[ApiKeyScope] = Field(default_factory=list)
     expires_at: datetime | None = None
+
+
+class RotateApiKeyRequest(BaseModel):
+    """Stream K.K1 — body for ``POST /v1/api_keys/{api_key_id}/rotate``.
+
+    ``grace_period_s`` controls how long the old bearer keeps verifying
+    after rotation. Default 300 (5 min) — long enough for clients to
+    swap, short enough that a compromised key is not left valid
+    indefinitely. For emergency revocation pass 0 here (or use
+    ``DELETE /v1/api_keys/{id}`` which short-circuits the grace path).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    grace_period_s: int = Field(
+        default=_DEFAULT_GRACE_PERIOD_S,
+        ge=_MIN_GRACE_PERIOD_S,
+        le=_MAX_GRACE_PERIOD_S,
+    )
 
 
 def _get_keys(request: Request) -> ApiKeyStore:
@@ -144,5 +171,81 @@ def build_api_keys_router() -> APIRouter:
             resource_id=str(api_key_id),
             trace_id=current_trace_id_hex(),
         )
+
+    @router.post("/v1/api_keys/{api_key_id}/rotate", status_code=201)
+    async def rotate_api_key(
+        api_key_id: UUID,
+        payload: RotateApiKeyRequest,
+        principal: Annotated[Principal, Depends(require("api_key", "write"))],
+        keys: Annotated[ApiKeyStore, Depends(_get_keys)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> dict[str, object]:
+        """Stream K.K1 — double-active key rotation.
+
+        Issues a replacement bearer for ``api_key_id`` while keeping the
+        old bearer alive for ``grace_period_s`` so live clients can swap
+        without an outage. Mini-ADR K-1 (STREAM-K-DESIGN § 4) commits to
+        the double-active model; immediate revocation stays available via
+        ``DELETE /v1/api_keys/{id}``.
+
+        Returns ``201`` with both the rotated old row (including
+        ``rotated_at`` + ``grace_period_s``) and the freshly minted
+        ``ApiKeyCreated`` carrying the new plaintext.
+
+        ``404`` for unknown id / wrong tenant / already revoked / already
+        rotated — operators must pick one explicit action at a time so
+        the audit trail stays unambiguous.
+        """
+        generated = mint_api_key(tenant_id=principal.tenant_id)
+        rotated_at = datetime.now(UTC)
+        # One retry on prefix collision matches ``create_api_key`` above.
+        for attempt in range(2):
+            try:
+                result = await keys.rotate(
+                    tenant_id=principal.tenant_id,
+                    api_key_id=api_key_id,
+                    new_prefix=generated.prefix,
+                    new_secret_hash=generated.secret_hash,
+                    grace_period_s=payload.grace_period_s,
+                    rotated_at=rotated_at,
+                    actor_id=principal.subject_id,
+                )
+                break
+            except DuplicateApiKeyPrefixError:
+                if attempt == 1:
+                    logger.warning("api_key.rotate_prefix_collision_retry_failed")
+                    raise HTTPException(
+                        status_code=500,
+                        detail={"code": "INTERNAL_ERROR", "message": "regenerate API key"},
+                    ) from None
+                generated = mint_api_key(tenant_id=principal.tenant_id)
+
+        if result is None:
+            # Unknown id, wrong tenant, already revoked, or already rotated.
+            raise HTTPException(status_code=404, detail="api_key not found")
+
+        old_key, new_key = result
+        await emit(
+            audit,
+            tenant_id=principal.tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.API_KEY_ROTATE,
+            resource_type="api_key",
+            resource_id=str(old_key.id),
+            trace_id=current_trace_id_hex(),
+            details={
+                "new_api_key_id": str(new_key.id),
+                "grace_period_s": payload.grace_period_s,
+            },
+        )
+        created = ApiKeyCreated.from_key(api_key=new_key, plaintext=generated.plaintext)
+        return {
+            "success": True,
+            "data": {
+                "old_api_key": old_key.model_dump(mode="json"),
+                "new_api_key": created.model_dump(mode="json"),
+            },
+            "error": None,
+        }
 
     return router
