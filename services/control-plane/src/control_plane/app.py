@@ -36,6 +36,7 @@ from control_plane.api import (
     build_feedback_router,
     build_health_router,
     build_knowledge_router,
+    build_memory_router,
     build_metrics_router,
     build_quota_router,
     build_role_bindings_router,
@@ -206,6 +207,7 @@ def create_app(
     tenant_config_repo: TenantConfigStore | None = None,
     tenant_config_service: TenantConfigService | None = None,
     agent_runtime: AgentRuntime | None = None,
+    memory_repo: MemoryStore | None = None,
 ) -> FastAPI:
     """Build a configured FastAPI app.
 
@@ -242,7 +244,9 @@ def create_app(
         sql_stores.tenant_user if sql_stores else InMemoryTenantUserStore()
     )
     # Stream J.3 — long-term memory store for the agent runtime.
-    resolved_memory_store: MemoryStore = sql_stores.memory if sql_stores else InMemoryMemoryStore()
+    resolved_memory_store: MemoryStore = memory_repo or (
+        sql_stores.memory if sql_stores else InMemoryMemoryStore()
+    )
     # Stream J.9 — artifact registry backing save_artifact / list_artifacts
     # and the artifact API. The supervisor client backs artifact content
     # download (only the supervisor can read a per-user volume); it is
@@ -386,6 +390,11 @@ def create_app(
                     model=resolved_settings.embedding_model,
                     secret_store=resolved_secret_store,
                 )
+                # Stream K.K6 — memory CRUD endpoint needs the embedder
+                # for the PATCH path (re-embed on content change). GET /
+                # DELETE work without it; the endpoint surfaces 503 on
+                # PATCH when the embedder is unconfigured.
+                _app.state.embedder = embedder
                 # Stream J.5 — the knowledge retriever backing knowledge_search:
                 # hybrid recall + an optional (deployment-configured) LLM rerank.
                 reranker = await resolve_reranker(
@@ -497,6 +506,14 @@ def create_app(
     app.state.tenant_config_repo = resolved_tenant_config_repo
     app.state.tenant_config_service = resolved_tenant_config_service
     app.state.agent_runtime = resolved_agent_runtime
+    # Stream K.K6 — memory CRUD endpoints. ``memory_repo`` is the store
+    # already resolved above (SQL when ``store_backend == "sql"``, else
+    # InMemory); ``embedder`` is populated in the lifespan (may stay
+    # ``None`` when no embedding key is configured — the PATCH path
+    # surfaces a 503 in that case, GET / DELETE are unaffected).
+    app.state.memory_repo = resolved_memory_store
+    if not hasattr(app.state, "embedder"):
+        app.state.embedder = None
 
     # Starlette wraps middleware in *reverse* registration order: the
     # last call to ``add_middleware`` becomes the outermost layer. We
@@ -557,6 +574,7 @@ def create_app(
     app.include_router(build_feedback_router())
     app.include_router(build_artifacts_router())
     app.include_router(build_knowledge_router())
+    app.include_router(build_memory_router())
     app.include_router(build_uploads_router())
     app.include_router(build_service_accounts_router())
     app.include_router(build_api_keys_router())

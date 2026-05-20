@@ -74,6 +74,9 @@ class AuditAction(StrEnum):
     API_KEY_CREATE = "api_key:create"
     API_KEY_REVOKE = "api_key:revoke"
     API_KEY_ROTATE = "api_key:rotate"  # Stream K.K1
+    # memory (Stream K.K6)
+    MEMORY_UPDATE = "memory:update"
+    MEMORY_FORGET = "memory:forget"
     # service_account
     SERVICE_ACCOUNT_CREATE = "service_account:create"
     SERVICE_ACCOUNT_DELETE = "service_account:delete"
@@ -117,6 +120,7 @@ class AuditEntry(BaseModel):
         "api_key",
         "service_account",
         "feedback",
+        "memory_item",  # Stream K.K6 — long-term memory CRUD
     ]
     resource_id: str | None = None
     result: AuditResult

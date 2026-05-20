@@ -38,4 +38,52 @@ class MemoryStore(abc.ABC):
         limit: int = 5,
     ) -> list[MemoryItem]:
         """Return the user's ``limit`` memories nearest ``query_embedding``
-        by cosine distance, closest first. ``kind`` optionally filters."""
+        by cosine distance, closest first. ``kind`` optionally filters.
+        Soft-deleted rows are excluded (Stream K.K6)."""
+
+    @abc.abstractmethod
+    async def list_for_user(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        kind: Literal["fact", "episodic"] | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        """Stream K.K6 — list a user's live memories, newest first.
+
+        Soft-deleted rows are filtered out so the UI / API caller never
+        sees a forgotten memory. ``kind`` optionally narrows. The
+        ``embedding`` field is still populated (callers may project it
+        away at the API boundary)."""
+
+    @abc.abstractmethod
+    async def update_content(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+        content: str,
+        embedding: Sequence[float],
+        kind: Literal["fact", "episodic"] | None = None,
+    ) -> MemoryItem | None:
+        """Stream K.K6 — rewrite a live memory's content / kind.
+
+        The caller must re-embed before calling — the store does not
+        own an embedder. Soft-deleted rows are not updatable; returns
+        ``None`` for unknown id / wrong tenant / wrong user / already
+        soft-deleted."""
+
+    @abc.abstractmethod
+    async def soft_delete(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        """Stream K.K6 — stamp ``deleted_at`` (the forget action).
+
+        Idempotent: returns ``True`` even when already deleted. Returns
+        ``False`` for unknown id / wrong tenant / wrong user."""
