@@ -362,7 +362,7 @@
 - [x] **K5 gVisor Gate Exit Criteria**（补 G12）— M0→M1 Gate Exit Criteria 显式列入 7/7 用例 staging Linux 必跑通条款（纯文档；同 PR 在 STREAM-F-DESIGN § 1.3 + § "测试矩阵" 加 K5 锁定引用，让 Stream F 自身文档不再读起来像"软推迟豁免"）
 
 **P1 — 阻塞 Stream J 剩余子项**
-- [ ] **K6 memory CRUD**（补 G2a）— `GET/PATCH/DELETE /v1/memory/{id}` + 迁移 0021 `deleted_at` 列 + per-user 隔离测试；Mini-ADR K-4
+- [x] **K6 memory CRUD**（补 G2a）— `GET /v1/memory` + `PATCH/DELETE /v1/memory/{id}` + 迁移 0024 `deleted_at` 列 + partial 索引；Mini-ADR K-4 soft-delete。每端点强制 `caller_user_id`（machine principal 403）、跨 user 404 隐藏存在；PATCH 重新 embed 否则 503；DELETE 幂等。新增 `AuditAction.MEMORY_UPDATE` / `MEMORY_FORGET` + `Resource = "memory"` 三种 role 都有自己 memory 权限。12 个端到端测试覆盖。（迁移号从设计稿 0021 调整为 0024，因 0023 是 K1 的 api_key rotation。）
 - [ ] **K7 memory writeback 重试 + dedup**（补 G2b）— 迁移 0022 `content_hash` + `UNIQUE` + `memory_writeback_dlq` 表 + retry worker；Mini-ADR K-5
 - [x] **K8 `update_plan` 工具**（补 G8）— `plan_execute` workflow 隐式注册 `UpdatePlanTool` 让 agent 在运行中改 `AgentState.plan`；闭环 J.1 重规划路径。机制：扩 `ToolResult.state_updates`（白名单 `TOOL_ALLOWED_STATE_KEYS = {"plan"}`）+ `tools_node` 把 update 提升到 graph state；`ToolContext.plan` 注入当前 plan 让 tool 复用原 `goal`。`_dispatch_tool` / `_invoke_tool` 改成 `(ToolMessage, state_updates)` tuple 返回。7 个单测 + 1 个 e2e 测试覆盖。
 - [x] **K9 reflect wall-clock 超时**（补 G9）— `ReflectionSpec.deadline_s` 默认 30s（gt=0, le=600）；`reflect_node` 用 `asyncio.wait_for(token.run_cancellable(...), timeout=deadline_s)`；超时降级为 accept + critique="reflection timed out after Ns"。与 cancellation_token 正交（cancel 走客户端断开路径）。2 个新单测：`test_reflect_node_wallclock_timeout_falls_back_to_accept` + `test_reflect_node_returns_normally_within_deadline`

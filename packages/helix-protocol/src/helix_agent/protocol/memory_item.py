@@ -35,3 +35,9 @@ class MemoryItem(BaseModel):
     )
     created_at: datetime | None = None
     last_used_at: datetime | None = None
+    deleted_at: datetime | None = Field(
+        default=None,
+        description="Stream K.K6 — soft-delete timestamp (forget). "
+        "When set the item is hidden from retrieve / list but kept "
+        "until the retention sweep hard-deletes it.",
+    )
