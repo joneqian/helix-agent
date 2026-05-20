@@ -1,0 +1,194 @@
+"""``/v1/memory`` CRUD endpoints — Stream K.K6.
+
+The Stream J.3 long-term memory layer let the agent *write* and *recall*
+memories, but the user had no way to list, edit, or forget what the
+agent had remembered. STREAM-K-DESIGN § 3.K6 calls this the (c)-class
+"memory ops" gap: a per-user persistent agent without user-facing
+memory controls is a weak version of the product form.
+
+Three endpoints, all per-user scoped:
+
+* ``GET /v1/memory`` — list a user's live (non-deleted) memories,
+  newest first. Embedding vectors are stripped from the response so
+  the JSON stays small.
+* ``PATCH /v1/memory/{id}`` — rewrite ``content`` (and optionally
+  ``kind``). Triggers a re-embed against the configured embedder so
+  subsequent recall ranks the updated text correctly.
+* ``DELETE /v1/memory/{id}`` — soft-delete (the forget action). The
+  row is hidden from recall / list immediately; a future retention
+  sweep hard-deletes 30+ days after.
+
+Per-user enforcement: every call resolves the caller's ``user_id``
+via ``resolve_caller_user_id`` and the store filters
+``(tenant_id, user_id)`` directly (defence in depth with the migration
+0017 RLS policy). A machine principal — no ``user_id`` claim —
+receives 403.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Annotated, Any, Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from control_plane.api._authz import require
+from control_plane.api._user_scope import get_user_repo, resolve_caller_user_id
+from control_plane.audit import emit
+from helix_agent.common.observability import current_trace_id_hex
+from helix_agent.persistence.memory import MemoryStore
+from helix_agent.persistence.tenant_user import TenantUserStore
+from helix_agent.protocol import AuditAction, MemoryItem, Principal
+from helix_agent.runtime.audit.logger import AuditLogger
+
+logger = logging.getLogger("helix.control_plane.api.memory")
+
+
+_LIST_LIMIT_MAX: int = 200
+_LIST_LIMIT_DEFAULT: int = 50
+_PATCH_CONTENT_MAX_CHARS: int = 4000
+
+
+class UpdateMemoryRequest(BaseModel):
+    """Body for ``PATCH /v1/memory/{id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=_PATCH_CONTENT_MAX_CHARS)
+    kind: Literal["fact", "episodic"] | None = None
+
+
+def _get_memory_repo(request: Request) -> MemoryStore:
+    return request.app.state.memory_repo  # type: ignore[no-any-return]
+
+
+def _get_audit(request: Request) -> AuditLogger:
+    return request.app.state.audit_logger  # type: ignore[no-any-return]
+
+
+def _serialise(item: MemoryItem) -> dict[str, Any]:
+    """Project a ``MemoryItem`` for the wire — drop the embedding vector."""
+    data = item.model_dump(mode="json")
+    data.pop("embedding", None)
+    return data
+
+
+async def _require_caller_user(request: Request, users: TenantUserStore) -> tuple[UUID, UUID]:
+    """Resolve ``(tenant_id, user_id)``, 403 for machine principals.
+
+    Memory is per-user — every endpoint here needs both. A JWT carrying
+    a service-account / mTLS principal has no user binding so the
+    endpoint is not applicable.
+    """
+    principal: Principal = request.state.principal
+    user_id = await resolve_caller_user_id(request, users)
+    if user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "USER_SCOPE_REQUIRED",
+                "message": "memory endpoints are per-user; caller has no user binding",
+            },
+        )
+    return principal.tenant_id, user_id
+
+
+def build_memory_router() -> APIRouter:
+    router = APIRouter(prefix="/v1/memory", tags=["memory"])
+
+    @router.get("")
+    async def list_memories(
+        request: Request,
+        _: Annotated[Principal, Depends(require("memory", "read"))],
+        store: Annotated[MemoryStore, Depends(_get_memory_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        kind: Annotated[Literal["fact", "episodic"] | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=_LIST_LIMIT_MAX)] = _LIST_LIMIT_DEFAULT,
+    ) -> dict[str, Any]:
+        tenant_id, user_id = await _require_caller_user(request, users)
+        items = await store.list_for_user(
+            tenant_id=tenant_id, user_id=user_id, kind=kind, limit=limit
+        )
+        return {
+            "success": True,
+            "data": {"items": [_serialise(i) for i in items], "total": len(items)},
+            "error": None,
+        }
+
+    @router.patch("/{memory_id}")
+    async def update_memory(
+        memory_id: UUID,
+        payload: UpdateMemoryRequest,
+        request: Request,
+        principal: Annotated[Principal, Depends(require("memory", "write"))],
+        store: Annotated[MemoryStore, Depends(_get_memory_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> dict[str, Any]:
+        tenant_id, user_id = await _require_caller_user(request, users)
+        embedder = getattr(request.app.state, "embedder", None)
+        if embedder is None:
+            # Re-embedding is required to keep recall ranking honest;
+            # without it the row would carry a vector for the old
+            # content and silently mis-rank. Refuse rather than silently
+            # update only the text.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "EMBEDDER_UNCONFIGURED",
+                    "message": (
+                        "memory PATCH requires an embedder — set "
+                        "HELIX_AGENT_EMBEDDING_API_KEY_REF + "
+                        "HELIX_AGENT_EMBEDDING_MODEL"
+                    ),
+                },
+            )
+
+        vectors = await embedder.embed([payload.content])
+        updated = await store.update_content(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            memory_id=memory_id,
+            content=payload.content,
+            embedding=vectors[0],
+            kind=payload.kind,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="memory not found")
+        await emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.MEMORY_UPDATE,
+            resource_type="memory_item",
+            resource_id=str(memory_id),
+            trace_id=current_trace_id_hex(),
+            details={"kind": updated.kind, "content_len": len(payload.content)},
+        )
+        return {"success": True, "data": _serialise(updated), "error": None}
+
+    @router.delete("/{memory_id}", status_code=204)
+    async def forget_memory(
+        memory_id: UUID,
+        request: Request,
+        principal: Annotated[Principal, Depends(require("memory", "delete"))],
+        store: Annotated[MemoryStore, Depends(_get_memory_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> None:
+        tenant_id, user_id = await _require_caller_user(request, users)
+        ok = await store.soft_delete(tenant_id=tenant_id, user_id=user_id, memory_id=memory_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="memory not found")
+        await emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.MEMORY_FORGET,
+            resource_type="memory_item",
+            resource_id=str(memory_id),
+            trace_id=current_trace_id_hex(),
+        )
+
+    return router

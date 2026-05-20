@@ -39,6 +39,7 @@ Resource = Literal[
     "role_binding",
     "service_account",
     "api_key",
+    "memory",  # Stream K.K6 — long-term memory CRUD
 ]
 
 Action = Literal[
@@ -74,6 +75,11 @@ def _grants(role: Role) -> dict[Resource, set[Action]]:
             "role_binding": {"read", "write", "delete"},
             "service_account": {"read", "write", "delete"},
             "api_key": {"read", "write", "delete"},
+            # Stream K.K6 — admin can manage every user's memory
+            # (support workflows: forget on demand etc.). Per-user
+            # filtering still applies in the endpoint via
+            # ``caller_user_id``; admin has no extra cross-user power.
+            "memory": {"read", "write", "delete"},
         }
     if role is Role.OPERATOR:
         return {
@@ -89,6 +95,10 @@ def _grants(role: Role) -> dict[Resource, set[Action]]:
             # request hot path (LLM gateway / MCP gateway, Stream E).
             # They cannot rewrite it.
             "tenant_config": {"read"},
+            # Stream K.K6 — operators (typically a regular logged-in
+            # user via JWT carrying ``operator``) own their own memory
+            # CRUD. Per-user scoping is enforced in the endpoint.
+            "memory": {"read", "write", "delete"},
         }
     # VIEWER
     return {
@@ -98,6 +108,8 @@ def _grants(role: Role) -> dict[Resource, set[Action]]:
         "audit": {"read"},
         "quota": {"read"},
         "tenant_config": {"read"},
+        # Viewers can list their own memory but not edit / forget.
+        "memory": {"read"},
     }
 
 

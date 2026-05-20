@@ -6,6 +6,7 @@ from control_plane.api.artifacts import build_artifacts_router
 from control_plane.api.feedback import build_feedback_router
 from control_plane.api.health import build_health_router
 from control_plane.api.knowledge import build_knowledge_router
+from control_plane.api.memory import build_memory_router
 from control_plane.api.metrics import build_metrics_router
 from control_plane.api.quota import build_quota_router
 from control_plane.api.role_bindings import build_role_bindings_router
@@ -23,6 +24,7 @@ __all__ = [
     "build_feedback_router",
     "build_health_router",
     "build_knowledge_router",
+    "build_memory_router",
     "build_metrics_router",
     "build_quota_router",
     "build_role_bindings_router",

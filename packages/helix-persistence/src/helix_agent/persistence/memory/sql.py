@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.memory.base import MemoryStore
@@ -25,6 +26,7 @@ def _row_to_item(row: MemoryItemRow) -> MemoryItem:
         source_thread_id=row.source_thread_id,
         created_at=row.created_at,
         last_used_at=row.last_used_at,
+        deleted_at=row.deleted_at,
     )
 
 
@@ -65,6 +67,7 @@ class SqlMemoryStore(MemoryStore):
         stmt = select(MemoryItemRow).where(
             MemoryItemRow.tenant_id == tenant_id,
             MemoryItemRow.user_id == user_id,
+            MemoryItemRow.deleted_at.is_(None),  # Stream K.K6 — exclude soft-deleted
         )
         if kind is not None:
             stmt = stmt.where(MemoryItemRow.kind == kind)
@@ -75,3 +78,95 @@ class SqlMemoryStore(MemoryStore):
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_item(row) for row in rows]
+
+    async def list_for_user(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        kind: Literal["fact", "episodic"] | None = None,
+        limit: int = 50,
+    ) -> list[MemoryItem]:
+        stmt = select(MemoryItemRow).where(
+            MemoryItemRow.tenant_id == tenant_id,
+            MemoryItemRow.user_id == user_id,
+            MemoryItemRow.deleted_at.is_(None),
+        )
+        if kind is not None:
+            stmt = stmt.where(MemoryItemRow.kind == kind)
+        # newest first; ``memory_item_live_user_idx`` (migration 0024) is
+        # a partial index on (user_id, created_at DESC) WHERE
+        # deleted_at IS NULL — query shape matches.
+        stmt = stmt.order_by(MemoryItemRow.created_at.desc()).limit(limit)
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_row_to_item(row) for row in rows]
+
+    async def update_content(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+        content: str,
+        embedding: Sequence[float],
+        kind: Literal["fact", "episodic"] | None = None,
+    ) -> MemoryItem | None:
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(MemoryItemRow).where(
+                        MemoryItemRow.id == memory_id,
+                        MemoryItemRow.tenant_id == tenant_id,
+                        MemoryItemRow.user_id == user_id,
+                        MemoryItemRow.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.content = content
+            row.embedding = list(embedding)
+            if kind is not None:
+                row.kind = kind
+            await session.commit()
+            await session.refresh(row)
+            return _row_to_item(row)
+
+    async def soft_delete(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        now = datetime.now(UTC)
+        stmt = (
+            update(MemoryItemRow)
+            .where(
+                MemoryItemRow.id == memory_id,
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.user_id == user_id,
+                MemoryItemRow.deleted_at.is_(None),
+            )
+            .values(deleted_at=now)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            await session.commit()
+        if int(getattr(result, "rowcount", 0) or 0) > 0:
+            return True
+        # Either truly missing or already deleted. Differentiate by a
+        # cheap existence check so the caller gets idempotent semantics
+        # on a second forget but a clean 404 on an unknown id.
+        async with self._sf() as session:
+            exists = (
+                await session.execute(
+                    select(MemoryItemRow.id).where(
+                        MemoryItemRow.id == memory_id,
+                        MemoryItemRow.tenant_id == tenant_id,
+                        MemoryItemRow.user_id == user_id,
+                    )
+                )
+            ).first()
+        return exists is not None
