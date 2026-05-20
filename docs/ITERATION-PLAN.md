@@ -355,7 +355,7 @@
 > 三条 agent 误判更正记 STREAM-K-DESIGN § 1.2：C.3 API Key 已有 CRUD（仅缺 rotation）、F.6 KMS 已实装（仅缺轮换演练）、J.11 路由是编译期绑定（已生效）。
 
 **P0 — M0→M1 Gate 阻塞**
-- [ ] **K1 API Key rotation**（补 G1）— `POST /v1/api_keys/{id}/rotate` + 双活窗口 + audit；STREAM-K-DESIGN § 3 / Mini-ADR K-1
+- [x] **K1 API Key rotation**（补 G1）— `POST /v1/api_keys/{id}/rotate` + 双活窗口（grace 0–3600s，默认 300）+ `AuditAction.API_KEY_ROTATE`；STREAM-K-DESIGN § 3 / Mini-ADR K-1。迁移 0023 加 `api_key.rotated_at` / `grace_period_s`；verifier 在 grace 后视为不可用。**同 PR 修了一个 Stream C.3 的预存设计 bug**：原 prefix `aforge_pat_<5hex>_` (17 chars) 同 tenant 必撞 UNIQUE，扩到 25 chars 含 8 chars random hex 让 per-key unique（K1 rotate 等价 "create 第二个 key" 才暴露此 bug）。6 个集成测试覆盖 happy / grace 内双活 / grace=0 旧立死 / 已 rotated 拒绝 / 已 revoked 拒绝 / 不存在 404。
 - [x] **K2 SSE 跨租户隔离**（补 G3）— 安全模型由 thread 归属校验保证（误判更正），补 `test_runs_cross_tenant_sse_rejected` 锁住 invariant + `runs.py:191` docstring 引用 Mini-ADR K-2 说明不加 SSE 层冗余 guard
 - [x] **K3 retention CI xfail 收尾**（补 G4）— 两条 `permission denied` 测试 → 绿，xfail marker 移除；同时关 M1-B 挂账项。根因不是 PG 配 / asyncpg role 交互，是测试断言用 `SET LOCAL ROLE audit_writer` 越权读 event_log / jwt_blacklist（audit_writer 仅 audit_log 权限），且 event_log RLS 未设 `app.tenant_id` GUC 把数据全过滤。修法：去 SET ROLE，event_log 断言加 `set_config('app.tenant_id', tenant, true)`。job 代码不动。本地 5/5 通过 ×2。
 - [x] **K4 LLM cache 正确性**（补 G11）— `AgentSpecBody.cache.enabled` manifest 入口 + `middleware_assembly` 在 `enabled is False` 时跳过 lookup/store 中间件；Mini-ADR K-3。默认 `enabled=True` 保护现有 manifest。`test_cache_middlewares_skipped_when_manifest_disables` 红→绿。

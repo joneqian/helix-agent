@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Text, UniqueConstraint, func, text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -40,6 +40,12 @@ class ApiKeyRow(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stream K.K1 — double-active rotation. ``rotated_at`` is stamped on
+    # the *old* row when a new key is issued via /rotate; the verifier
+    # keeps accepting the old bearer until ``rotated_at + grace_period_s``
+    # has elapsed (Mini-ADR K-1).
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    grace_period_s: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
