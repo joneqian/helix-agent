@@ -372,7 +372,7 @@
 - [x] **K11 加权金丝雀**（补 G13）— `deploy.py` 已经有 `--canary 10,30,50` 渐进 + nginx `weight=` upstream（Stream I.2 落地），本 PR 补**失败自动回滚**：加 `--soak-check-cmd` 在每 canary step 末跑外部健康探针，非 0 退出 → 把 upstream 写回 100% live + 抛 `CanaryAbortedError` + exit 1。新增 3 个单测覆盖 abort+rollback / 全过完成 flip / 探针 raise 视为失败。`_subprocess_soak_checker` 把 shell 命令包成 `SoakChecker` 回调；callable injection 让单测无需 docker。
 
 **P3 — 阻塞 M1 入口**
-- [ ] **K12 memory recall eval gate**（补 G2c）— `tools/eval/sets/memory_recall_zh_en/` 中英文 benchmark + `recall@5 >= 0.7` SLO
+- [x] **K12 memory recall eval gate**（补 G2c）— 新 harness `tools/eval/memory_recall.py`（schema + recall@k / mrr@k metric + 异步 runner，embedder-agnostic）+ `tools/eval/datasets/memory_recall/zh_en_seed.yaml` 8 case seed（4 zh + 4 en）+ 9 单测覆盖 metric / loader / runner。slo.md 加 SLO #6（M1 目标 recall@5 ≥ 0.7 against real embedder；M0 在 fake keyword-overlap embedder 上锁 1.0 防 harness 回归）。注：100 case 完整 zh+en benchmark 留到 canonical agent dogfood，K12 提供基础设施 + 验证铺底。
 - [x] **K13 KMS 轮换演练**（补 G5）— `FakeKmsBackend` 已支持 reseed（new value/version），加 3 个轮换 drill 测试：rotation 后 cache TTL 过期内仍返旧值（设计预期 stale-by-TTL）→ 过期后取到新值；`put()` 路径立即 invalidate；dynamic kind 用半 TTL 提前收敛。覆盖 \"轮换后 60s 内取新值 < TTL\" 的核心 invariant。
 - [ ] **K14 WORM 恢复演练**（补 G6）— `docs/runbooks/audit-restore.md` + `tools/persistence/restore_audit.py` + 演练脚本
 - [ ] **K15 PG 恢复演练**（补 G7）— 定位备份现状 → `docs/runbooks/pg-restore.md` + 演练脚本 + RTO/RPO 实测

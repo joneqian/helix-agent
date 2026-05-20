@@ -12,9 +12,10 @@
 |---|-----|------|------|----------|---------|
 | 1 | 控制平面 API 可用性 | ≥ 99.9% | 30d | `helix_control_plane_http_requests_total` | ✅ 指标已 emit |
 | 2 | 控制平面 API P99 延迟 | < 200ms | 30d | `helix_control_plane_http_request_duration_seconds` | ✅ 指标已 emit |
-| 3 | Session TTFT P95 | < 1.5s | 30d | `helix_session_ttft_seconds` | ⏳ 指标待 orchestrator emit |
-| 4 | Sandbox 冷启动 P95 | < 3s（M0）/ < 500ms（M1 warm pool） | 30d | `helix_sandbox_cold_start_seconds` | ⏳ 指标待 sandbox emit |
-| 5 | Durable resume 成功率 | ≥ 99% | 30d | `helix_resume_total` | ⏳ 指标待 emit（M2 durable）|
+| 3 | Session TTFT P95 | < 1.5s | 30d | `helix_session_ttft_seconds` | ✅ 指标已 emit（K10） |
+| 4 | Sandbox 冷启动 P95 | < 3s（M0）/ < 500ms（M1 warm pool） | 30d | `helix_sandbox_cold_start_seconds` | ✅ 指标已 emit（K10） |
+| 5 | Durable resume P95 | < 1.5s | 30d | `helix_durable_resume_seconds` | ✅ 指标已 emit（K10）|
+| 6 | Memory recall@5（zh+en） | ≥ 0.7（M1 against real embedder） | 单测 | `tools/eval/memory_recall.py` | ✅ 框架 + seed set 已 ship（K12）|
 
 > ⏳ 的三条 SLO 在 M0 已**定义**，但对应指标尚未在 M0 代码路径 emit（orchestrator session 指标、sandbox 冷启动指标、durable resume 指标分属后续 Stream）。
 > 其 recording rule 随指标落地补入 `tools/observability/rules/sli.yml` —— 本阶段不写引用空指标的惰性规则。
