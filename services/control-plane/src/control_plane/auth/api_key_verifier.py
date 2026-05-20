@@ -26,7 +26,7 @@ import logging
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from argon2 import PasswordHasher
@@ -50,7 +50,10 @@ API_KEY_SENTINEL: str = "aforge_pat_"
 
 #: Length of the stored ``prefix`` column. Keep in sync with
 #: :data:`helix_agent.protocol.API_KEY_STORED_PREFIX_LEN`.
-API_KEY_PREFIX_LEN: int = API_KEY_STORED_PREFIX_LEN  # ``aforge_pat_<5hex>_`` = 17 chars
+#: ``aforge_pat_<5hex>_<8 random hex>`` = 25 chars (Stream K.K1 widened the
+#: prefix to fold 8 random hex into it, so two keys in the same tenant no
+#: longer collide on the ``UNIQUE`` constraint).
+API_KEY_PREFIX_LEN: int = API_KEY_STORED_PREFIX_LEN
 
 #: Random tail length. 32 url-safe chars ≈ 192 bits — well above the
 #: OWASP minimum for bearer tokens.
@@ -119,6 +122,13 @@ class ApiKeyVerifier:
             raise InvalidTokenError()
         if record.revoked_at is not None:
             raise InvalidTokenError()
+        # Stream K.K1 (Mini-ADR K-1) — a rotated key keeps verifying
+        # until ``rotated_at + grace_period_s`` elapses; after that the
+        # old bearer is dead and clients must use the replacement.
+        if record.rotated_at is not None and record.grace_period_s is not None:
+            grace_expires = record.rotated_at + timedelta(seconds=record.grace_period_s)
+            if datetime.now(UTC) >= grace_expires:
+                raise InvalidTokenError()
         if record.expires_at is not None and record.expires_at < datetime.now(UTC):
             raise TokenExpiredError()
         try:

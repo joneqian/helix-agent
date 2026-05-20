@@ -133,6 +133,33 @@ class ApiKeyStore(abc.ABC):
         unknown / wrong-tenant id."""
 
     @abc.abstractmethod
+    async def rotate(
+        self,
+        *,
+        tenant_id: UUID,
+        api_key_id: UUID,
+        new_prefix: str,
+        new_secret_hash: str,
+        grace_period_s: int,
+        rotated_at: datetime,
+        actor_id: str,
+    ) -> tuple[ApiKey, ApiKey] | None:
+        """Stream K.K1 — issue a replacement and start the grace window.
+
+        Stamps ``rotated_at`` + ``grace_period_s`` on the old row (so
+        the verifier keeps accepting it until the window closes), then
+        inserts a new row inheriting ``service_account_id`` / ``scopes`` /
+        ``expires_at`` from the old one. The new row's ``rotated_at`` /
+        ``grace_period_s`` are ``NULL`` (it has not itself been rotated).
+
+        Returns ``(old, new)`` on success or ``None`` when the
+        ``api_key_id`` is unknown, belongs to a different tenant, or
+        was already revoked / already rotated.
+
+        Raises :class:`DuplicateApiKeyPrefixError` on prefix collision.
+        """
+
+    @abc.abstractmethod
     async def touch_last_used(self, *, api_key_id: UUID, when: datetime) -> None:
         """Best-effort last-used timestamp update. Never raises."""
 

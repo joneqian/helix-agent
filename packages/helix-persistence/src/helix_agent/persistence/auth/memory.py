@@ -160,6 +160,45 @@ class InMemoryApiKeyStore(ApiKeyStore):
             self._rows[api_key_id] = row.model_copy(update={"revoked_at": _now()})
             return True
 
+    async def rotate(
+        self,
+        *,
+        tenant_id: UUID,
+        api_key_id: UUID,
+        new_prefix: str,
+        new_secret_hash: str,
+        grace_period_s: int,
+        rotated_at: datetime,
+        actor_id: str,
+    ) -> tuple[ApiKey, ApiKey] | None:
+        async with self._lock:
+            old = self._rows.get(api_key_id)
+            if old is None or old.tenant_id != tenant_id:
+                return None
+            if old.revoked_at is not None or old.rotated_at is not None:
+                return None
+            if new_prefix in self._by_prefix:
+                raise DuplicateApiKeyPrefixError(prefix=new_prefix)
+
+            rotated_old = old.model_copy(
+                update={"rotated_at": rotated_at, "grace_period_s": grace_period_s}
+            )
+            new = ApiKey(
+                id=uuid4(),
+                service_account_id=old.service_account_id,
+                tenant_id=tenant_id,
+                prefix=new_prefix,
+                secret_hash=new_secret_hash,
+                scopes=old.scopes,
+                expires_at=old.expires_at,
+                created_at=_now(),
+                created_by=actor_id,
+            )
+            self._rows[api_key_id] = rotated_old
+            self._rows[new.id] = new
+            self._by_prefix[new_prefix] = new.id
+            return rotated_old, new
+
     async def touch_last_used(self, *, api_key_id: UUID, when: datetime) -> None:
         async with self._lock:
             row = self._rows.get(api_key_id)

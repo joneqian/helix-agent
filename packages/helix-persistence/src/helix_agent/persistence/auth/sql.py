@@ -49,6 +49,8 @@ def _row_to_api_key(row: ApiKeyRow) -> ApiKey:
         expires_at=row.expires_at,
         last_used_at=row.last_used_at,
         revoked_at=row.revoked_at,
+        rotated_at=row.rotated_at,
+        grace_period_s=row.grace_period_s,
         created_at=row.created_at,
         created_by=row.created_by,
     )
@@ -212,6 +214,55 @@ class SqlApiKeyStore(ApiKeyStore):
             await session.commit()
         rowcount = getattr(result, "rowcount", 0) or 0
         return int(rowcount) > 0
+
+    async def rotate(
+        self,
+        *,
+        tenant_id: UUID,
+        api_key_id: UUID,
+        new_prefix: str,
+        new_secret_hash: str,
+        grace_period_s: int,
+        rotated_at: datetime,
+        actor_id: str,
+    ) -> tuple[ApiKey, ApiKey] | None:
+        async with self._sf() as session:
+            old_row = (
+                await session.execute(
+                    select(ApiKeyRow).where(
+                        ApiKeyRow.id == api_key_id,
+                        ApiKeyRow.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if old_row is None:
+                return None
+            # Refuse to rotate an already-revoked or already-rotated key
+            # — operators must pick one explicit action at a time so the
+            # audit trail stays unambiguous.
+            if old_row.revoked_at is not None or old_row.rotated_at is not None:
+                return None
+
+            old_row.rotated_at = rotated_at
+            old_row.grace_period_s = grace_period_s
+
+            new_row = ApiKeyRow(
+                service_account_id=old_row.service_account_id,
+                tenant_id=tenant_id,
+                prefix=new_prefix,
+                secret_hash=new_secret_hash,
+                scopes=list(old_row.scopes),
+                expires_at=old_row.expires_at,
+                created_by=actor_id,
+            )
+            session.add(new_row)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                raise DuplicateApiKeyPrefixError(prefix=new_prefix) from exc
+            await session.refresh(old_row)
+            await session.refresh(new_row)
+            return _row_to_api_key(old_row), _row_to_api_key(new_row)
 
     async def touch_last_used(self, *, api_key_id: UUID, when: datetime) -> None:
         stmt = update(ApiKeyRow).where(ApiKeyRow.id == api_key_id).values(last_used_at=when)
