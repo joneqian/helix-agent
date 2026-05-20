@@ -145,7 +145,14 @@ jobs:
         run: uv export --frozen --no-emit-workspace --no-hashes --format=requirements.txt > requirements-audit.txt
 
       - name: pip-audit
-        run: uvx pip-audit -r requirements-audit.txt --strict --disable-pip --no-deps
+        # PYSEC-2025-183 — published 2026-05-20 against pyjwt 2.12.1 (the
+        # latest available release on PyPI). No fix version is shipped
+        # upstream yet; ignore until pyjwt cuts a patched release.
+        # Track: https://github.com/jpadilla/pyjwt/security/advisories
+        # (re-evaluate when ``uvx pip index versions pyjwt`` shows >2.12.1).
+        run: |
+          uvx pip-audit -r requirements-audit.txt --strict --disable-pip \
+            --no-deps --ignore-vuln PYSEC-2025-183
 
   pre-commit:
     name: Pre-commit
