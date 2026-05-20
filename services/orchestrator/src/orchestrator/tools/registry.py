@@ -26,12 +26,37 @@ from helix_agent.runtime.cancellation import CancellationToken
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """Static descriptor of a tool — handed to the LLM for tool selection."""
+    """Static descriptor of a tool — handed to the LLM for tool selection.
+
+    ``is_read_only`` and ``path_args`` (Stream L.L6) feed the ReAct
+    ``tools`` node's adaptive parallel scheduler. Read-only tools
+    without overlapping paths run concurrently; conflicting calls
+    serialise. Defaults (``False`` / ``()``) are deliberately
+    conservative — a third-party tool that doesn't opt in stays on the
+    sequential path it had before L6. See [STREAM-L-DESIGN § 3.L6](
+    ../../../../../docs/streams/STREAM-L-DESIGN.md) + Mini-ADR L-6.
+    """
 
     name: str
     description: str
     #: JSON Schema for the tool's ``args`` parameter.
     parameters: Mapping[str, Any] = field(default_factory=dict)
+    #: Stream L.L6 — when ``True``, multiple invocations of this tool
+    #: (and concurrent invocations of other read-only tools) may run in
+    #: parallel without conflict. Tools that mutate filesystem,
+    #: ``AgentState``, sandbox, or any third-party state MUST keep the
+    #: default ``False`` — they serialise against any tool that touches
+    #: the same path (or against every other call, when no path is
+    #: declared).
+    is_read_only: bool = False
+    #: Stream L.L6 — argument names whose values are filesystem-like
+    #: paths the tool reads or writes. The scheduler detects conflicts
+    #: between two tool calls by comparing the resolved values of
+    #: these args. Empty tuple means "this tool has no per-call path";
+    #: combined with ``is_read_only=False`` that yields the worst-case
+    #: "conflicts with every other tool" stance (e.g., ``update_plan``
+    #: writes ``AgentState.plan``, a global channel).
+    path_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

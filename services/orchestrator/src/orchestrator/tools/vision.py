@@ -83,6 +83,9 @@ class AskImageTool:
                 },
                 "required": ["image_ref", "question"],
             },
+            # Stream L.L6 — VL LLM call against an immutable image
+            # reference. Pure read.
+            is_read_only=True,
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:

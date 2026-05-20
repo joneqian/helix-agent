@@ -111,6 +111,12 @@ class SaveArtifactTool:
                 },
                 "required": ["name"],
             },
+            # Stream L.L6 — registers a new artifact version; concurrent
+            # ``save_artifact`` calls on the same ``name`` would race
+            # the version counter. ``path_args=("name",)`` lets the
+            # scheduler parallelise saves to *different* names (the
+            # common case) while serialising saves to the same name.
+            path_args=("name",),
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
@@ -150,6 +156,8 @@ class ListArtifactsTool:
                 "List the named artifacts you have saved, with each one's kind and latest version."
             ),
             parameters={"type": "object", "properties": {}},
+            # Stream L.L6 — pure read.
+            is_read_only=True,
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
