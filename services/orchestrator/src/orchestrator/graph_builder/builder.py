@@ -448,12 +448,12 @@ def _build_mutation_advisory(failed: list[MutationOutcome]) -> HumanMessage:
     prefix invariant — ``system`` is build-once / replay-verbatim —
     stays intact.
     """
-    lines = [
-        "<mutation-advisory>",
+    preamble = (
         "The following file mutations from the previous tool batch did NOT land. "
         "DO NOT assume these paths have the requested content; retry or surface "
-        "the failure to the user.",
-    ]
+        "the failure to the user."
+    )
+    lines = ["<mutation-advisory>", preamble]
     for outcome in failed:
         line = f"- {outcome.tool_name} path={outcome.path}"
         if outcome.error:
