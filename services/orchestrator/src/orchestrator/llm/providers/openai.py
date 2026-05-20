@@ -57,6 +57,7 @@ from helix_agent.runtime.middleware import (
     LLMNetworkError,
     LLMRateLimitError,
     LLMServerError,
+    LLMUnauthorizedError,
 )
 from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
@@ -147,6 +148,10 @@ class HTTPOpenAIClient:
             raise LLMNetworkError(f"openai: {exc}") from exc
 
         status = response.status_code
+        if status == 401:
+            # Stream L.L8 — surface 401 distinctly so OAuth-capable
+            # providers can opt into the router's refresh + retry path.
+            raise LLMUnauthorizedError(f"openai 401: {_truncate(response.text)}")
         if status == 429:
             raise LLMRateLimitError(f"openai 429: {_truncate(response.text)}")
         if 400 <= status < 500:

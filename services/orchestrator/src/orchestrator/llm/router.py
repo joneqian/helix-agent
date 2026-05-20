@@ -48,12 +48,15 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from helix_agent.common.observability import helix_counter
 from helix_agent.runtime.middleware import (
+    LLMAuthError,
     LLMClientError,
     LLMError,
     LLMStreamStaleError,
+    LLMUnauthorizedError,
     MiddlewareChain,
     MiddlewareContext,
 )
+from orchestrator.llm.oauth_provider import OAuthCapableProvider
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -64,6 +67,15 @@ _llm_stream_stale_total = helix_counter(
     "helix_llm_stream_stale_total",
     "Provider calls that exceeded LLMRouter.stream_deadline_s (Stream L.L3).",
     ("provider_key",),
+)
+
+# Stream L.L8 — counter for OAuth credential refresh attempts and outcomes.
+# ``result`` is ``success`` when the second attempt returns a response, or
+# ``fail`` when refresh itself returned False / the retry hit another 401.
+_llm_auth_refresh_total = helix_counter(
+    "helix_llm_auth_refresh_total",
+    "Credential refreshes triggered by OAuth-capable provider 401s (Stream L.L8).",
+    ("provider_key", "result"),
 )
 
 
@@ -204,7 +216,28 @@ class LLMRouter:
         messages: Sequence[BaseMessage],
         tools: Sequence[ToolSpec],
     ) -> AIMessage:
-        """Invoke one provider, optionally wrapped in the around-LLM chain.
+        """Invoke one provider, with the Stream L.L8 OAuth refresh hook.
+
+        The :class:`LLMUnauthorizedError` catch is the L8 entry point —
+        non-OAuth providers re-raise unchanged (existing 4xx-no-fallback
+        semantics); OAuth-capable providers get one refresh + retry
+        before failing. See :meth:`_handle_unauthorized`.
+        """
+        try:
+            return await self._attempt_call(handle, messages=messages, tools=tools)
+        except LLMUnauthorizedError as exc:
+            return await self._handle_unauthorized(
+                handle, messages=messages, tools=tools, original=exc
+            )
+
+    async def _attempt_call(
+        self,
+        handle: ProviderHandle,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolSpec],
+    ) -> AIMessage:
+        """One provider attempt, optionally wrapped in the around-LLM chain.
 
         Without ``around_llm_chain`` we just delegate to ``provider.complete``
         — the M0 unit-test path. With the chain set, build a
@@ -247,6 +280,75 @@ class LLMRouter:
                 f"response for provider_key={handle.key!r}"
             )
         return response
+
+    async def _handle_unauthorized(
+        self,
+        handle: ProviderHandle,
+        *,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[ToolSpec],
+        original: LLMUnauthorizedError,
+    ) -> AIMessage:
+        """Stream L.L8 — credential refresh + at-most-one retry.
+
+        Non-OAuth providers re-raise the original :class:`LLMUnauthorizedError`
+        so the existing 4xx-no-fallback path stays intact for static API-key
+        providers. OAuth-capable providers get exactly one refresh attempt:
+
+        * ``refresh_credentials()`` returns ``True`` → retry the call. A
+          successful retry returns the response. Another 401 wraps as
+          :class:`LLMAuthError` (retryable) so the outer router falls
+          back to the next provider.
+        * ``refresh_credentials()`` returns ``False`` (or raises) → no
+          retry; raise :class:`LLMAuthError` immediately so the router
+          falls back.
+
+        Mini-ADR L-8: the router (not the provider) enforces "at most
+        one refresh per call" — a buggy provider implementation cannot
+        loop on persistent 401.
+        """
+        if not isinstance(handle.provider, OAuthCapableProvider):
+            # Non-OAuth provider — preserve the existing 4xx semantics:
+            # the router's outer loop re-raises LLMClientError without
+            # fallback (a bad API key on Anthropic / OpenAI is a real
+            # auth failure, not an expired-token recoverable).
+            raise original
+
+        try:
+            refreshed = await handle.provider.refresh_credentials()
+        except Exception as exc:
+            # A misbehaving refresh implementation must not crash the
+            # run — treat as a refresh failure (per the L8 Protocol
+            # contract: "MUST NOT raise on routine paths").
+            logger.warning(
+                "llm_router.refresh_raised key=%s err=%s",
+                handle.key,
+                type(exc).__name__,
+            )
+            refreshed = False
+
+        if not refreshed:
+            _llm_auth_refresh_total.labels(provider_key=handle.key, result="fail").inc()
+            logger.info("llm_router.refresh_failed key=%s", handle.key)
+            raise LLMAuthError(
+                f"provider {handle.key!r} credential refresh failed; falling back"
+            ) from original
+
+        # Refresh succeeded — retry exactly once. Another 401 means the
+        # refreshed credentials are also rejected; treat as a real auth
+        # failure on this provider and let the router fall back.
+        try:
+            result = await self._attempt_call(handle, messages=messages, tools=tools)
+        except LLMUnauthorizedError as retry_exc:
+            _llm_auth_refresh_total.labels(provider_key=handle.key, result="fail").inc()
+            logger.info("llm_router.refresh_retry_still_401 key=%s", handle.key)
+            raise LLMAuthError(
+                f"provider {handle.key!r} still unauthorized after refresh; falling back"
+            ) from retry_exc
+
+        _llm_auth_refresh_total.labels(provider_key=handle.key, result="success").inc()
+        logger.info("llm_router.refresh_recovered key=%s", handle.key)
+        return result
 
     async def _invoke_with_deadline(
         self,

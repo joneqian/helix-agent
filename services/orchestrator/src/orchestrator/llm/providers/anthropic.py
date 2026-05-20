@@ -55,6 +55,7 @@ from helix_agent.runtime.middleware import (
     LLMNetworkError,
     LLMRateLimitError,
     LLMServerError,
+    LLMUnauthorizedError,
 )
 from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
@@ -145,6 +146,10 @@ class HTTPAnthropicClient:
             raise LLMNetworkError(f"anthropic: {exc}") from exc
 
         status = response.status_code
+        if status == 401:
+            # Stream L.L8 — surface 401 distinctly so OAuth-capable
+            # providers can opt into the router's refresh + retry path.
+            raise LLMUnauthorizedError(f"anthropic 401: {_truncate(response.text)}")
         if status == 429:
             raise LLMRateLimitError(f"anthropic 429: {_truncate(response.text)}")
         if 400 <= status < 500:

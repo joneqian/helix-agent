@@ -49,8 +49,33 @@ class LLMClientError(LLMError):
     """
 
 
+class LLMUnauthorizedError(LLMClientError):
+    """Stream L.L8 — HTTP 401-class error specifically.
+
+    A subclass of :class:`LLMClientError` so existing 4xx-no-fallback
+    semantics still apply for non-OAuth providers. OAuth-capable
+    providers (see
+    :class:`~orchestrator.llm.oauth_provider.OAuthCapableProvider`)
+    let the router intercept this exception, call
+    ``refresh_credentials()`` once, and retry the call.
+    """
+
+
 class LLMServerError(LLMError):
     """5xx-class error — vendor-side fault. Retried + counts toward breaker."""
+
+
+class LLMAuthError(LLMServerError):
+    """Stream L.L8 — credential refresh attempted and still unauthorized.
+
+    Raised by :class:`~orchestrator.llm.router.LLMRouter` *after* a
+    single ``refresh_credentials()`` retry on a 401 still fails (or
+    the refresh itself returned ``False``). Inherits
+    :class:`LLMServerError` so the router treats it as retryable and
+    falls back to the next provider in the chain — a provider whose
+    credentials are confirmed broken should not lock the run when
+    another upstream may still answer.
+    """
 
 
 class LLMRateLimitError(LLMError):
