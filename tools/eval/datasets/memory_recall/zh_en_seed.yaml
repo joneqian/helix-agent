@@ -1,0 +1,112 @@
+# Stream K.K12 — memory recall eval gate seed set (zh + en).
+#
+# Hand-curated seed for the recall benchmark in
+# ``tools/eval/memory_recall.py``. Eight cases — four zh, four en —
+# split across both languages so the gate measures both. Each case
+# pairs a query with a tiny corpus (the right answer plus 1-2
+# distractors) so the metric isn't a coin flip and small embedder
+# regressions show up.
+#
+# The full M0→M1 benchmark (the 50+50 set referenced in SLO #6) lands
+# alongside the real embedder wiring in canonical-agent dogfood;
+# this seed file is what CI runs against the fake embedder so the
+# harness itself is covered.
+
+cases:
+  # ---------- Chinese ----------
+  - id: zh-001
+    language: zh
+    query: 我喜欢喝咖啡
+    memories:
+      - id: m1
+        content: 用户偏好咖啡而不是茶
+        kind: fact
+      - id: m2
+        content: 用户家有一只猫
+        kind: fact
+    expected_recall_ids: [m1]
+
+  - id: zh-002
+    language: zh
+    query: 用户的工作领域
+    memories:
+      - id: m1
+        content: 用户是一名后端工程师
+        kind: fact
+      - id: m2
+        content: 用户喜欢周末去爬山
+        kind: fact
+    expected_recall_ids: [m1]
+
+  - id: zh-003
+    language: zh
+    query: 上次问的关于 Python 的问题
+    memories:
+      - id: m1
+        content: 用户上次询问 Python 异步编程
+        kind: episodic
+      - id: m2
+        content: 用户在准备一次法语考试
+        kind: episodic
+    expected_recall_ids: [m1]
+
+  - id: zh-004
+    language: zh
+    query: 用户对部署偏好的回答
+    memories:
+      - id: m1
+        content: 用户偏好 docker compose 而不是 K8s
+        kind: fact
+      - id: m2
+        content: 用户喜欢用 vim 写代码
+        kind: fact
+    expected_recall_ids: [m1]
+
+  # ---------- English ----------
+  - id: en-001
+    language: en
+    query: What does the user drink in the morning?
+    memories:
+      - id: m1
+        content: User drinks coffee every morning
+        kind: fact
+      - id: m2
+        content: User has a cat named Mochi
+        kind: fact
+    expected_recall_ids: [m1]
+
+  - id: en-002
+    language: en
+    query: User's role at work
+    memories:
+      - id: m1
+        content: User is a backend engineer at a fintech startup
+        kind: fact
+      - id: m2
+        content: User likes hiking on weekends
+        kind: fact
+    expected_recall_ids: [m1]
+
+  - id: en-003
+    language: en
+    query: Question the user asked about Python earlier
+    memories:
+      - id: m1
+        content: User asked about Python async / await patterns
+        kind: episodic
+      - id: m2
+        content: User is studying for the French DELF exam
+        kind: episodic
+    expected_recall_ids: [m1]
+
+  - id: en-004
+    language: en
+    query: User's deployment preferences
+    memories:
+      - id: m1
+        content: User prefers docker compose over Kubernetes for self-hosting
+        kind: fact
+      - id: m2
+        content: User uses vim for editing
+        kind: fact
+    expected_recall_ids: [m1]
