@@ -87,13 +87,10 @@ async def _drain_trajectory_tasks() -> None:
     # Snapshot first — set may mutate as tasks complete.
     pending = list(_BACKGROUND_TRAJECTORY_TASKS)
     for task in pending:
-        try:
-            await task
-        except Exception:
-            # The dispatch wrapper swallows its own errors; the gather
-            # here is just to make sure they've run to completion
-            # before the test asserts.
-            pass
+        # The dispatch wrapper swallows its own errors; ``gather`` with
+        # ``return_exceptions=True`` lets us wait for the task without
+        # the test caring whether it succeeded — assertions run after.
+        await asyncio.gather(task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------
