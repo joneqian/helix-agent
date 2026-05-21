@@ -231,7 +231,7 @@ async def _run_error_case(
         notes.append(f"expected {expected_exc.__name__} but build_agent succeeded")
     except expected_exc:
         pass  # success — expected exception raised
-    except BaseException as exc:
+    except Exception as exc:
         notes.append(f"expected {expected_exc.__name__} but got {type(exc).__name__}: {exc}")
     return CapabilityCaseResult(case_id=case.case_id, passed=not notes, notes=tuple(notes))
 
@@ -297,7 +297,7 @@ def _run_zip_slip_case(case: SkillCase) -> CapabilityCaseResult:
         parse_skill_zip(buf.getvalue())
         notes.append("expected SkillZipError on ../../ entry but parse returned cleanly")
     except SkillZipError:
-        pass
+        pass  # success — zip-slip rejected as expected
     return CapabilityCaseResult(case_id=case.case_id, passed=not notes, notes=tuple(notes))
 
 
