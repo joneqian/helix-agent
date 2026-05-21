@@ -214,16 +214,33 @@ class RedisQuotaService(QuotaService):
                 capacity = row.burst or row.limit_value
                 refill = float(row.limit_value)
                 key = "qb:" + _bucket_key("qps", req.tenant_id, row.scope)
-                out.append((QuotaDimension.QPS, key, capacity, refill, req.cost))
+                cost = req.cost_overrides.get(QuotaDimension.QPS, req.cost)
+                out.append((QuotaDimension.QPS, key, capacity, refill, cost))
+            elif row.dimension is QuotaDimension.IMAGE_UPLOAD_COUNT_30D:
+                # Mini-ADR J-30 — see InMemoryQuotaService for the
+                # bucket-math rationale.
+                capacity = row.burst or row.limit_value
+                refill = float(row.limit_value) / float(30 * 86_400)
+                key = "qb:" + _bucket_key("img_count_30d", req.tenant_id, row.scope)
+                cost = req.cost_overrides.get(QuotaDimension.IMAGE_UPLOAD_COUNT_30D, req.cost)
+                out.append((QuotaDimension.IMAGE_UPLOAD_COUNT_30D, key, capacity, refill, cost))
+            elif row.dimension is QuotaDimension.IMAGE_STORAGE_BYTES:
+                # Mini-ADR J-30 — sticky byte ceiling (refill=0). The
+                # upload path passes ``file_size`` via ``cost_overrides``.
+                capacity = row.limit_value
+                key = "qb:" + _bucket_key("img_bytes", req.tenant_id, row.scope)
+                cost = req.cost_overrides.get(QuotaDimension.IMAGE_STORAGE_BYTES, req.cost)
+                out.append((QuotaDimension.IMAGE_STORAGE_BYTES, key, capacity, 0.0, cost))
 
         if not any(d[0] is QuotaDimension.QPS for d in out) and self._default_qps_limit:
+            qps_cost = req.cost_overrides.get(QuotaDimension.QPS, req.cost)
             out.append(
                 (
                     QuotaDimension.QPS,
                     "qb:" + _bucket_key("qps_default", req.tenant_id, {}),
                     self._default_qps_burst,
                     float(self._default_qps_limit),
-                    req.cost,
+                    qps_cost,
                 )
             )
         return out

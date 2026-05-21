@@ -21,14 +21,18 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from control_plane.api._quota_admission import check_admission
 from control_plane.api._user_scope import (
     caller_owns_thread,
     get_user_repo,
     resolve_caller_user_id,
 )
+from control_plane.quota.base import QuotaService
 from control_plane.settings import Settings
 from helix_agent.persistence.tenant_user import TenantUserStore
+from helix_agent.protocol import QuotaDimension
 from helix_agent.protocol.multimodal import ImageRef
+from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.storage import ObjectStore
 
 #: File extension per accepted image content type. The reverse direction
@@ -55,6 +59,14 @@ def _get_settings(request: Request) -> Settings:
     return settings
 
 
+def _get_quota(request: Request) -> QuotaService:
+    return request.app.state.quota_service  # type: ignore[no-any-return]
+
+
+def _get_audit(request: Request) -> AuditLogger:
+    return request.app.state.audit_logger  # type: ignore[no-any-return]
+
+
 def build_uploads_router() -> APIRouter:
     router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
@@ -67,6 +79,8 @@ def build_uploads_router() -> APIRouter:
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
         store: Annotated[ObjectStore | None, Depends(_get_object_store)],
         settings: Annotated[Settings, Depends(_get_settings)],
+        quota: Annotated[QuotaService, Depends(_get_quota)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
     ) -> JSONResponse:
         if store is None:
             raise HTTPException(status_code=503, detail="object store unavailable")
@@ -111,6 +125,25 @@ def build_uploads_router() -> APIRouter:
             raise HTTPException(status_code=413, detail=f"image exceeds {max_bytes}-byte limit")
         if not raw:
             raise HTTPException(status_code=400, detail="uploaded file is empty")
+
+        # Mini-ADR J-30 (J.6.补强-1) — quota admission. The single
+        # ``check`` call deducts ``cost=1`` from QPS +
+        # ``IMAGE_UPLOAD_COUNT_30D`` and ``cost=len(raw)`` from
+        # ``IMAGE_STORAGE_BYTES`` (only the dimensions a tenant has
+        # rows for run; others are no-ops). 429 on denial.
+        actor_id: str = getattr(request.state, "actor_id", "anonymous")
+        denial = await check_admission(
+            quota=quota,
+            audit=audit,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            agent=None,
+            resource_kind="image_upload",
+            cost=1,
+            cost_overrides={QuotaDimension.IMAGE_STORAGE_BYTES: len(raw)},
+        )
+        if denial is not None:
+            return denial
 
         image_ref = ImageRef(
             tenant_id=tenant_id,

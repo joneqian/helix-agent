@@ -331,3 +331,117 @@ async def test_reaper_cycle_error_increments_metric() -> None:
 
     after = REGISTRY.get_sample_value(metric) or 0.0
     assert after >= before + 1
+
+
+# ---------------------------------------------------------------------------
+# Mini-ADR J-30 (J.6.补强-1) — image upload dimensions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_image_upload_count_30d_denies_after_capacity() -> None:
+    """``IMAGE_UPLOAD_COUNT_30D`` bucket exhausts after ``burst`` uploads
+    when refill is the slow 30-day drip."""
+    tenant = _tenant()
+    store = InMemoryTenantQuotaStore()
+    await _seed(
+        store,
+        tenant,
+        TenantQuotaPatch(
+            dimension=QuotaDimension.IMAGE_UPLOAD_COUNT_30D,
+            scope={},
+            limit_value=3,  # 3 / 30d ≈ 1.16e-6 per second (slow drip)
+            burst=3,
+        ),
+    )
+    svc = InMemoryQuotaService(quota_store=store, reservation_store=InMemoryTokenReservationStore())
+
+    for _ in range(3):
+        result = await svc.check(CheckRequest(tenant_id=tenant, cost=1))
+        assert result.allowed
+    # 4th immediate upload exceeds capacity — bucket can't refill that fast.
+    result = await svc.check(CheckRequest(tenant_id=tenant, cost=1))
+    assert not result.allowed
+    assert result.blocked_dimension is QuotaDimension.IMAGE_UPLOAD_COUNT_30D
+
+
+@pytest.mark.asyncio
+async def test_image_storage_bytes_uses_cost_override() -> None:
+    """``IMAGE_STORAGE_BYTES`` deducts the ``cost_overrides`` value
+    (file_size) from the sticky bucket, not the default ``cost=1``."""
+    tenant = _tenant()
+    store = InMemoryTenantQuotaStore()
+    await _seed(
+        store,
+        tenant,
+        TenantQuotaPatch(
+            dimension=QuotaDimension.IMAGE_STORAGE_BYTES,
+            scope={},
+            limit_value=1024,  # 1 KiB ceiling
+            burst=None,
+        ),
+    )
+    svc = InMemoryQuotaService(quota_store=store, reservation_store=InMemoryTokenReservationStore())
+
+    # First upload of 600 bytes — under ceiling.
+    first = await svc.check(
+        CheckRequest(
+            tenant_id=tenant,
+            cost=1,
+            cost_overrides={QuotaDimension.IMAGE_STORAGE_BYTES: 600},
+        )
+    )
+    assert first.allowed
+    assert first.remaining[QuotaDimension.IMAGE_STORAGE_BYTES.value] == 424
+
+    # Second upload of 500 bytes — would push total to 1100 > 1024 ceiling.
+    second = await svc.check(
+        CheckRequest(
+            tenant_id=tenant,
+            cost=1,
+            cost_overrides={QuotaDimension.IMAGE_STORAGE_BYTES: 500},
+        )
+    )
+    assert not second.allowed
+    assert second.blocked_dimension is QuotaDimension.IMAGE_STORAGE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_image_storage_bytes_does_not_refill() -> None:
+    """Sticky-bucket semantic — once tokens are spent they stay spent
+    until lifecycle deletion refunds them (J.6.补强-3 future scope)."""
+    import asyncio
+
+    tenant = _tenant()
+    store = InMemoryTenantQuotaStore()
+    await _seed(
+        store,
+        tenant,
+        TenantQuotaPatch(
+            dimension=QuotaDimension.IMAGE_STORAGE_BYTES,
+            scope={},
+            limit_value=100,
+            burst=None,
+        ),
+    )
+    svc = InMemoryQuotaService(quota_store=store, reservation_store=InMemoryTokenReservationStore())
+
+    spend = await svc.check(
+        CheckRequest(
+            tenant_id=tenant,
+            cost=1,
+            cost_overrides={QuotaDimension.IMAGE_STORAGE_BYTES: 100},
+        )
+    )
+    assert spend.allowed
+
+    await asyncio.sleep(0.01)  # Time passes — refill rate is 0, so nothing comes back.
+
+    next_call = await svc.check(
+        CheckRequest(
+            tenant_id=tenant,
+            cost=1,
+            cost_overrides={QuotaDimension.IMAGE_STORAGE_BYTES: 1},
+        )
+    )
+    assert not next_call.allowed

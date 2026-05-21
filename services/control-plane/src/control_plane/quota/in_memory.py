@@ -187,7 +187,43 @@ class InMemoryQuotaService(QuotaService):
                         key=key,
                         capacity=capacity,
                         refill_rate_per_s=refill,
-                        cost=req.cost,
+                        cost=req.cost_overrides.get(QuotaDimension.QPS, req.cost),
+                    )
+                )
+            elif row.dimension is QuotaDimension.IMAGE_UPLOAD_COUNT_30D:
+                # Mini-ADR J-30 — rolling 30-day count via slow-drip bucket.
+                # capacity = limit (burst-aware); refill_rate = limit /
+                # (30 * 86400) so the bucket recovers one upload's worth
+                # of headroom every ``30d / limit`` seconds.
+                capacity = row.burst or row.limit_value
+                refill = float(row.limit_value) / float(30 * 86_400)
+                key = _bucket_key("img_count_30d", req.tenant_id, row.scope)
+                out.append(
+                    _ResolvedDimension(
+                        name=QuotaDimension.IMAGE_UPLOAD_COUNT_30D,
+                        key=key,
+                        capacity=capacity,
+                        refill_rate_per_s=refill,
+                        cost=req.cost_overrides.get(
+                            QuotaDimension.IMAGE_UPLOAD_COUNT_30D, req.cost
+                        ),
+                    )
+                )
+            elif row.dimension is QuotaDimension.IMAGE_STORAGE_BYTES:
+                # Mini-ADR J-30 — sticky bytes ceiling (no refill in M0;
+                # J.6.补强-3 / Mini-ADR J-32 lifecycle-delete will refund
+                # bytes once that lands). ``cost`` defaults to ``req.cost``
+                # but the upload path passes ``file_size`` via
+                # ``cost_overrides``.
+                capacity = row.limit_value
+                key = _bucket_key("img_bytes", req.tenant_id, row.scope)
+                out.append(
+                    _ResolvedDimension(
+                        name=QuotaDimension.IMAGE_STORAGE_BYTES,
+                        key=key,
+                        capacity=capacity,
+                        refill_rate_per_s=0.0,
+                        cost=req.cost_overrides.get(QuotaDimension.IMAGE_STORAGE_BYTES, req.cost),
                     )
                 )
 
@@ -199,7 +235,7 @@ class InMemoryQuotaService(QuotaService):
                     key=_bucket_key("qps_default", req.tenant_id, {}),
                     capacity=self._default_qps_burst,
                     refill_rate_per_s=float(self._default_qps_limit),
-                    cost=req.cost,
+                    cost=req.cost_overrides.get(QuotaDimension.QPS, req.cost),
                 )
             )
         return out

@@ -51,6 +51,18 @@ class QuotaDimension(StrEnum):
     TOKENS_PER_DAY = "tokens_per_day"
     SANDBOXES = "sandboxes"
     MONTHLY_TOKEN_BUDGET = "monthly_token_budget"  # noqa: S105 (dimension name, not a secret)
+    # Mini-ADR J-30 (J.6.补强-1) — image upload count over a rolling 30-day
+    # window. Bucket capacity = limit_value, refill_rate = limit / (30 *
+    # 86400) — a slow drip approximating the rolling window (same shape
+    # as ``TOKENS_PER_DAY`` / ``QPS``, just a longer window). ``cost=1``
+    # per upload.
+    IMAGE_UPLOAD_COUNT_30D = "image_upload_count_30d"
+    # Mini-ADR J-30 — current total image storage bytes per tenant.
+    # Bucket capacity = limit_value (bytes), refill_rate = 0 — a sticky
+    # ceiling. ``cost = file_size`` per upload. (Image lifecycle
+    # deletion → bytes refund is the J.6.补强-3 / Mini-ADR J-32 scope,
+    # not landed yet.)
+    IMAGE_STORAGE_BYTES = "image_storage_bytes"
 
 
 class QuotaPurpose(StrEnum):
@@ -91,6 +103,13 @@ class CheckRequest(BaseModel):
     model: str | None = None  # M0: recorded only; M1: enters dimensions
     cost: int = Field(default=1, ge=1)
     purpose: QuotaPurpose = QuotaPurpose.PRODUCTION
+    # Mini-ADR J-30 (J.6.补强-1) — per-dimension cost override. Maps a
+    # :class:`QuotaDimension` to the cost the service should subtract from
+    # that dimension's bucket instead of ``cost``. The image upload path
+    # uses this to deduct ``file_size`` bytes from ``IMAGE_STORAGE_BYTES``
+    # while keeping ``cost=1`` for ``QPS`` / ``IMAGE_UPLOAD_COUNT_30D`` —
+    # otherwise a 1 MiB upload would burn a million QPS tokens.
+    cost_overrides: dict[QuotaDimension, int] = Field(default_factory=dict)
 
 
 class CheckResult(BaseModel):
