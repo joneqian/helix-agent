@@ -459,7 +459,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
     - **(a) 推 M1+**：session / user 销毁级联 soft-delete — 当前 control-plane 无 session DELETE / user DELETE 端点（cascade 无 hook 点），随这些端点的 PR 一并加。
   - [x] **J.6.补强-4** Path B VL 模型 fallback chain + EXIF strip + multi-image 集成测试 — Mini-ADR J-33 / J-34。**2026-05-21 完成**：(1) `VisionSpec.fallbacks: list[ModelSpec]` + `build_llm_router(extra_fallbacks=...)` 把 VL 替补链接在 primary 的 E.11 fallback 后面（priority: `primary → primary.fallback... → extra_fallbacks[0]...`）；`agent_factory.build_agent` 拼 `vision.fallbacks` 进 VL router 构建；(2) `control-plane.api._image_sanitize.strip_exif` 用 Pillow 剥 EXIF / PNG text chunks / WebP / GIF metadata（mime 白名单内 4 种），失败 `ImageSanitizeError` → 400；`uploads.py` 在 quota / audit / store 之前剥离，下游计费 + 审计 + 字节落地全用 sanitised payload；(3) 多 image 集成测试 — 3 张不同色 PNG 上传同 thread，verify 3 个对象 key / 3 行 registry / 3 条 audit；(4) `services/control-plane` pillow>=12,<13 deps + 4 个 EXIF strip 单测 + 1 个 VL fallback chain 单测 + 1 个 multi-image 集成测试。零债 6 条 ✅
   - [x] **J.6.决策-5** NSFW / 恶意 SVG 扫描 + 图像 PII redaction 显式 (a) 推 M2（不留空决策）— Mini-ADR J-35（已落入 § 1.2 Out-of-scope 表）
-- [ ] **J.7a Skill 静态启用（M0）** — skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 + 版本化 + draft 闸门 + 调用 telemetry + 冲突合并语义。**2026-05-20 修订（Mini-ADR J-23）**：M0 缩范围只做 J.7a，J.7b 进化 + code 字段推 M1+。STREAM-J-DESIGN § 15 + Mini-ADR J-16 / J-17 / J-23
+- [ ] **J.7a Skill 静态启用（M0）** — skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 + 版本化 + draft 闸门 + 调用 telemetry + 冲突合并语义 + admin CRUD API + `.skill` ZIP import/export + `name@version` 版本固定 + prompt `<skill>` XML 包裹（防 prompt injection）+ regex deny-list moderation + Skill 元数据扩字段 (description / category / required_models) + discovery 分页 filter + `AuditAction.SKILL_*`。**2026-05-20 修订（Mini-ADR J-23）+ 2026-05-21 J.7a 启动前 deer-flow 对比调研补强 8 项**：M0 缩范围只做 J.7a，J.7b 进化 + code 字段推 M1-K。STREAM-J-DESIGN § 15 + § 15.5 + § 15.6 + Mini-ADR J-16 / J-17 / J-23（含 2026-05-21 补强修订）。J.7b 8 项推迟项详见 § M1-K Agent skill 进化。
 - [ ] **J.8 人在回路 / 审批** — LangGraph `interrupt()` 审批节点 + control-plane resume 端点 + `PolicySpec` 门控。**2026-05-20 修订（Mini-ADR J-24）**：M0 必含**审批超时 fallback**（manifest 可配 / 默认 24h 自动 reject + audit）+ audit trail（审批人 / 时间 / 决策 / 修改入参）+ Admin UI H.3 审批面板接入。STREAM-J-DESIGN § 14 + Mini-ADR J-15 / J-24
 - [ ] **J.9 产物 / Artifact 管理** — artifact + artifact_version 两表 + tenant+user 组合 RLS + 内容经 supervisor 代理读取 + 惰性回填 size/sha256。**2026-05-20 修订（Mini-ADR J-25）**：M0 加 lifecycle（保留期 / DELETE/PATCH API / 卷满清理策略）+ quota 接入 Stream C.5；病毒扫描显式 (a) 推 M2。STREAM-J-DESIGN § 10 + Mini-ADR J-11 / J-25
 - [ ] **J.10 调度 / 触发** — cron + event + webhook 三类 trigger + scheduler 单副本（APScheduler）+ trigger_run 表；分布式 scheduler 推 M1+。**2026-05-20 修订（Mini-ADR J-26）**：补 4 维 —— failed run 重试 / DLQ（K7 模式）+ scheduler quota（Stream C.5）+ trigger event 源 = PG NOTIFY（M0）+ APScheduler `SQLAlchemyJobStore` 持久化。STREAM-J-DESIGN § 16 + Mini-ADR J-18 / J-26
@@ -619,6 +619,21 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] 插槽代码安全审查 + 沙盒化（含 J.15 持久卷集成 / 或独立 sandbox 隔离）
 
 历史项：~~Sub-Agent YAML 声明 + LangGraph subgraph 实现~~ → 提前至 **Stream J.4**（Sub-agent / 多智能体委派）
+
+#### M1-K Agent skill 进化（J.7b，~3-4 周；与 M1-F2 Python 插槽同属"动态能力扩展"领域）
+
+> **2026-05-21 补加**（J.7a 启动前 deer-flow 对比调研后用户复审）：M0 J.7a 锁 8 项进 M0 scope；以下 8 项 (c) 红线推迟到 M1，必须显式落 backlog 不丢失（按 [memory:no-design-choice-disguise] + [memory:zero-tech-debt]）。参考：STREAM-J-DESIGN § 15 + Mini-ADR J-23（2026-05-21 修订）。
+
+- [ ] **J.7b-1 agent 进化工具**（`author_skill` / `refine_skill`）—— agent 在 run 期沉淀新 skill 进 draft；用户审批后切 active；带 audit + 速率限制
+- [ ] **J.7b-2 `code` 字段执行边界** —— `SkillVersion.code: str | None` 解禁；依赖 M1-F2 Python 插槽 + sandbox（gVisor 7/7 用例通过）+ AST 静态校验
+- [ ] **J.7b-3 Progressive / lazy skill loading** —— agent 引用时才注入 skill prompt（非 build-time 静态拼）；与 M0 静态拼共存模式可配
+- [ ] **J.7b-4 LLM-based admin content moderation** —— 升级 M0 的正则 deny-list 到 LLM 审核（用 Haiku judge 模式）；依赖 stable LLM router + budget cap
+- [ ] **J.7b-5 Public / system skill 内置库** —— `system` 占位 tenant + 20+ 内置模板（参考 deer-flow `/skills/public`）；可被任意 tenant 引用 + override；fork 模式
+- [ ] **J.7b-6 Supporting files / 附件** —— skill 含 `scripts/templates/references/` 子目录；agent 按需读 / 不主动执行；`.skill` ZIP 扩展到带子目录
+- [ ] **J.7b-7 Per-agent skill 启停细化** —— 按 agent role / context 临时启停某 skill；当前 M0 仅按 manifest 静态控制
+- [ ] **J.7b-8 Skill UI 元数据** —— `icon` / `color` / `display_name` 字段；M1-I Admin UI 升级一并接入
+
+**M2+ 跟进**：Per-thread skill 激活 / A/B / canary（与 M1-G 灰度 + Canary + 回滚关联），M2 期再决归属。
 
 #### M1-G 灰度 + Canary + 回滚（~3 周）
 - [ ] manifest 版本灰度面板
