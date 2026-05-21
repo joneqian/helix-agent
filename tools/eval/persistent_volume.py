@@ -58,7 +58,6 @@ _TENANT = UUID("00000000-0000-0000-0000-0000000000a1")
 _USER = UUID("00000000-0000-0000-0000-0000000000b1")
 
 
-SetupAction = Literal["resolve", "soft_delete", "mark_archived", "set_size"]
 TestAction = Literal[
     "resolve",
     "soft_delete",

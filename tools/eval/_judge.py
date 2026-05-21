@@ -43,7 +43,8 @@ _ANTHROPIC_VERSION = "2023-06-01"
 class JudgeProvider(Protocol):
     """Returns an integer score in ``[1, 5]`` for one case."""
 
-    async def score(self, *, case_id: str, prompt: str) -> int: ...
+    async def score(self, *, case_id: str, prompt: str) -> int:
+        """Score one case; integer in [1, 5]."""
 
 
 class ScriptedJudge:
