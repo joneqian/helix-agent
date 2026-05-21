@@ -1,6 +1,6 @@
 metadata:
-  generated_at: '2026-05-21T03:06:33+00:00'
-  helix_commit: 69b3b0de0f0675874ed383fc35a3a300530a1fdb
+  generated_at: '2026-05-21T03:41:36+00:00'
+  helix_commit: 4ec70f2c5e359fff5c630e327245f2ea2af47c3b
   judge_model: claude-haiku-4-5-20251001
   judge_temperature: 0.0
   rerun_count: 3
@@ -8,22 +8,24 @@ metadata:
 capabilities:
   J.1_plan_execute:
     metric_type: pass-rate+llm-judge
-    sample_size: 0
+    sample_size: 20
     threshold:
       pass_rate: 0.8
       judge_mean: 4.0
-    score: {}
-    status: DEFERRED
-    deferred_reason: Capability shipped; eval scheduled for J.13a-2 PR.
+    score:
+      pass_rate: 1.0
+      judge_mean: 4.5
+    status: PASS
   J.2_reflect:
     metric_type: pass-rate
-    sample_size: 0
+    sample_size: 16
     threshold:
       correction_rate: 0.75
       false_positive_rate: 0.2
-    score: {}
-    status: DEFERRED
-    deferred_reason: Capability shipped; eval scheduled for J.13a-2 PR.
+    score:
+      correction_rate: 0.875
+      false_positive_rate: 0.0
+    status: PASS
   J.3_memory_recall:
     metric_type: recall@5+mrr@5
     sample_size: 32
@@ -55,13 +57,14 @@ capabilities:
       stub locks the baseline file shape.
   J.6_multimodal:
     metric_type: pass-rate
-    sample_size: 0
+    sample_size: 12
     threshold:
       pass_rate_path_a: 0.8
       pass_rate_path_b: 0.8
-    score: {}
-    status: DEFERRED
-    deferred_reason: Capability shipped; eval scheduled for J.13a-2 PR.
+    score:
+      pass_rate_path_a: 1.0
+      pass_rate_path_b: 1.0
+    status: PASS
   J.7_skill:
     metric_type: pass-rate
     sample_size: 0
@@ -125,9 +128,9 @@ capabilities:
     status: PASS
   J.15_persistent_volume:
     metric_type: pass-rate
-    sample_size: 0
+    sample_size: 11
     threshold:
       pass_rate: 0.9
-    score: {}
-    status: DEFERRED
-    deferred_reason: Capability shipped; eval scheduled for J.13a-2 PR.
+    score:
+      pass_rate: 1.0
+    status: PASS

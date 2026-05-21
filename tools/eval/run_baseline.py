@@ -43,7 +43,11 @@ if str(_EVAL_DIR) not in sys.path:
 
 import memory_recall as _mr  # type: ignore[import-not-found]  # noqa: E402
 import model_routing as _mrt  # type: ignore[import-not-found]  # noqa: E402
+import multimodal as _mm  # type: ignore[import-not-found]  # noqa: E402
 import per_user_isolation as _pui  # type: ignore[import-not-found]  # noqa: E402
+import persistent_volume as _pv  # type: ignore[import-not-found]  # noqa: E402
+import plan_execute as _pe  # type: ignore[import-not-found]  # noqa: E402
+import reflect as _rf  # type: ignore[import-not-found]  # noqa: E402
 from _capability import (  # type: ignore[import-not-found]  # noqa: E402
     CapabilityReport,
 )
@@ -137,6 +141,26 @@ async def _run_per_user_isolation() -> CapabilityReport:
     return await _pui.evaluate_set(cases)
 
 
+async def _run_plan_execute() -> CapabilityReport:
+    cases = _pe.load_cases(_DATASETS / "plan_execute" / "m0_baseline.yaml")
+    return await _pe.evaluate_set(cases)
+
+
+async def _run_reflect() -> CapabilityReport:
+    cases = _rf.load_cases(_DATASETS / "reflect" / "m0_baseline.yaml")
+    return await _rf.evaluate_set(cases)
+
+
+async def _run_multimodal() -> CapabilityReport:
+    cases = _mm.load_cases(_DATASETS / "multimodal" / "m0_baseline.yaml")
+    return await _mm.evaluate_set(cases)
+
+
+async def _run_persistent_volume() -> CapabilityReport:
+    cases = _pv.load_cases(_DATASETS / "persistent_volume" / "m0_baseline.yaml")
+    return await _pv.evaluate_set(cases)
+
+
 # ---------------------------------------------------------------------------
 # Registry — single source of truth for what enters the baseline.
 # ---------------------------------------------------------------------------
@@ -153,7 +177,6 @@ class _Runner:
     deferred_reason: str
 
 
-_DEFERRED_PENDING_J13A2 = "Capability shipped; eval scheduled for J.13a-2 PR."
 _DEFERRED_PENDING_CAPABILITY = (
     "Capability not yet shipped (see Stream J ITERATION-PLAN); "
     "skeleton stub locks the baseline file shape."
@@ -165,15 +188,15 @@ _RUNNERS: tuple[_Runner, ...] = (
         "J.1_plan_execute",
         "pass-rate+llm-judge",
         {"pass_rate": 0.80, "judge_mean": 4.0},
-        None,
-        _DEFERRED_PENDING_J13A2,
+        _run_plan_execute,
+        "",
     ),
     _Runner(
         "J.2_reflect",
         "pass-rate",
         {"correction_rate": 0.75, "false_positive_rate": 0.20},
-        None,
-        _DEFERRED_PENDING_J13A2,
+        _run_reflect,
+        "",
     ),
     _Runner(
         "J.3_memory_recall",
@@ -200,8 +223,8 @@ _RUNNERS: tuple[_Runner, ...] = (
         "J.6_multimodal",
         "pass-rate",
         {"pass_rate_path_a": 0.80, "pass_rate_path_b": 0.80},
-        None,
-        _DEFERRED_PENDING_J13A2,
+        _run_multimodal,
+        "",
     ),
     _Runner(
         "J.7_skill",
@@ -256,8 +279,8 @@ _RUNNERS: tuple[_Runner, ...] = (
         "J.15_persistent_volume",
         "pass-rate",
         {"pass_rate": 0.90},
-        None,
-        _DEFERRED_PENDING_J13A2,
+        _run_persistent_volume,
+        "",
     ),
 )
 

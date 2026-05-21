@@ -1,0 +1,105 @@
+# J.6 multimodal — M0 baseline dataset (Stream J.13a).
+#
+# 12 cases total:
+#   - 3 dispatch (Path A): main model accepts images, no vision block →
+#     classifier picks "path_a"
+#   - 3 dispatch (Path B): main model is text-only with a vision block →
+#     classifier picks "path_b"
+#   - 6 ask_image: Path B keyword recall — AskImageTool against a mock
+#     vl_caller scripted to reply with the expected keyword
+#
+# Real Path A keyword recall against a real multimodal model lives in
+# J.13b (online sampling); this M0 baseline is the dispatch regression
+# gate + Path B execution gate.
+
+name: multimodal-m0-baseline
+
+cases:
+  # ---------- dispatch (3 Path A) ----------
+  - id: dispatch-path-a-001-vision-claude
+    scenario: dispatch
+    vision_block_present: false
+    supports_vision: true
+    expected_path: path_a
+    path: path_a
+
+  - id: dispatch-path-a-002-vision-gpt4o
+    scenario: dispatch
+    vision_block_present: false
+    supports_vision: true
+    expected_path: path_a
+    path: path_a
+
+  - id: dispatch-path-a-003-vision-haiku
+    scenario: dispatch
+    vision_block_present: false
+    supports_vision: true
+    expected_path: path_a
+    path: path_a
+
+  # ---------- dispatch (3 Path B) ----------
+  - id: dispatch-path-b-001-text-with-vision-block
+    scenario: dispatch
+    vision_block_present: true
+    supports_vision: false
+    expected_path: path_b
+    path: path_b
+
+  - id: dispatch-path-b-002-qwen-text-with-vl-block
+    scenario: dispatch
+    vision_block_present: true
+    supports_vision: false
+    expected_path: path_b
+    path: path_b
+
+  - id: dispatch-path-b-003-deepseek-text-with-vl-block
+    scenario: dispatch
+    vision_block_present: true
+    supports_vision: false
+    expected_path: path_b
+    path: path_b
+
+  # ---------- ask_image keyword recall (6 Path B) ----------
+  # image_ref format: helix://image/{tenant}/{thread}/{image}
+
+  - id: ask-image-001-color
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c1"
+    question: What color is the dominant background?
+    mock_vl_reply: The dominant background colour is a deep navy blue.
+    expected_keyword: blue
+
+  - id: ask-image-002-count-people
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c2"
+    question: How many people appear in the image?
+    mock_vl_reply: I count three people in the foreground.
+    expected_keyword: three
+
+  - id: ask-image-003-text-extraction
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c3"
+    question: What does the sign say?
+    mock_vl_reply: The sign reads "Welcome to Helix" in white letters.
+    expected_keyword: Welcome
+
+  - id: ask-image-004-object-identification
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c4"
+    question: What animal is in the image?
+    mock_vl_reply: A tabby cat sitting on a bookshelf.
+    expected_keyword: cat
+
+  - id: ask-image-005-scene-description
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c5"
+    question: Describe the scene briefly.
+    mock_vl_reply: An outdoor cafe with several round tables and a striped awning.
+    expected_keyword: cafe
+
+  - id: ask-image-006-chart-reading
+    scenario: ask_image
+    image_ref: "helix://image/00000000-0000-0000-0000-0000000000aa/00000000-0000-0000-0000-0000000000bb/00000000-0000-0000-0000-0000000000c6"
+    question: Which bar is tallest in the chart?
+    mock_vl_reply: The rightmost bar labelled "Q4" is the tallest, around 85 units.
+    expected_keyword: Q4
