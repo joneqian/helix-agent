@@ -48,6 +48,7 @@ import multimodal as _mm  # type: ignore[import-not-found]  # noqa: E402
 import per_user_isolation as _pui  # type: ignore[import-not-found]  # noqa: E402
 import persistent_volume as _pv  # type: ignore[import-not-found]  # noqa: E402
 import plan_execute as _pe  # type: ignore[import-not-found]  # noqa: E402
+import rag as _rag  # type: ignore[import-not-found]  # noqa: E402
 import reflect as _rf  # type: ignore[import-not-found]  # noqa: E402
 import sub_agent as _sa  # type: ignore[import-not-found]  # noqa: E402
 from _capability import (  # type: ignore[import-not-found]  # noqa: E402
@@ -169,6 +170,11 @@ async def _run_persistent_volume() -> CapabilityReport:
     return await _pv.evaluate_set(cases)
 
 
+async def _run_rag() -> CapabilityReport:
+    cases = _rag.load_cases(_DATASETS / "rag" / "m0_baseline.yaml")
+    return await _rag.evaluate_set(cases, embedder=_FakeKeywordEmbedder())
+
+
 async def _run_sub_agent() -> CapabilityReport:
     cases = _sa.load_cases(_DATASETS / "sub_agent" / "m0_baseline.yaml")
     return await _sa.evaluate_set(cases)
@@ -229,8 +235,8 @@ _RUNNERS: tuple[_Runner, ...] = (
         "J.5_rag",
         "pass-rate+recall@k",
         {"pass_rate": 0.80, "recall_at_k": 0.70},
-        None,
-        _DEFERRED_PENDING_CAPABILITY,
+        _run_rag,
+        "",
     ),
     _Runner(
         "J.6_multimodal",
