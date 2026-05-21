@@ -156,15 +156,10 @@ async def _run_soft_delete_hides_from_list() -> tuple[bool, str]:
         return False, "soft_delete reported miss on a known active row"
     if await store.list_for_user(tenant_id=_TENANT, user_id=_USER) != []:
         return False, "soft-deleted row leaked into default list"
-    revealed = await store.list_for_user(
-        tenant_id=_TENANT, user_id=_USER, include_deleted=True
-    )
+    revealed = await store.list_for_user(tenant_id=_TENANT, user_id=_USER, include_deleted=True)
     if len(revealed) != 1 or revealed[0].deleted_at is None:
         return False, "include_deleted should reveal the soft-deleted row with deleted_at set"
-    if (
-        await store.get_latest_version(tenant_id=_TENANT, user_id=_USER, name="r.md")
-        is not None
-    ):
+    if await store.get_latest_version(tenant_id=_TENANT, user_id=_USER, name="r.md") is not None:
         return False, "get_latest_version should hide soft-deleted"
     return True, ""
 
@@ -187,12 +182,8 @@ async def _run_soft_delete_idempotent() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
     await _seed_one(store, name="r.md", kind="document", path="r.md")
     now = datetime.now(UTC)
-    first = await store.soft_delete(
-        tenant_id=_TENANT, user_id=_USER, name="r.md", now=now
-    )
-    second = await store.soft_delete(
-        tenant_id=_TENANT, user_id=_USER, name="r.md", now=now
-    )
+    first = await store.soft_delete(tenant_id=_TENANT, user_id=_USER, name="r.md", now=now)
+    second = await store.soft_delete(tenant_id=_TENANT, user_id=_USER, name="r.md", now=now)
     if not first or second:
         return False, f"expected (True, False), got ({first}, {second})"
     return True, ""
@@ -201,9 +192,7 @@ async def _run_soft_delete_idempotent() -> tuple[bool, str]:
 async def _run_resave_undeletes() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
     await _seed_one(store, name="r.md", kind="document", path="v1.md")
-    await store.soft_delete(
-        tenant_id=_TENANT, user_id=_USER, name="r.md", now=datetime.now(UTC)
-    )
+    await store.soft_delete(tenant_id=_TENANT, user_id=_USER, name="r.md", now=datetime.now(UTC))
     v2 = await store.save_version(
         tenant_id=_TENANT,
         user_id=_USER,
@@ -223,9 +212,7 @@ async def _run_resave_undeletes() -> tuple[bool, str]:
 async def _run_update_kind_round_trip() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
     await _seed_one(store, name="r.md", kind="document", path="r.md")
-    updated = await store.update_kind(
-        tenant_id=_TENANT, user_id=_USER, name="r.md", kind="code"
-    )
+    updated = await store.update_kind(tenant_id=_TENANT, user_id=_USER, name="r.md", kind="code")
     if updated is None or updated.kind != "code":
         return False, f"update_kind round-trip failed: {updated!r}"
     return True, ""
@@ -234,13 +221,9 @@ async def _run_update_kind_round_trip() -> tuple[bool, str]:
 async def _run_update_kind_hides_soft_deleted() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
     await _seed_one(store, name="r.md", kind="document", path="r.md")
-    await store.soft_delete(
-        tenant_id=_TENANT, user_id=_USER, name="r.md", now=datetime.now(UTC)
-    )
+    await store.soft_delete(tenant_id=_TENANT, user_id=_USER, name="r.md", now=datetime.now(UTC))
     if (
-        await store.update_kind(
-            tenant_id=_TENANT, user_id=_USER, name="r.md", kind="code"
-        )
+        await store.update_kind(tenant_id=_TENANT, user_id=_USER, name="r.md", kind="code")
         is not None
     ):
         return False, "update_kind should hide soft-deleted rows (None)"
@@ -251,9 +234,7 @@ async def _run_list_versions_desc() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
     for path in ("v1.md", "v2.md", "v3.md"):
         await _seed_one(store, name="r.md", kind="document", path=path)
-    versions = await store.list_versions(
-        tenant_id=_TENANT, user_id=_USER, name="r.md"
-    )
+    versions = await store.list_versions(tenant_id=_TENANT, user_id=_USER, name="r.md")
     if versions is None or [v.version for v in versions] != [3, 2, 1]:
         return False, f"expected versions [3,2,1], got {versions}"
     return True, ""
@@ -261,9 +242,7 @@ async def _run_list_versions_desc() -> tuple[bool, str]:
 
 async def _run_list_versions_unknown_returns_none() -> tuple[bool, str]:
     store = InMemoryArtifactStore()
-    rows = await store.list_versions(
-        tenant_id=_TENANT, user_id=_USER, name="missing"
-    )
+    rows = await store.list_versions(tenant_id=_TENANT, user_id=_USER, name="missing")
     if rows is not None:
         return False, "list_versions on unknown should return None"
     return True, ""
@@ -280,8 +259,7 @@ def _check_mime(
         )
     if inferred.disposition != expected_disp:
         return False, (
-            f"{path}: expected disposition={expected_disp!r}, "
-            f"got {inferred.disposition!r}"
+            f"{path}: expected disposition={expected_disp!r}, got {inferred.disposition!r}"
         )
     return True, ""
 
