@@ -46,7 +46,8 @@ class AuditSink(Protocol):
     avoid a circular dep (supervisor.py imports this module).
     """
 
-    async def write(self, entry: AuditEntry) -> None: ...
+    async def write(self, entry: AuditEntry) -> None:
+        """Persist one audit entry."""
 
 
 @dataclass(frozen=True)
