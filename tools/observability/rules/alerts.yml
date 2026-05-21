@@ -124,6 +124,23 @@ groups:
           description: "1h P95 durable resume is {{ $value }}s — Gate budget 1.0s."
           runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
 
+      # End-to-end P95 for successful runs — Gate target < 30s. Filtered
+      # to outcome="success" so user-facing latency isn't biased by
+      # error / max_steps / cancelled tails.
+      - alert: HelixGateEndToEndOverBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(helix_session_duration_seconds_bucket{outcome="success"}[1h]))
+          ) > 30
+        for: 30m
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "End-to-end session P95 above Gate budget (30s)"
+          description: "1h P95 successful session duration is {{ $value }}s — Gate budget 30s."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
+
       # Stream-stale spike — Gate target is < 0.05% in 30d. The denominator
       # uses helix_llm_tokens_total as a proxy for active LLM streaming
       # traffic; switch to the canonical SSE-events counter once it lands.

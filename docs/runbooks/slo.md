@@ -16,6 +16,7 @@
 | 4 | Sandbox 冷启动 P95 | < 3s（M0）/ < 500ms（M1 warm pool） | 30d | `helix_sandbox_cold_start_seconds` | ✅ 指标已 emit（K10） |
 | 5 | Durable resume P95 | < 1.5s | 30d | `helix_durable_resume_seconds` | ✅ 指标已 emit（K10）|
 | 6 | Memory recall@5（zh+en） | ≥ 0.7（M1 against real embedder） | 单测 | `tools/eval/memory_recall.py` | ✅ 框架 + seed set 已 ship（K12）|
+| 7 | Session end-to-end P95（outcome=success）| < 30s（M0 Gate）| 30d | `helix_session_duration_seconds{outcome="success"}` | ✅ 指标已 emit（Stream M Gate follow-up）|
 
 > ⏳ 的三条 SLO 在 M0 已**定义**，但对应指标尚未在 M0 代码路径 emit（orchestrator session 指标、sandbox 冷启动指标、durable resume 指标分属后续 Stream）。
 > 其 recording rule 随指标落地补入 `tools/observability/rules/sli.yml` —— 本阶段不写引用空指标的惰性规则。
