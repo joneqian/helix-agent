@@ -50,6 +50,7 @@ import persistent_volume as _pv  # type: ignore[import-not-found]  # noqa: E402
 import plan_execute as _pe  # type: ignore[import-not-found]  # noqa: E402
 import rag as _rag  # type: ignore[import-not-found]  # noqa: E402
 import reflect as _rf  # type: ignore[import-not-found]  # noqa: E402
+import skill as _sk  # type: ignore[import-not-found]  # noqa: E402
 import sub_agent as _sa  # type: ignore[import-not-found]  # noqa: E402
 from _capability import (  # type: ignore[import-not-found]  # noqa: E402
     CapabilityReport,
@@ -175,6 +176,11 @@ async def _run_rag() -> CapabilityReport:
     return await _rag.evaluate_set(cases, embedder=_FakeKeywordEmbedder())
 
 
+async def _run_skill() -> CapabilityReport:
+    cases = _sk.load_cases(_DATASETS / "skill" / "m0_baseline.yaml")
+    return await _sk.evaluate_set(cases)
+
+
 async def _run_sub_agent() -> CapabilityReport:
     cases = _sa.load_cases(_DATASETS / "sub_agent" / "m0_baseline.yaml")
     return await _sa.evaluate_set(cases)
@@ -249,8 +255,8 @@ _RUNNERS: tuple[_Runner, ...] = (
         "J.7_skill",
         "pass-rate",
         {"pass_rate": 0.80},
-        None,
-        _DEFERRED_PENDING_CAPABILITY,
+        _run_skill,
+        "",
     ),
     _Runner(
         "J.8_hitl",
