@@ -92,6 +92,19 @@ _durable_resume_seconds = helix_histogram(
     buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
 )
 
+# Stream M Gate — Session end-to-end duration. Measured from just before
+# ``set_status(RUNNING)`` to the run's terminal status (the ``finally``
+# block, so every exit path emits exactly once). Labelled by ``outcome``
+# so Gate dashboards can query successful-run P95 separately from
+# error / max_steps / cancelled tails — Stream M Exit Criteria
+# (STREAM-M-DESIGN § 2.1) targets the user-facing successful-run latency.
+_session_duration_seconds = helix_histogram(
+    "helix_session_duration_seconds",
+    "Seconds from RUNNING to terminal status; labelled by run outcome.",
+    ("outcome",),
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+)
+
 #: Default LangGraph stream mode. ``"updates"`` yields ``{node: writes}``
 #: per step — the natural granularity for a ReAct SSE stream (one event
 #: per agent / tools node completion).
@@ -182,6 +195,14 @@ async def run_agent(
             CANCELLATION_TOKEN_KEY: token,
         },
     }
+    # Stream M Gate — session E2E duration. Started before ``set_status``
+    # so the ``finally`` block always sees a valid clock; ``session_outcome``
+    # defaults to ``"error"`` for the worst-case path (a crash before any
+    # branch sets it). Each terminal branch below updates ``session_outcome``
+    # before its ``await`` chain so ``_session_duration_seconds`` carries
+    # the correct label even if a later step in that branch raises.
+    session_started = time.monotonic()
+    session_outcome = "error"
     try:
         await run_manager.set_status(run_id, RunStatus.RUNNING)
         await bridge.publish(
@@ -208,6 +229,7 @@ async def run_agent(
             await bridge.publish(run_id, stream_mode, _to_jsonable(chunk))
 
         final = RunStatus.INTERRUPTED if record.abort_event.is_set() else RunStatus.SUCCESS
+        session_outcome = "interrupted" if final is RunStatus.INTERRUPTED else "success"
         await run_manager.set_status(run_id, final)
         await _emit_run_end_audit(
             audit_logger,
@@ -230,6 +252,7 @@ async def run_agent(
     except RunCancelledError:
         # A node surfaced cooperative cancellation mid-step (E.15) — a
         # normal interrupted finish, not a failure.
+        session_outcome = "interrupted"
         await run_manager.set_status(run_id, RunStatus.INTERRUPTED)
         logger.info("run_agent.cancelled_cooperatively run_id=%s", run_id)
         await _emit_run_end_audit(
@@ -250,6 +273,7 @@ async def run_agent(
         # NOT dispatch the trajectory here — awaiting any helper during
         # loop teardown is unreliable (same reason
         # ``_emit_run_end_audit`` is skipped on this path).
+        session_outcome = "cancelled"
         await run_manager.set_status(run_id, RunStatus.INTERRUPTED)
         logger.info("run_agent.cancelled run_id=%s", run_id)
         raise
@@ -258,6 +282,7 @@ async def run_agent(
         # budget. The J.13 eval gate filters this bucket separately
         # because "budget exhausted" is a tunable trade-off, not a
         # provider / code failure.
+        session_outcome = "max_steps"
         await run_manager.set_status(run_id, RunStatus.ERROR)
         logger.warning(
             "run_agent.max_steps_exceeded run_id=%s step_count=%d max_steps=%d",
@@ -282,6 +307,7 @@ async def run_agent(
             trajectory_recorder, graph, effective_config, record, outcome="max_steps"
         )
     except Exception as exc:
+        session_outcome = "error"
         await run_manager.set_status(run_id, RunStatus.ERROR)
         logger.exception("run_agent.failed run_id=%s", run_id)
         await bridge.publish(
@@ -299,6 +325,12 @@ async def run_agent(
         )
         _dispatch_trajectory(trajectory_recorder, graph, effective_config, record, outcome="failed")
     finally:
+        # Stream M Gate — emit on every terminal path. Always synchronous
+        # so the ``asyncio.CancelledError`` teardown path (no await) still
+        # counts the session in the histogram.
+        _session_duration_seconds.labels(outcome=session_outcome).observe(
+            time.monotonic() - session_started
+        )
         await bridge.publish_end(run_id)
         # Fire-and-forget cleanup; keep a reference so the task isn't
         # garbage-collected mid-flight.

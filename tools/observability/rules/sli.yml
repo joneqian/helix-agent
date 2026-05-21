@@ -57,3 +57,14 @@ groups:
             0.95,
             sum by (le) (rate(helix_durable_resume_seconds_bucket[5m]))
           )
+
+      # SLO 7 — Session end-to-end P95 for successful runs (seconds;
+      # Stream M Gate target < 30). Filtered to outcome="success" so
+      # error / max_steps / cancelled tails do not bias the user-facing
+      # latency view (the labelled histogram in orchestrator.sse).
+      - record: helix:sli:session_duration:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(helix_session_duration_seconds_bucket{outcome="success"}[5m]))
+          )

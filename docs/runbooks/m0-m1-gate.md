@@ -70,6 +70,9 @@ curl -s 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, sum b
 # Durable resume P95 - 1 小时
 curl -s 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, sum by (le)(rate(helix_durable_resume_seconds_bucket[1h])))'
 
+# End-to-end session P95 (outcome=success only) - 1 小时
+curl -s 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, sum by (le)(rate(helix_session_duration_seconds_bucket{outcome="success"}[1h])))'
+
 # SSE stream stale 率 - 1 小时
 curl -s 'http://localhost:9090/api/v1/query?query=sum(rate(helix_llm_stream_stale_total[1h])) / sum(rate(helix_llm_tokens_total[1h]))'
 ```
@@ -101,17 +104,15 @@ diff <(yq '.capabilities' tools/eval/baselines/m0_gate_baseline.yaml) \
 |-----|----------|--------------------------|
 | 可用性 (control-plane 5xx) | < 0.1% in 30d | `helix:sli:control_plane_availability:ratio5m` (>= 0.999) |
 | TTFT P95 | < 2.0s | `helix_session_ttft_seconds_bucket` |
-| End-to-end P95 (canonical agent run) | < 30s | **gap**: `helix_session_duration_seconds` 待 M.4 follow-up 接入 |
+| End-to-end P95 (canonical agent run) | < 30s | `helix_session_duration_seconds{outcome="success"}_bucket` (recording rule `helix:sli:session_duration:p95_5m`) |
 | SSE 流断裂率 | < 0.05% in 30d | `helix_llm_stream_stale_total / helix_llm_tokens_total` |
 | Sandbox 冷启动 P95 | < 5s | `helix_sandbox_cold_start_seconds_bucket` |
 | Durable resume P95 | < 1.0s | `helix_durable_resume_seconds_bucket` |
 | Memory recall@5 | ≥ 0.7 | `tools/eval/memory_recall.py` against real embedder |
 | P0 事故数 | = 0 in 30d | manual incident log + § 1.5 reset rule |
 
-**已知缺口**: `helix_session_duration_seconds` (E2E P95) 在 metric
-allowlist 里但 emission 路径未接 (`packages/helix-common/tests/test_observability_metrics.py:33`).
-M.4 follow-up PR 接 control-plane run 完成 timing 写入 metric. Gate 期间
-暂用 dogfood 业务 P95 trace 数据替代.
+**所有 8 项 SLO 指标 emission 已就位** (E2E P95 在 2026-05-21 PR 接入,
+labelled by `outcome` 以便过滤 error / max_steps / cancelled tails).
 
 ### 1.5 P0 incident response
 

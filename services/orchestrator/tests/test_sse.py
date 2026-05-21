@@ -631,3 +631,128 @@ async def test_run_agent_observes_durable_resume_only_when_is_resume() -> None:
     )
     after = _durable_resume_seconds._sum.get()  # type: ignore[attr-defined]
     assert after > mid, "resume run must observe the histogram"
+
+
+# ---------------------------------------------------------------------------
+# Stream M Gate — session end-to-end duration histogram emission
+# ---------------------------------------------------------------------------
+
+
+def _session_duration_sum(outcome: str) -> float:
+    """Read the labelled ``_sum`` child of helix_session_duration_seconds."""
+    from orchestrator.sse import _session_duration_seconds
+
+    child = _session_duration_seconds.labels(outcome=outcome)
+    return child._sum.get()  # type: ignore[attr-defined,no-any-return]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_session_duration_success_outcome() -> None:
+    """A clean run emits to outcome=success on the duration histogram."""
+    before = _session_duration_sum("success")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=_ScriptedGraph(chunks=[{"agent": {"step_count": 1}}]),
+        graph_input={"messages": []},
+        config={},
+    )
+    after = _session_duration_sum("success")
+    assert after > before
+
+
+@pytest.mark.asyncio
+async def test_run_agent_session_duration_interrupted_outcome() -> None:
+    """Setting ``abort_event`` mid-stream emits outcome=interrupted."""
+    before = _session_duration_sum("interrupted")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    record.abort_event.set()  # set before astream → first iteration breaks
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=_ScriptedGraph(chunks=[{"agent": {"step_count": 1}}]),
+        graph_input={"messages": []},
+        config={},
+    )
+    after = _session_duration_sum("interrupted")
+    assert after > before
+
+
+@pytest.mark.asyncio
+async def test_run_agent_session_duration_max_steps_outcome() -> None:
+    """MaxStepsExceededError from the graph emits outcome=max_steps."""
+    from orchestrator.errors import MaxStepsExceededError
+
+    @dataclass
+    class _MaxStepsGraph:
+        async def astream(
+            self,
+            input: Any,
+            config: Any = None,
+            *,
+            stream_mode: Any = None,
+        ) -> AsyncIterator[Any]:
+            del input, config, stream_mode
+            raise MaxStepsExceededError(step_count=10, max_steps=5)
+            yield  # pragma: no cover — unreachable; satisfies async-iter contract
+
+        async def aget_state(self, config: Any) -> Any:
+            return None
+
+    before = _session_duration_sum("max_steps")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=_MaxStepsGraph(),
+        graph_input={"messages": []},
+        config={},
+    )
+    after = _session_duration_sum("max_steps")
+    assert after > before
+
+
+@pytest.mark.asyncio
+async def test_run_agent_session_duration_error_outcome() -> None:
+    """An uncaught exception from the graph emits outcome=error."""
+
+    @dataclass
+    class _ErroringGraph:
+        async def astream(
+            self,
+            input: Any,
+            config: Any = None,
+            *,
+            stream_mode: Any = None,
+        ) -> AsyncIterator[Any]:
+            del input, config, stream_mode
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        async def aget_state(self, config: Any) -> Any:
+            return None
+
+    before = _session_duration_sum("error")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=_ErroringGraph(),
+        graph_input={"messages": []},
+        config={},
+    )
+    after = _session_duration_sum("error")
+    assert after > before
