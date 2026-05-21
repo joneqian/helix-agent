@@ -514,7 +514,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] 多模态输入 Path A + Path B 真实图像在 staging 跑通
 
 **Eval baseline**：
-- [ ] J.13a 逐能力 eval 场景集 baseline 锁定（写入 `tools/eval/baselines/m0_gate_baseline.yaml`）
+- [x] J.13a 逐能力 eval 场景集 baseline 锁定（`tools/eval/baselines/m0_gate_baseline.yaml`，2026-05-21 落地；7 PASS + 7 DEFERRED）
 
 **安全验收**：
 - [ ] **gVisor 7/7 沙盒安全用例 staging Linux 全部跑通**（含 `test_gvisor_cve_2019_5736_poc_fails`、`test_gvisor_timing_isolation`；K5 锁定不允许"软推迟"）

@@ -54,3 +54,90 @@ groups:
           summary: "Quota reaper cycle errors"
           description: "The quota reaper logged {{ $value }} cycle error(s) in the last 15m."
           runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/control-plane.md"
+
+  # Stream M — M0→M1 Gate-watch group.
+  #
+  # These alerts fire when 30-day Gate Exit Criteria thresholds
+  # (STREAM-M-DESIGN.md § 2.1) are at risk. Severity = ``gate-watch`` so
+  # Alertmanager routes them to the Gate operator without paging on-call
+  # with a production-severity escalation. The existing P0/P1/P2 alerts
+  # above keep production-protection semantics independent from Gate
+  # judgement.
+  #
+  # The ``for:`` windows are intentionally long (30m) so transient spikes
+  # don't trip a Gate-watch — only sustained breaches matter for the
+  # 30-day decision. The Gate runbook (docs/runbooks/m0-m1-gate.md § 1.4)
+  # describes the daily SLO-check workflow that consumes these alerts.
+  - name: helix_gate_watch
+    rules:
+      # Tighter than HelixControlPlaneHigh5xxRate (0.95): Gate target is
+      # 99.9% success ratio (= < 0.1% 5xx) in 30d.
+      - alert: HelixGateAvailabilityTight
+        expr: helix:sli:control_plane_availability:ratio5m < 0.999
+        for: 30m
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "Control-plane success ratio below Gate target"
+          description: "5m success ratio is {{ $value | humanizePercentage }} — Gate target 99.9%."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
+
+      - alert: HelixGateTTFTOverBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(helix_session_ttft_seconds_bucket[1h]))
+          ) > 2.0
+        for: 30m
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "Session TTFT P95 above Gate budget (2.0s)"
+          description: "1h P95 TTFT is {{ $value }}s — Gate budget 2.0s."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
+
+      - alert: HelixGateSandboxColdStartOverBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(helix_sandbox_cold_start_seconds_bucket[1h]))
+          ) > 5.0
+        for: 30m
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "Sandbox cold-start P95 above Gate budget (5.0s)"
+          description: "1h P95 cold-start is {{ $value }}s — Gate budget 5.0s."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
+
+      - alert: HelixGateDurableResumeOverBudget
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(helix_durable_resume_seconds_bucket[1h]))
+          ) > 1.0
+        for: 30m
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "Durable resume P95 above Gate budget (1.0s)"
+          description: "1h P95 durable resume is {{ $value }}s — Gate budget 1.0s."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
+
+      # Stream-stale spike — Gate target is < 0.05% in 30d. The denominator
+      # uses helix_llm_tokens_total as a proxy for active LLM streaming
+      # traffic; switch to the canonical SSE-events counter once it lands.
+      - alert: HelixGateSSEStreamStaleSpike
+        expr: |
+          (
+            sum(rate(helix_llm_stream_stale_total[1h]))
+            /
+            clamp_min(sum(rate(helix_llm_tokens_total[1h])), 1)
+          ) > 0.0005
+        for: 1h
+        labels:
+          severity: gate-watch
+        annotations:
+          summary: "LLM stream stale rate above Gate target (0.05%)"
+          description: "1h stream-stale ratio is {{ $value | humanizePercentage }} — Gate target 0.05%."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/m0-m1-gate.md"
