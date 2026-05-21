@@ -286,7 +286,7 @@ async def test_list_active_past_retention_picks_stale_active_only() -> None:
     artifacts = await store.list_for_user(tenant_id=tenant_id, user_id=user_id)
     stale = artifacts[0]
     backdated = stale.model_copy(update={"updated_at": datetime.now(UTC) - timedelta(days=100)})
-    store._artifacts[stale.id] = backdated  # type: ignore[attr-defined]
+    store._artifacts[stale.id] = backdated
     # Also create a fresh active row.
     await store.save_version(
         tenant_id=tenant_id,

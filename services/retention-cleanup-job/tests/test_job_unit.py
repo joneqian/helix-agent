@@ -219,7 +219,7 @@ async def test_sweep_artifacts_soft_deletes_stale_active_rows() -> None:
     )
     # Backdate ``updated_at`` to before the retention horizon.
     stale = (await artifacts.list_for_user(tenant_id=tenant, user_id=user))[0]
-    artifacts._artifacts[stale.id] = stale.model_copy(  # type: ignore[attr-defined]
+    artifacts._artifacts[stale.id] = stale.model_copy(
         update={"updated_at": datetime.now(UTC) - timedelta(days=120)}
     )
     # And a fresh row that must survive.
