@@ -53,6 +53,8 @@ from helix_agent.persistence.models import KnowledgeBaseRow as KnowledgeBaseRow
 from helix_agent.persistence.models import KnowledgeChunkRow as KnowledgeChunkRow
 from helix_agent.persistence.models import KnowledgeDocumentRow as KnowledgeDocumentRow
 from helix_agent.persistence.models import MemoryItemRow as MemoryItemRow
+from helix_agent.persistence.models import SkillRow as SkillRow
+from helix_agent.persistence.models import SkillVersionRow as SkillVersionRow
 from helix_agent.persistence.models import TenantUserRow as TenantUserRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
 from helix_agent.persistence.models import UserWorkspaceRow as UserWorkspaceRow
@@ -80,6 +82,16 @@ from helix_agent.persistence.rls import build_rls_sessionmaker as build_rls_sess
 from helix_agent.persistence.rls import bypass_rls_var as bypass_rls_var
 from helix_agent.persistence.rls import current_tenant_id_var as current_tenant_id_var
 from helix_agent.persistence.rls import current_user_id_var as current_user_id_var
+from helix_agent.persistence.skill import (
+    DuplicateSkillError as DuplicateSkillError,
+)
+from helix_agent.persistence.skill import InMemorySkillStore as InMemorySkillStore
+from helix_agent.persistence.skill import SkillNotFoundError as SkillNotFoundError
+from helix_agent.persistence.skill import SkillStore as SkillStore
+from helix_agent.persistence.skill import (
+    SkillVersionNotFoundError as SkillVersionNotFoundError,
+)
+from helix_agent.persistence.skill import SqlSkillStore as SqlSkillStore
 from helix_agent.persistence.tenant_config import (
     InMemoryTenantConfigStore as InMemoryTenantConfigStore,
 )

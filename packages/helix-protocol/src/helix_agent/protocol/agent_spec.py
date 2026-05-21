@@ -613,6 +613,15 @@ class AgentSpecBody(BaseModel):
         description="Stream J.6 — VL model for the ask_image tool (Path B); "
         "declared only when model.supports_vision is false",
     )
+    skills: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Stream J.7a — reusable skill bundles this agent enables. "
+            "Each element is a string ``name`` (binds latest active "
+            "skill version) or ``name@N`` (pins to a specific version row). "
+            "Validated against ``SKILL_REF_PATTERN``."
+        ),
+    )
     workflow: WorkflowSpec = Field(default_factory=WorkflowSpec)
     cache: CacheSpec = Field(
         default_factory=CacheSpec,
@@ -701,6 +710,29 @@ class AgentSpec(BaseModel):
                     f"({self.metadata.name!r}) — self-delegation is not allowed."
                 )
                 raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _check_skills(self) -> AgentSpec:
+        """J.7a — validate ``spec.skills`` element shape + manifest-local dedup.
+
+        Each element must match ``SKILL_REF_PATTERN`` (``name`` or
+        ``name@N``). Same skill name listed twice — even with different
+        ``@version`` pins — is a manifest defect; reject.
+        """
+        from helix_agent.protocol.skill import parse_skill_ref
+
+        seen_names: set[str] = set()
+        for raw in self.spec.skills:
+            ref = parse_skill_ref(raw)
+            if ref.name in seen_names:
+                msg = (
+                    f"duplicate skill reference {ref.name!r} in skills — "
+                    f"a manifest may reference each skill at most once "
+                    f"(use a single pin or no pin, not both)."
+                )
+                raise ValueError(msg)
+            seen_names.add(ref.name)
         return self
 
 

@@ -92,6 +92,15 @@ from helix_agent.protocol.service_account import (
     RoleBinding,
     ServiceAccount,
 )
+from helix_agent.protocol.skill import (
+    SKILL_REF_PATTERN,
+    Skill,
+    SkillAuthoredBy,
+    SkillRef,
+    SkillStatus,
+    SkillVersion,
+    parse_skill_ref,
+)
 from helix_agent.protocol.subagent import (
     MAX_RESULT_EXCERPT_CHARS,
     SubAgentInvocation,
@@ -111,6 +120,7 @@ __all__ = [
     "DEFAULT_CHUNK_MAX_TOKENS",
     "DEFAULT_CHUNK_OVERLAP_TOKENS",
     "MAX_RESULT_EXCERPT_CHARS",
+    "SKILL_REF_PATTERN",
     "AgentMetadata",
     "AgentSpec",
     "AgentSpecBody",
@@ -179,6 +189,11 @@ __all__ = [
     "RoutingSpec",
     "SandboxSpec",
     "ServiceAccount",
+    "Skill",
+    "SkillAuthoredBy",
+    "SkillRef",
+    "SkillStatus",
+    "SkillVersion",
     "SubAgentInvocation",
     "SubAgentSpec",
     "SubagentStatus",
@@ -201,4 +216,5 @@ __all__ = [
     "WorkflowSpec",
     "parse_agent_ref",
     "parse_image_ref",
+    "parse_skill_ref",
 ]

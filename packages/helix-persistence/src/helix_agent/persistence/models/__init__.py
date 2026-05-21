@@ -23,6 +23,7 @@ from helix_agent.persistence.models.memory_writeback_dlq import MemoryWritebackD
 from helix_agent.persistence.models.role_binding import RoleBindingRow
 from helix_agent.persistence.models.sandbox_instance import SandboxInstanceRow
 from helix_agent.persistence.models.service_account import ServiceAccountRow
+from helix_agent.persistence.models.skill import SkillRow, SkillVersionRow
 from helix_agent.persistence.models.tenant_config import TenantConfigRow
 from helix_agent.persistence.models.tenant_quota import TenantQuotaRow
 from helix_agent.persistence.models.tenant_user import TenantUserRow
@@ -53,6 +54,8 @@ __all__ = [
     "SandboxInstanceRow",
     "SecretAllowlistRow",
     "ServiceAccountRow",
+    "SkillRow",
+    "SkillVersionRow",
     "TenantConfigRow",
     "TenantQuotaRow",
     "TenantUserRow",
