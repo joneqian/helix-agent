@@ -720,6 +720,29 @@ class KnowledgeSpec(BaseModel):             # AgentSpecBody.knowledge
 
 > **对标**：deer-flow / hermes 都靠外部 search / FTS5,RAG 弱。helix 自建生产级 RAG:强解析 + 结构/语义/表格感知切块 + 混合检索 + 重排 + 完整文档运维。
 
+### 12.5 实施进展 + SLO baseline（2026-05-21 收尾，Mini-ADR J-22）
+
+**Mini-ADR J-22 拆 4 阶段实施 — 8 PR 全合 main**：
+
+| 阶段 | 范围 | PR |
+|------|------|----|
+| **J.5a** 数据层 + 异步摄取 | `KnowledgeSpec` / 知识 DTO（`KnowledgeBase` / `KnowledgeDocument` / `KnowledgeChunk` / `DocumentStatus`）+ 迁移 0021/0022 + `KnowledgeStore` ABC + `InMemory` / `Sql` 两实现 + per-KB `chunk_max_tokens` / `chunk_overlap_tokens` + `content_tsv` 全文检索列 + `KnowledgeIngestionRunner` 后台 `asyncio.Task` 跑 解析→切块→嵌入→入库 + `knowledge_document.status` 状态机 | #155 / #156 / #157 / #162 |
+| **J.5b** 解析 + 切块 | `pymupdf4llm`（PDF 高质量带标题）+ `MarkItDown` 兜底（docx / pptx / xlsx + PDF 稀疏回退）+ token 计量切块（中文按字符切偏差大 → tokenizer 计 token）+ 结构感知（Markdown 标题 / 段落 / 列表 / 代码 / 表格边界）+ 表格感知（表整体保留，超限按行切留表头）+ 语义切块（无子标题的长结构单元按相邻块嵌入相似度落断点）+ 标题路径前缀 | #158 / #159 / #160 |
+| **J.5c** 混合检索 + rerank | `KnowledgeRetriever`（vector 召回 + Postgres 全文 jieba 关键词召回 → RRF 融合 → LLM-rerank → top-k）+ `knowledge_search` 工具（`knowledge:` 块激活，未配 rerank 退化纯向量）+ `Reranker` Protocol + `LLMReranker` 实现 | #161 |
+| **J.5d** 文档运维 API | `POST/GET/DELETE /v1/knowledge/bases` + `POST/GET/DELETE /v1/knowledge/bases/{kb_id}/documents`（重摄取替换 chunks，删除级联 chunks）+ control-plane wire `KnowledgeIngestionRunner` 进 lifespan + `KnowledgeRetriever` 经 `ToolEnv` 注入 orchestrator | #162 |
+
+**M0 SLO baseline**（Mini-ADR J-22 锁定 — 单 control-plane 副本，单机 PG + MinIO 部署）：
+
+| SLO 维度 | M0 目标 | 验证方式 |
+|---------|---------|---------|
+| 摄取延迟 P95 | < 30s / 文档（1MB Markdown）/ < 120s / 文档（10MB PDF） | `test_knowledge_ingestion.py` 计时（CI 跑） |
+| 文档 ready 时间（上传 → status=ready） | < 5s for in-memory store；< 30s for SQL backend with embeddings | E2E `test_knowledge_e2e.py` |
+| 查询 P95（含 RRF 融合，无 LLM rerank） | < 200ms / KB 10K chunk @ HNSW | `test_sql_knowledge_store.py` benchmark |
+| 重摄取幂等性 | 同 filename 重摄取 → chunks 全替换 + chunk_index 重排 0..N + 旧 chunk soft-deleted（pg_class.relkind row）| `test_sql_knowledge_store.py::test_upsert_document_resets` |
+| recall@k（M0 eval baseline） | pass_rate ≥ 0.80 AND recall@k ≥ 0.70 over 11-case dataset | `tools/eval/rag.py` (sample=11, threshold 锁定，2026-05-21 实测 1.00 / 1.00) |
+
+J.13a baseline 锚定：`tools/eval/baselines/m0_gate_baseline.yaml` `J.5_rag` 行 — `pass_rate=1.00 / recall_at_k=1.00 / sample_size=11 / status=PASS`。
+
 ---
 
 ## 13. J.6 — 多模态输入

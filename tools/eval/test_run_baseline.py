@@ -44,8 +44,8 @@ def test_runner_registry_has_fourteen_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_produces_eight_pass_six_deferred(tmp_path: Path) -> None:
-    """J.4-补强 lands eval too: 8 shipped capabilities PASS; remaining 6 DEFERRED."""
+async def test_run_baseline_produces_nine_pass_five_deferred(tmp_path: Path) -> None:
+    """J.5 closeout adds eval: 9 shipped capabilities PASS; remaining 5 DEFERRED."""
     out = tmp_path / "baseline.yaml"
     reports = await run_baseline(out_path=out)
 
@@ -61,9 +61,10 @@ async def test_run_baseline_produces_eight_pass_six_deferred(tmp_path: Path) -> 
         "J.2_reflect",
         "J.3_memory_recall",
         "J.4_sub_agent",
+        "J.5_rag",
         "J.6_multimodal",
     ]
-    assert len(deferred_caps) == 6
+    assert len(deferred_caps) == 5
     assert all(r.status != "FAIL" for r in reports.values())
 
 
@@ -92,9 +93,9 @@ async def test_baseline_yaml_layout_is_stable(tmp_path: Path) -> None:
     assert j4["score"]["pass_rate"] >= 0.80
 
     j5 = payload["capabilities"]["J.5_rag"]
-    assert j5["status"] == "DEFERRED"
-    assert j5["score"] == {}
-    assert "deferred_reason" in j5
+    assert j5["status"] == "PASS"
+    assert j5["score"]["pass_rate"] >= 0.80
+    assert j5["score"]["recall_at_k"] >= 0.70
 
     j1 = payload["capabilities"]["J.1_plan_execute"]
     assert j1["status"] == "PASS"

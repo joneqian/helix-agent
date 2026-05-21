@@ -1,0 +1,244 @@
+# J.5 RAG — M0 baseline dataset (Stream J.13a + Mini-ADR J-22 closeout).
+#
+# 11 cases driving KnowledgeRetriever (hybrid RRF, no LLM reranker) over
+# scripted knowledge bases. Each case has its own fresh tenant so the
+# corpus is isolated.
+#
+# Coverage:
+#   - 4 single-base / single-doc recall (top-1 / top-3 / overlap-ranked /
+#     CJK)
+#   - 3 single-base / multi-doc attribution (correct filename / chunk
+#     index)
+#   - 2 multi-base (query subset of agent's knowledge_base_refs)
+#   - 1 multi-base / multi-doc / multi-chunk recall
+#   - 1 hybrid-rerank discrimination (relevant chunk vs sibling
+#     distractors sharing token overlap)
+#
+# Thresholds per Mini-ADR J-22 / § 18.3: pass_rate ≥ 0.80, recall@k ≥ 0.70.
+
+name: rag-m0-baseline
+
+cases:
+  # ---------- single-base / single-doc (4) ----------
+  - id: simple-001-single-chunk-recall
+    query: vacation policy
+    query_bases: [hr]
+    k: 5
+    knowledge_bases:
+      - name: hr
+        documents:
+          - filename: handbook.md
+            chunks:
+              - id: hr-vac-001
+                content: vacation policy grants 20 days per year
+              - id: hr-sick-001
+                content: sick leave covers up to 10 days per year
+    expected_chunk_ids: [hr-vac-001]
+
+  - id: simple-002-top-3-recall
+    query: insurance deductible
+    query_bases: [benefits]
+    k: 3
+    knowledge_bases:
+      - name: benefits
+        documents:
+          - filename: medical.md
+            chunks:
+              - id: ded-001
+                content: medical insurance deductible is 500 per year
+              - id: dental-001
+                content: dental insurance covers cleanings twice yearly
+              - id: vision-001
+                content: vision insurance has no deductible
+    expected_chunk_ids: [ded-001]
+
+  - id: simple-003-multi-chunk-recall
+    # Both chunks discuss the same topic — top-2 should bring both back.
+    query: parental leave duration
+    query_bases: [hr]
+    k: 3
+    knowledge_bases:
+      - name: hr
+        documents:
+          - filename: leave.md
+            chunks:
+              - id: parental-001
+                content: parental leave gives 12 weeks paid for primary caregiver
+              - id: parental-002
+                content: secondary caregiver parental leave is 6 weeks paid
+              - id: bereavement-001
+                content: bereavement leave is 5 days for immediate family
+    expected_chunk_ids: [parental-001, parental-002]
+
+  - id: simple-004-cjk-recall
+    # Chinese language case — confirms the embedder's CJK bigram path
+    # routes the right chunk back.
+    language: zh
+    query: 年假天数
+    query_bases: [hr-zh]
+    k: 5
+    knowledge_bases:
+      - name: hr-zh
+        documents:
+          - filename: 员工手册.md
+            chunks:
+              - id: zh-vac-001
+                content: 公司年假为每年二十天
+              - id: zh-sick-001
+                content: 病假为每年十天
+    expected_chunk_ids: [zh-vac-001]
+
+  # ---------- single-base / multi-doc attribution (3) ----------
+  - id: multi-doc-001-attribution-policies
+    # 3 documents in one KB — query targets the policy doc, others
+    # should not appear in top-3.
+    query: data retention policy duration
+    query_bases: [policies]
+    k: 3
+    knowledge_bases:
+      - name: policies
+        documents:
+          - filename: data-retention.md
+            chunks:
+              - id: retain-001
+                content: data retention policy keeps records for 7 years
+          - filename: privacy.md
+            chunks:
+              - id: priv-001
+                content: privacy policy covers personal data handling
+          - filename: security.md
+            chunks:
+              - id: sec-001
+                content: security policy mandates two-factor authentication
+    expected_chunk_ids: [retain-001]
+
+  - id: multi-doc-002-cross-doc-overlap
+    query: incident response runbook escalation
+    query_bases: [ops]
+    k: 3
+    knowledge_bases:
+      - name: ops
+        documents:
+          - filename: incident-response.md
+            chunks:
+              - id: ir-001
+                content: incident response runbook escalation tiers are P0 P1 P2
+          - filename: deployments.md
+            chunks:
+              - id: dep-001
+                content: deployments require staging validation before production
+          - filename: monitoring.md
+            chunks:
+              - id: mon-001
+                content: monitoring dashboards aggregate runbook metrics
+    expected_chunk_ids: [ir-001]
+
+  - id: multi-doc-003-product-faq
+    query: refund window for digital products
+    query_bases: [faq]
+    k: 5
+    knowledge_bases:
+      - name: faq
+        documents:
+          - filename: shipping.md
+            chunks:
+              - id: ship-001
+                content: shipping takes 3 to 5 business days for orders
+          - filename: refunds.md
+            chunks:
+              - id: refund-digital-001
+                content: refund window for digital products is 14 days from purchase
+              - id: refund-physical-001
+                content: refund window for physical products is 30 days from delivery
+    expected_chunk_ids: [refund-digital-001]
+
+  # ---------- multi-base (2) ----------
+  - id: multi-base-001-query-subset
+    # Agent has access to 2 KBs; query targets one. The other KB must
+    # not pollute top-k.
+    query: code review checklist
+    query_bases: [engineering, hr]
+    k: 5
+    knowledge_bases:
+      - name: engineering
+        documents:
+          - filename: process.md
+            chunks:
+              - id: review-001
+                content: code review checklist covers tests style and security
+              - id: deploy-001
+                content: deploy procedure runs migrations before service restart
+      - name: hr
+        documents:
+          - filename: handbook.md
+            chunks:
+              - id: hr-vac-002
+                content: vacation policy grants 20 days per year
+    expected_chunk_ids: [review-001]
+
+  - id: multi-base-002-disjoint-bases
+    # Each KB has a single chunk; query unique to one.
+    query: laptop replacement schedule
+    query_bases: [it, hr]
+    k: 5
+    knowledge_bases:
+      - name: it
+        documents:
+          - filename: equipment.md
+            chunks:
+              - id: laptop-001
+                content: laptop replacement schedule is every 3 years
+      - name: hr
+        documents:
+          - filename: benefits.md
+            chunks:
+              - id: benefits-001
+                content: health benefits include dental and vision coverage
+    expected_chunk_ids: [laptop-001]
+
+  # ---------- multi-base / multi-doc / multi-chunk (1) ----------
+  - id: multi-base-003-multi-chunk-recall
+    # Both KBs contribute one expected chunk each; top-3 must recall both.
+    query: onboarding documents required
+    query_bases: [hr, it]
+    k: 3
+    knowledge_bases:
+      - name: hr
+        documents:
+          - filename: onboarding.md
+            chunks:
+              - id: hr-onboard-001
+                content: onboarding documents from HR include I9 W4 and direct deposit
+              - id: hr-misc-001
+                content: company holidays are observed on federal calendar
+      - name: it
+        documents:
+          - filename: setup.md
+            chunks:
+              - id: it-onboard-001
+                content: onboarding documents from IT include laptop request and SSO setup
+    expected_chunk_ids: [hr-onboard-001, it-onboard-001]
+
+  # ---------- keyword-saves recall (1) ----------
+  - id: keyword-saves-001-rrf
+    # Query has heavy keyword overlap with the target but the chunk is
+    # surrounded by distractors whose vector centroid pulls the
+    # vector-only score down. RRF (vector + keyword) must keep the
+    # right chunk in top-k.
+    query: GDPR data subject access request
+    query_bases: [compliance]
+    k: 3
+    knowledge_bases:
+      - name: compliance
+        documents:
+          - filename: gdpr.md
+            chunks:
+              - id: gdpr-dsar-001
+                content: GDPR data subject access request response within 30 days
+              - id: gdpr-misc-001
+                content: GDPR fines reach up to 4 percent of global turnover
+              - id: gdpr-misc-002
+                content: GDPR breach notification deadline is 72 hours
+              - id: gdpr-misc-003
+                content: GDPR controller and processor roles are defined separately
+    expected_chunk_ids: [gdpr-dsar-001]
