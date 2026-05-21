@@ -25,6 +25,14 @@ from helix_agent.persistence.dr import (
     InMemoryBackupRecordStore as InMemoryBackupRecordStore,
 )
 from helix_agent.persistence.dr import SqlBackupRecordStore as SqlBackupRecordStore
+from helix_agent.persistence.image_upload import (
+    ImageUploadNotFoundError as ImageUploadNotFoundError,
+)
+from helix_agent.persistence.image_upload import ImageUploadStore as ImageUploadStore
+from helix_agent.persistence.image_upload import (
+    InMemoryImageUploadStore as InMemoryImageUploadStore,
+)
+from helix_agent.persistence.image_upload import SqlImageUploadStore as SqlImageUploadStore
 from helix_agent.persistence.knowledge import (
     DuplicateKnowledgeBaseError as DuplicateKnowledgeBaseError,
 )
@@ -40,6 +48,7 @@ from helix_agent.persistence.models import AuditLogRow as AuditLogRow
 from helix_agent.persistence.models import BackupRecordRow as BackupRecordRow
 from helix_agent.persistence.models import DrDrillRow as DrDrillRow
 from helix_agent.persistence.models import EventLogRow as EventLogRow
+from helix_agent.persistence.models import ImageUploadRow as ImageUploadRow
 from helix_agent.persistence.models import KnowledgeBaseRow as KnowledgeBaseRow
 from helix_agent.persistence.models import KnowledgeChunkRow as KnowledgeChunkRow
 from helix_agent.persistence.models import KnowledgeDocumentRow as KnowledgeDocumentRow

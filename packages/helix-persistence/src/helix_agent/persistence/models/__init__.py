@@ -12,6 +12,7 @@ from helix_agent.persistence.models.credential_proxy import (
 from helix_agent.persistence.models.dr_drill import DrDrillRow
 from helix_agent.persistence.models.event_log import EventLogRow
 from helix_agent.persistence.models.feedback import FeedbackRow
+from helix_agent.persistence.models.image_upload import ImageUploadRow
 from helix_agent.persistence.models.knowledge import (
     KnowledgeBaseRow,
     KnowledgeChunkRow,
@@ -42,6 +43,7 @@ __all__ = [
     "DrDrillRow",
     "EventLogRow",
     "FeedbackRow",
+    "ImageUploadRow",
     "KnowledgeBaseRow",
     "KnowledgeChunkRow",
     "KnowledgeDocumentRow",
