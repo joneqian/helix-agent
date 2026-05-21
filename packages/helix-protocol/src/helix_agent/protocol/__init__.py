@@ -56,6 +56,7 @@ from helix_agent.protocol.dr import (
     DrillType,
 )
 from helix_agent.protocol.event import EventRecord, EventType
+from helix_agent.protocol.image_upload import ImageUpload
 from helix_agent.protocol.knowledge import (
     DEFAULT_CHUNK_MAX_TOKENS,
     DEFAULT_CHUNK_OVERLAP_TOKENS,
@@ -146,6 +147,7 @@ __all__ = [
     "FilesystemSpec",
     "HTTPToolSpec",
     "ImageRef",
+    "ImageUpload",
     "JWTClaims",
     "KnowledgeBase",
     "KnowledgeChunk",

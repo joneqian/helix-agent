@@ -133,6 +133,11 @@ from helix_agent.persistence.feedback_store import (
     FeedbackStore,
     InMemoryFeedbackStore,
 )
+from helix_agent.persistence.image_upload import (
+    ImageUploadStore,
+    InMemoryImageUploadStore,
+    SqlImageUploadStore,
+)
 from helix_agent.persistence.knowledge import (
     InMemoryKnowledgeStore,
     KnowledgeStore,
@@ -194,6 +199,7 @@ def create_app(
     feedback_repo: FeedbackStore | None = None,
     artifact_repo: ArtifactStore | None = None,
     knowledge_repo: KnowledgeStore | None = None,
+    image_upload_repo: ImageUploadStore | None = None,
     knowledge_ingestion_runner: KnowledgeIngestionRunner | None = None,
     audit_logger: AuditLogger | None = None,
     manifest_loader: ManifestLoader | None = None,
@@ -267,6 +273,10 @@ def create_app(
     # knowledge_search tool.
     resolved_knowledge_store: KnowledgeStore = knowledge_repo or (
         sql_stores.knowledge if sql_stores else InMemoryKnowledgeStore()
+    )
+    # Stream J.6.补强-3 (Mini-ADR J-32) — image upload registry.
+    resolved_image_upload_store: ImageUploadStore = image_upload_repo or (
+        sql_stores.image_upload if sql_stores else InMemoryImageUploadStore()
     )
     resolved_supervisor_client = build_supervisor_client(resolved_settings.sandbox_supervisor_url)
     resolved_feedback = feedback_repo or (
@@ -512,6 +522,7 @@ def create_app(
     app.state.feedback_store = resolved_feedback
     app.state.artifact_store = resolved_artifact_store
     app.state.knowledge_store = resolved_knowledge_store
+    app.state.image_upload_store = resolved_image_upload_store
     # Stream J.6 — the object store is created in the lifespan (it goes on
     # the AsyncExitStack); the upload endpoint reads it from app.state.
     app.state.object_store = None
@@ -629,6 +640,7 @@ class _SqlStores:
     memory: MemoryStore
     memory_dlq: MemoryWritebackDLQ  # Stream K.K7
     knowledge: KnowledgeStore
+    image_upload: ImageUploadStore  # Stream J.6.补强-3 (Mini-ADR J-32)
     artifact: ArtifactStore
     service_account: ServiceAccountStore
     api_key: ApiKeyStore
@@ -663,6 +675,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         memory=SqlMemoryStore(session_factory),
         memory_dlq=SqlMemoryWritebackDLQ(session_factory),
         knowledge=SqlKnowledgeStore(session_factory),
+        image_upload=SqlImageUploadStore(session_factory),
         artifact=SqlArtifactStore(session_factory),
         service_account=SqlServiceAccountStore(session_factory),
         api_key=SqlApiKeyStore(session_factory),

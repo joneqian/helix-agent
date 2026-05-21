@@ -359,3 +359,87 @@ async def test_quota_denial_does_not_emit_image_upload_audit(
     image_upload_rows = [r for r in page.entries if r.action == AuditAction.IMAGE_UPLOAD]
     # Only the first (successful) upload should have emitted IMAGE_UPLOAD.
     assert len(image_upload_rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Mini-ADR J-32 (J.6.补强-3) — lifecycle (image_upload table + DELETE)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_registers_row_in_image_upload_store(audit_setup: AuditSetup) -> None:
+    """Successful upload writes a row into ``image_upload`` so the
+    retention sweep + DELETE endpoint can find it."""
+    client, thread_id, _, _ = audit_setup
+    response = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"PNGBYTES", "image/png")},
+    )
+    assert response.status_code == 201
+
+    images = client._transport.app.state.image_upload_store  # type: ignore[attr-defined,union-attr]
+    rows = await images.list_active_for_thread(tenant_id=_TENANT, thread_id=thread_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.size_bytes == 8
+    assert row.mime_type == "image/png"
+    assert row.deleted_at is None
+    assert row.object_key.endswith(".png")
+
+
+@pytest.mark.asyncio
+async def test_delete_image_soft_deletes_row_and_emits_audit(audit_setup: AuditSetup) -> None:
+    """``DELETE /v1/uploads/{id}`` flips ``deleted_at``, returns 204, and
+    writes an ``image:upload`` audit row tagged ``operation=soft_delete``."""
+    from helix_agent.protocol import AuditAction, AuditQuery
+
+    client, thread_id, audit_store, _ = audit_setup
+    upload = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"PNGBYTES", "image/png")},
+    )
+    assert upload.status_code == 201
+    image_ref = upload.json()["image_ref"]
+    image_id = image_ref.rsplit("/", 1)[-1].split(".", 1)[0]
+
+    response = await client.delete(f"/v1/uploads/{image_id}")
+    assert response.status_code == 204
+
+    images = client._transport.app.state.image_upload_store  # type: ignore[attr-defined,union-attr]
+    active = await images.list_active_for_thread(tenant_id=_TENANT, thread_id=thread_id)
+    assert active == []
+    raw_row = await images.get(image_id=UUID(image_id), tenant_id=_TENANT)
+    assert raw_row is not None and raw_row.deleted_at is not None
+
+    page = await audit_store.query(AuditQuery(tenant_id=_TENANT, limit=50))
+    soft_delete_rows = [
+        r
+        for r in page.entries
+        if r.action == AuditAction.IMAGE_UPLOAD and r.details.get("operation") == "soft_delete"
+    ]
+    assert len(soft_delete_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_image_404_for_unknown_id(audit_setup: AuditSetup) -> None:
+    """Unknown image_id returns 404 — same hides-cross-tenant rule."""
+    client, _, _, _ = audit_setup
+    response = await client.delete(f"/v1/uploads/{uuid4()}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_image_is_idempotent(audit_setup: AuditSetup) -> None:
+    """Second DELETE on an already soft-deleted image returns 404."""
+    client, thread_id, _, _ = audit_setup
+    upload = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"PNGBYTES", "image/png")},
+    )
+    image_ref = upload.json()["image_ref"]
+    image_id = image_ref.rsplit("/", 1)[-1].split(".", 1)[0]
+
+    first = await client.delete(f"/v1/uploads/{image_id}")
+    assert first.status_code == 204
+    second = await client.delete(f"/v1/uploads/{image_id}")
+    assert second.status_code == 404

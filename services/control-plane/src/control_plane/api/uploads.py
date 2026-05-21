@@ -32,6 +32,7 @@ from control_plane.audit import emit as audit_emit
 from control_plane.quota.base import QuotaService
 from control_plane.settings import Settings
 from helix_agent.common.observability import current_trace_id_hex
+from helix_agent.persistence.image_upload import ImageUploadStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import AuditAction, AuditResult, QuotaDimension
 from helix_agent.protocol.multimodal import ImageRef
@@ -70,10 +71,22 @@ def _get_audit(request: Request) -> AuditLogger:
     return request.app.state.audit_logger  # type: ignore[no-any-return]
 
 
-def build_uploads_router() -> APIRouter:
-    router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
+def _get_image_upload_store(request: Request) -> ImageUploadStore:
+    return request.app.state.image_upload_store  # type: ignore[no-any-return]
 
-    @router.post("/{thread_id}/uploads", response_model=None)
+
+def build_uploads_router() -> APIRouter:
+    """One router housing the J.6 upload + lifecycle endpoints.
+
+    ``POST /v1/sessions/{thread_id}/uploads`` (Stream J.6) sits under
+    the session because uploads are scoped to a thread. ``DELETE
+    /v1/uploads/{image_id}`` (Mini-ADR J-32 / J.6.补强-3) sits at the
+    top-level because the caller looks up the image by its id without
+    needing to know which thread it belonged to.
+    """
+    router = APIRouter()
+
+    @router.post("/v1/sessions/{thread_id}/uploads", response_model=None, tags=["sessions"])
     async def upload_image(
         thread_id: UUID,
         request: Request,
@@ -84,6 +97,7 @@ def build_uploads_router() -> APIRouter:
         settings: Annotated[Settings, Depends(_get_settings)],
         quota: Annotated[QuotaService, Depends(_get_quota)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        images: Annotated[ImageUploadStore, Depends(_get_image_upload_store)],
     ) -> JSONResponse:
         if store is None:
             raise HTTPException(status_code=503, detail="object store unavailable")
@@ -156,11 +170,26 @@ def build_uploads_router() -> APIRouter:
         )
         await store.put(image_ref.storage_key, raw, content_type=content_type)
 
+        # Mini-ADR J-32 (J.6.补强-3) — register the upload in the
+        # ``image_upload`` table so the lifecycle (soft-delete + retention
+        # sweep) can find it later. ``sha256`` doubles as a dedup key for
+        # ops investigations.
+        sha256_hex = hashlib.sha256(raw).hexdigest()
+        await images.insert(
+            image_id=image_ref.image_id,
+            tenant_id=tenant_id,
+            thread_id=thread_id,
+            user_id=caller_user_id,
+            object_key=image_ref.storage_key,
+            size_bytes=len(raw),
+            mime_type=content_type,
+            sha256=sha256_hex,
+        )
+
         # Mini-ADR J-31 (J.6.补强-2) — uploads emit their own audit row.
         # The audit middleware's SESSION_WRITE row covers run dispatch but
         # not image-specific metadata (size / mime / object_key / sha256),
         # which the SOC / compliance pipeline needs to trace every byte.
-        sha256_hex = hashlib.sha256(raw).hexdigest()
         principal = getattr(request.state, "principal", None)
         subject_type = (
             principal.subject_type
@@ -193,5 +222,67 @@ def build_uploads_router() -> APIRouter:
             },
         )
         return JSONResponse(status_code=201, content={"image_ref": image_ref.to_uri()})
+
+    @router.delete("/v1/uploads/{image_id}", response_model=None, tags=["uploads"])
+    async def delete_image(
+        image_id: UUID,
+        request: Request,
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        images: Annotated[ImageUploadStore, Depends(_get_image_upload_store)],
+    ) -> JSONResponse:
+        """Soft-delete an image upload.
+
+        Mini-ADR J-32 (J.6.补强-3) — flips ``image_upload.deleted_at`` so
+        the retention sweep eventually clears the object-store key.
+        The endpoint hides cross-tenant + cross-user existence behind
+        404, same J.14 rule as ``POST /uploads`` + ``POST /runs``.
+        """
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        tenant_id: UUID = request.state.tenant_id
+        row = await images.get(image_id=image_id, tenant_id=tenant_id)
+        if row is None or row.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="image not found")
+
+        # Thread ownership — re-resolve the thread to confirm caller still
+        # owns it (the row could outlive a session ownership change).
+        threads = request.app.state.thread_meta_repo
+        meta = await threads.get(row.thread_id, tenant_id=tenant_id)
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if meta is None or not caller_owns_thread(
+            meta=meta,
+            caller_user_id=caller_user_id,
+            principal=request.state.principal,
+        ):
+            raise HTTPException(status_code=404, detail="image not found")
+
+        now = _dt.now(UTC)
+        flipped = await images.soft_delete(image_id=image_id, tenant_id=tenant_id, now=now)
+        if not flipped:
+            # Race — another deleter beat us; idempotent 404.
+            raise HTTPException(status_code=404, detail="image not found")
+
+        actor_id: str = getattr(request.state, "actor_id", "anonymous")
+        await audit_emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=AuditAction.IMAGE_UPLOAD,  # same action verb; result=DENIED distinguishes
+            resource_type="image_upload",
+            resource_id=str(image_id),
+            result=AuditResult.SUCCESS,
+            reason="soft_delete",
+            trace_id=current_trace_id_hex(),
+            details={
+                "thread_id": str(row.thread_id),
+                "object_key": row.object_key,
+                "file_size_bytes": row.size_bytes,
+                "mime_type": row.mime_type,
+                "operation": "soft_delete",
+            },
+        )
+        return JSONResponse(status_code=204, content=None)
 
     return router
