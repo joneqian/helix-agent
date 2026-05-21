@@ -157,3 +157,90 @@ async def test_upload_503_when_no_object_store_configured() -> None:
             files={"file": ("photo.png", b"PNGBYTES", "image/png")},
         )
     assert response.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Mini-ADR J-30 (J.6.补强-1) — quota admission
+# ---------------------------------------------------------------------------
+
+
+async def _seed_quota_row(
+    app: object,
+    *,
+    dimension: object,
+    limit_value: int,
+    burst: int | None = None,
+) -> None:
+    """Insert one quota row for the default dev tenant."""
+    from helix_agent.protocol import TenantQuotaPatch
+
+    patch = TenantQuotaPatch(
+        dimension=dimension,  # type: ignore[arg-type]
+        scope={},
+        limit_value=limit_value,
+        burst=burst,
+    )
+    await app.state.tenant_quota_repo.upsert(  # type: ignore[attr-defined]
+        tenant_id=_TENANT, patch=patch, updated_by="test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_429_when_image_count_quota_exhausted(setup: Setup) -> None:
+    """After ``IMAGE_UPLOAD_COUNT_30D`` capacity is consumed the next
+    upload returns 429 with the dimension surfaced."""
+    from helix_agent.protocol import QuotaDimension
+
+    client, thread_id, _ = setup
+    await _seed_quota_row(
+        client._transport.app,  # type: ignore[attr-defined,union-attr]
+        dimension=QuotaDimension.IMAGE_UPLOAD_COUNT_30D,
+        limit_value=2,
+        burst=2,
+    )
+    # 2 uploads within capacity.
+    for _ in range(2):
+        response = await client.post(
+            f"/v1/sessions/{thread_id}/uploads",
+            files={"file": ("photo.png", b"PNGBYTES", "image/png")},
+        )
+        assert response.status_code == 201
+    # 3rd exceeds capacity; slow drip cannot refill in-time.
+    response = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"PNGBYTES", "image/png")},
+    )
+    assert response.status_code == 429
+    body = response.json()
+    assert body["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+    assert body["error"]["dimension"] == QuotaDimension.IMAGE_UPLOAD_COUNT_30D.value
+    assert response.headers["Retry-After"]
+
+
+@pytest.mark.asyncio
+async def test_upload_429_when_image_storage_bytes_exhausted(setup: Setup) -> None:
+    """``IMAGE_STORAGE_BYTES`` ceiling is enforced — the upload's
+    ``len(raw)`` overrides the default ``cost=1``."""
+    from helix_agent.protocol import QuotaDimension
+
+    client, thread_id, _ = setup
+    await _seed_quota_row(
+        client._transport.app,  # type: ignore[attr-defined,union-attr]
+        dimension=QuotaDimension.IMAGE_STORAGE_BYTES,
+        limit_value=12,  # below the second upload's combined cost
+        burst=None,
+    )
+    # First upload of 8 bytes leaves 4 bytes of headroom.
+    first = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"PNGBYTES", "image/png")},  # 8 bytes
+    )
+    assert first.status_code == 201
+    # Second upload of 8 bytes would push total to 16 > 12 — denied.
+    second = await client.post(
+        f"/v1/sessions/{thread_id}/uploads",
+        files={"file": ("photo.png", b"OTHERAAA", "image/png")},  # 8 bytes
+    )
+    assert second.status_code == 429
+    body = second.json()
+    assert body["error"]["dimension"] == QuotaDimension.IMAGE_STORAGE_BYTES.value

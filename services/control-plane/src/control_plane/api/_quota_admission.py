@@ -29,6 +29,7 @@ from helix_agent.protocol import (
     AuditResult,
     CheckRequest,
     CheckResult,
+    QuotaDimension,
 )
 from helix_agent.runtime.audit.logger import AuditLogger
 
@@ -43,6 +44,8 @@ async def check_admission(
     actor_id: str,
     agent: str | None,
     resource_kind: str,
+    cost: int = 1,
+    cost_overrides: dict[QuotaDimension, int] | None = None,
 ) -> JSONResponse | None:
     """Run a quota ``check`` for the call and, on denial, return the 429.
 
@@ -52,9 +55,20 @@ async def check_admission(
 
     ``resource_kind`` lands on the audit row as ``resource_type`` so
     SOC / dashboard pipelines can split rate-limit denials by
-    consuming surface (``session`` vs ``run``).
+    consuming surface (``session`` vs ``run`` vs ``image_upload``).
+
+    ``cost_overrides`` (Mini-ADR J-30, J.6.补强-1) lets the caller pass
+    a per-dimension cost — the upload endpoint uses it to subtract
+    ``file_size`` bytes from ``IMAGE_STORAGE_BYTES`` while keeping the
+    default ``cost=1`` for QPS / count dimensions.
     """
-    result: CheckResult = await quota.check(CheckRequest(tenant_id=tenant_id, agent=agent, cost=1))
+    request = CheckRequest(
+        tenant_id=tenant_id,
+        agent=agent,
+        cost=cost,
+        cost_overrides=dict(cost_overrides) if cost_overrides else {},
+    )
+    result: CheckResult = await quota.check(request)
     if result.allowed:
         return None
 
