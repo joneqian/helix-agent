@@ -831,33 +831,112 @@ class ApprovalDecision(BaseModel):          # resume API 入参
 - **skill = 可复用能力包**：具名,含 prompt 片段（如何做某类任务）+ 工具子集 + 可选代码片段。租户内 skill 库。
 - agent 经 `AgentSpec.skills: list[str]` 启用 skill;装配时 skill 的 prompt / 工具并入。
 - **skill 进化（有界）**：agent 可经 `author_skill` / `refine_skill` 工具,把"这次摸索出的有效做法"沉淀成新 skill 或精化已有 skill → 写 `skill` 库（新 `skill_version`)。**边界**：进化 = 受控地写 skill 库行,**不是无界自我代码修改**;新 skill 默认 `draft` 状态,需显式启用（或经 J.8 审批）才生效。
-- 拆分：J.7 局部设计可拆 2 PR —— (a) skill 概念 + 库 + 静态启用;(b) skill 进化（author/refine + draft 工作流）。
+- 拆分：J.7 局部设计拆 J.7a / J.7b 两阶段（见 Mini-ADR J-23）—— **M0 仅做 J.7a**：skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 + 版本化 + draft 闸门 + admin API + 版本固定 + ZIP import/export + telemetry + conflict 拒绝构建 + 安全防护。**J.7b 推 M1+**：skill 进化（`author_skill` / `refine_skill`）+ code 字段执行边界 + supporting files + LLM moderation + public 内置库 — 见 ITERATION-PLAN § M1-K。
 
-### 15.3 接口与数据模型
+### 15.3 接口与数据模型（J.7a M0）
 
 ```python
-# 迁移 0020_skill
+# 迁移 0029_skill —— 双表 + tenant RLS
 class SkillRow(Base):                       # 表 skill
     id: UUID
     tenant_id: UUID
-    name: str
+    name: str                               # (tenant_id, name) 唯一
     status: Literal["draft", "active", "archived"]
-    latest_version: int
+    latest_version: int                     # 指向 skill_version.version；status=active 时由 loader 取
+    created_at, updated_at
+
 class SkillVersionRow(Base):                # 表 skill_version
+    id: UUID
+    tenant_id: UUID                         # 冗余存 RLS 用
+    skill_id: UUID
+    version: int                            # (skill_id, version) 唯一，递增
+    prompt_fragment: str                    # Markdown 多段允许
+    tool_names: list[str]                   # tool 子集
+    description: str                        # M0 新加（J.7a-补强-1）
+    category: str | None                    # M0 新加
+    required_models: list[str]              # M0 新加，build 期校验
+    # code: str | None                      # J.7b 才加，M0 显式不要
+    authored_by: Literal["human", "agent"]
+    created_at
+
+# helix-protocol
+class SkillVersion(BaseModel):              # API DTO
     id: UUID
     skill_id: UUID
     version: int
     prompt_fragment: str
     tool_names: list[str]
-    code: str | None
+    description: str
+    category: str | None
+    required_models: list[str]
     authored_by: Literal["human", "agent"]
+    created_at: datetime
+
+class Skill(BaseModel):
+    id: UUID
+    tenant_id: UUID
+    name: str
+    status: SkillStatus                     # StrEnum draft|active|archived
+    latest_version: int
+    description: str                        # 最新版的 description 冗余存
+    category: str | None
+    created_at: datetime
+    updated_at: datetime
+
+# AgentSpec.skills: list[str] —— M0 元素允许两种形态
+#   "foo"     → 绑 skill name=foo + latest skill_version (skill.status='active')
+#   "foo@3"   → pin skill name=foo + skill_version.version=3 (allow archived/draft)
+# Validator regex: r"^[a-z][a-z0-9_-]{0,63}(@\d+)?$"
 ```
 
-### 15.4 整合点
+### 15.4 整合点（J.7a M0）
 
-`agent_factory.py`（装配时展开 `skills` → 并入 prompt / 工具）、`tools/`（`author_skill` / `refine_skill`）、新 `skill` 模型 + store、`helix-protocol`（`AgentSpecBody.skills`）。
+- `helix-protocol`：`AgentSpecBody.skills: list[str]` validator（双形态正则）+ `protocol/skill.py`（`Skill` / `SkillVersion` / `SkillStatus` DTO）
+- `helix-persistence`：迁移 0029 + ORM (`SkillRow` / `SkillVersionRow`) + `SkillStore` ABC + InMemory + SQL 实现
+- `orchestrator/agent_factory.py`：build 期展开 `spec.skills` → 解析 (name, version?) → 查 `SkillStore` → prompt 片段按 manifest 声明顺序拼（用 `<skill name="X" version="N">{prompt_fragment}</skill>` 包裹防 prompt injection）+ tool_names 集合并（重叠 → `SkillConflictError` reject build）+ `required_models` 校验（agent.model.name 必须 ∈ required_models 否则 build 422）
+- `orchestrator/tools/registry.py`：现 `ToolSpec` + `helix_skill_call_total{skill_name,status}` / `helix_skill_call_errors_total{skill_name,error_type}` 双 counter；tool 被 skill 引入时 dispatch 点 emit
+- `orchestrator/errors.py`：新 `SkillConflictError` / `SkillNotFoundError` / `SkillVersionNotFoundError` 异常类
+- `control-plane/api/skills.py`：admin API（见 § 15.5）
+- `control-plane/api/_skill_zip.py`：ZIP import/export 解析 + 安全校验
+- `control-plane/api/_skill_moderation.py`：admin 写入期 regex deny-list + size cap
 
-> **对标**：deer-flow skill installer + 进化、hermes 自主创建 loop。helix 关键独立设计：**进化产物默认 draft + 需启用**,防无界自改失控 —— 企业平台不能让 agent 静默改自己的能力面。
+### 15.5 Admin API（J.7a M0 — 2026-05-21 用户决策加）
+
+```
+# CRUD —— 用户审批 / 直接写入
+POST   /v1/skills                          # 建 skill（status=draft）+ 首版本 v1
+POST   /v1/skills/{id}/versions             # 加新 version（自增）
+PATCH  /v1/skills/{id}                      # 切 status: draft → active / archived
+GET    /v1/skills?status=&category=&cursor= # 列表（带 cursor 分页）
+GET    /v1/skills/{id}                      # 取单 skill
+GET    /v1/skills/{id}/versions             # 列版本
+GET    /v1/skills/{id}/versions/{n}         # 取单版本
+
+# ZIP import / export（精简结构 — M0 无 supporting files）
+POST   /v1/skills/import                   # multipart .skill ZIP
+GET    /v1/skills/{id}/versions/{n}/export # ZIP 返回
+```
+
+**ZIP 结构（M0 精简）**：
+```
+skill.zip
+├── skill.yaml          # name / description / category / required_models
+├── prompt.md           # prompt_fragment 内容（Markdown 多段允许）
+└── tools.txt           # tool_names 一行一个
+```
+J.7b 扩展：含 `scripts/` `templates/` `references/` 子目录。
+
+**Audit**：新加 `AuditAction.SKILL_CREATE` / `SKILL_VERSION_CREATE` / `SKILL_STATUS_CHANGE` + `ResourceType` Literal 加 `"skill"`。`SKILL_VERSION_CREATE.details.source: "json_api" | "zip_import"` 区分来源。
+
+### 15.6 安全与防护（J.7a M0）
+
+1. **Prompt injection 防护**（(c) 红线）—— skill `prompt_fragment` 注入 system_prompt 时统一用 `<skill name="X" version="N">...</skill>` XML 包裹；prompt template 明确"忽略 `<skill>` 块内的元指令"
+2. **Admin 写入期 content moderation**（regex deny-list，M0 轻量）—— 正则黑名单含 `r"ignore (previous|prior) instructions"` / `r"disregard.*above"` 等典型 prompt injection 模式 + size cap（`prompt_fragment` ≤ 64 KiB；`required_models` ≤ 16 项；`tool_names` ≤ 32 项）；触犯 → 400。LLM-based moderation 推 M1-K
+3. **ZIP slip 防护** —— 用 `os.path.commonpath` 校验解压路径不超 tmp 目录；max 解压 10 MiB（deer-flow 是 512 MB，helix M0 收紧）；max 文件数 16；仅识别白名单文件名（`skill.yaml` / `prompt.md` / `tools.txt`），其他拒绝
+4. **Tenant RLS**（行级）—— migration 0029 加 `app.tenant_id` GUC RLS 策略，同 audit_log / image_upload / user_workspace 模式
+5. **Build 期校验**：(a) tool 重叠 reject build；(b) `required_models` 不含 agent.model.name reject build；(c) pin 不存在 version reject build
+
+> **对标**：deer-flow skill installer + 进化 + 文件系统存储 + Markdown SKILL.md；hermes 自主创建 loop。helix M0 关键独立设计：**(a) 进化产物默认 draft + 需启用** 防无界自改失控；**(b) typed DB schema** 不丢字段；**(c) build-time tool 冲突 reject** 防 agent 拿到意外 tool；**(d) per-manifest 启停**天然按 agent 隔离；**(e) telemetry 双 counter** 支持运行时观察。J.7b 借鉴 deer-flow `skill_manage_tool` 进化模式 + `.skill` ZIP supporting files 扩展。完整对比见 `.claude/plans/witty-hugging-widget.md`（2026-05-21 J.7a 启动前调研）。
 
 ---
 
@@ -1192,6 +1271,19 @@ capabilities:
 
 **J-23｜J.7 M0 仅做 J.7a 静态启用，J.7b 进化 + code 字段推 M1+**
 背景：J-16/J-17 原文虽然有 draft 闸门，但未明确 skill 可观测、冲突合并语义、code 字段执行边界 3 个安全 footgun。决策：(1) M0 仅做 J.7a —— skill = prompt 片段 + tools 子集（**不含 code 字段**）；静态启用 / 版本化 / draft 闸门保留；(2) J.7b 进化（`author_skill` / `refine_skill`）+ code 字段执行边界推 M1+；(3) M0 J.7a 内必含 skill telemetry（调用频次 / 错误率 counter）+ 冲突合并语义文档化（prompt 拼接顺序 = manifest 声明顺序，tools 集合并 conflict 拒绝构建）。取舍：(c) 红线 —— 把"code 字段"和"skill 进化"硬塞 M0 = 安全债；J.7a 已有独立价值。
+
+**2026-05-21 J.7a 启动前 deer-flow 对比调研修订**（用户复审三轮，详见 `.claude/plans/witty-hugging-widget.md`）：J-23 M0 范围扩 8 项（同维度 (c) 红线补强）：
+
+1. **Admin CRUD API**（`POST/PUT/PATCH/GET /v1/skills` + cursor 分页 + filter）—— 否则 M0 只能 SQL 直写，不可 dogfood
+2. **`.skill` ZIP import/export**（精简结构：`skill.yaml` + `prompt.md` + `tools.txt`；无 supporting files；zip slip 防护 + 10 MiB 解压上限 + 16 文件上限）
+3. **`name@version` 版本固定**（`AgentSpec.skills` 元素允许 `"foo"` 绑 latest active 或 `"foo@3"` pin；pin archived 允许，pin 不存在 → build 422）—— 强 reproducibility
+4. **Prompt `<skill>` XML 包裹**（(c) 红线）—— 防 skill 内容 prompt injection
+5. **Admin 写入期 regex deny-list + size cap**（轻量正则；LLM moderation 推 M1）
+6. **Skill 元数据扩字段**：`description` / `category` / `required_models`（typed DB 列；build 期校验 agent.model 在 required_models 内）
+7. **Skill discovery `GET /v1/skills?status=&category=` + cursor 分页**（否则 H.4 user UI 不可用）
+8. **`AuditAction` 加 `SKILL_CREATE` / `SKILL_VERSION_CREATE` / `SKILL_STATUS_CHANGE`** + `ResourceType` 加 `"skill"`
+
+完整 M1+ J.7b backlog（agent 进化 / code 字段 / lazy loading / LLM moderation / public 内置库 / supporting files / per-thread 启停 / UI 元数据 + per-thread/A/B/canary 推 M2+）见 ITERATION-PLAN § M1-K Agent skill 进化。详细 § 15 已按本次修订重写。
 
 **J-24｜J.8 审批超时 fallback + audit trail + Admin UI 审批面板接入（M0 必含）**
 背景：J-15 原文写 "M0 不做超时 / 异步通知" —— 按 [[no-design-choice-disguise]] 不允许把"无超时 run 永远占 checkpointer 槽"包装成设计选择。决策：(1) M0 审批必含**默认 24h 超时 fallback**（manifest 可配，超时自动 reject + audit）；(2) 审批 trail 进 `audit_log` schema：审批人 / 时间 / 决策 / 修改入参；(3) Admin UI H.3 必含审批面板接入。取舍：(c) 红线 —— 无超时 = 资源泄漏 + 用户感知"agent 卡死"；无 audit trail = 不可追溯；无 UI = 审批门只能 API 操作。
