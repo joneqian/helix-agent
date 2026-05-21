@@ -24,9 +24,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from helix_agent.persistence.image_upload import ImageUploadStore
+from helix_agent.runtime.storage import ObjectStore
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,10 @@ class CleanupReport:
     audit_skipped_unacked: int = 0
     event_deleted: int = 0
     jwt_blacklist_deleted: int = 0
+    # Mini-ADR J-32 (J.6.补强-3b) — image lifecycle hard-delete counts.
+    image_uploads_hard_deleted: int = 0
+    image_object_keys_removed: int = 0
+    image_object_keys_failed: int = 0
     duration_seconds: float = 0.0
     # Per-tenant breakdown of audit deletes (for observability).
     audit_deleted_by_tenant: dict[str, int] = field(default_factory=dict)
@@ -63,15 +71,24 @@ class RetentionCleanupJob:
         *,
         db_session_factory: async_sessionmaker[AsyncSession],
         batch_size: int = 10000,
+        image_upload_store: ImageUploadStore | None = None,
+        object_store: ObjectStore | None = None,
+        image_retention_days: int = 90,
     ) -> None:
         if batch_size <= 0:
             msg = "batch_size must be positive"
             raise ValueError(msg)
+        if image_retention_days < 1:
+            msg = "image_retention_days must be >= 1"
+            raise ValueError(msg)
         self._sf = db_session_factory
         self._batch_size = batch_size
+        self._image_upload_store = image_upload_store
+        self._object_store = object_store
+        self._image_retention_days = image_retention_days
 
     async def run_once(self) -> CleanupReport:
-        """Run the three retention passes once and return a tally.
+        """Run the retention passes once and return a tally.
 
         Each pass owns its own session + transaction so the
         ``SET LOCAL ROLE`` is re-issued cleanly per pass. Sharing one
@@ -79,12 +96,19 @@ class RetentionCleanupJob:
         ``permission denied`` failures on later DELETEs in CI even
         though the role had the grants — the per-pass isolation
         avoids whatever cross-statement state interaction caused that.
+
+        Mini-ADR J-32 (J.6.补强-3b) — the image-upload pass runs when
+        both an :class:`ImageUploadStore` and an :class:`ObjectStore`
+        are wired; otherwise it's a no-op (the audit / event / jwt
+        passes still run, so unit tests that don't care about images
+        keep working).
         """
         started = time.monotonic()
         audit_deleted, audit_by_tenant = await self._delete_audit_log()
         audit_skipped = await self._count_unacked_past_retention()
         event_deleted = await self._delete_event_log()
         jwt_deleted = await self._delete_expired_jwt_blacklist()
+        image_rows, image_keys_ok, image_keys_failed = await self._delete_expired_images()
 
         return CleanupReport(
             audit_deleted=audit_deleted,
@@ -92,8 +116,55 @@ class RetentionCleanupJob:
             audit_deleted_by_tenant=audit_by_tenant,
             event_deleted=event_deleted,
             jwt_blacklist_deleted=jwt_deleted,
+            image_uploads_hard_deleted=image_rows,
+            image_object_keys_removed=image_keys_ok,
+            image_object_keys_failed=image_keys_failed,
             duration_seconds=time.monotonic() - started,
         )
+
+    async def _delete_expired_images(self) -> tuple[int, int, int]:
+        """Remove image rows past their retention window + their bytes.
+
+        Mini-ADR J-32 — finds ``image_upload`` rows whose ``created_at``
+        is older than ``now - image_retention_days`` (regardless of
+        ``deleted_at`` state — both never-deleted-but-old and
+        already-soft-deleted rows leave at the same horizon), removes
+        the object-store key for each, and hard-deletes the row.
+
+        Object-store failures don't block row hard-delete: an orphaned
+        key is a far smaller correctness problem than a stuck row
+        whose key never goes away (the bytes are billed against
+        ``IMAGE_STORAGE_BYTES``). The failure count lands in the report
+        so SRE can investigate without the sweep stalling.
+
+        Returns ``(rows_deleted, keys_removed, keys_failed)``. Returns
+        ``(0, 0, 0)`` when either store is missing (unit-test path).
+        """
+        if self._image_upload_store is None or self._object_store is None:
+            return 0, 0, 0
+        cutoff = datetime.now(UTC) - timedelta(days=self._image_retention_days)
+        expired = await self._image_upload_store.list_expired(
+            before=cutoff,
+            limit=self._batch_size,
+        )
+        if not expired:
+            return 0, 0, 0
+        keys_ok = 0
+        keys_failed = 0
+        for row in expired:
+            try:
+                await self._object_store.delete(row.object_key)
+                keys_ok += 1
+            except Exception:
+                keys_failed += 1
+                logger.exception(
+                    "retention.image_object_delete_failed key=%s",
+                    row.object_key,
+                )
+        rows = await self._image_upload_store.hard_delete(
+            image_ids=[r.id for r in expired],
+        )
+        return rows, keys_ok, keys_failed
 
     # ------------------------------------------------------------------
     # Per-table helpers (private). Each opens its own session + txn,

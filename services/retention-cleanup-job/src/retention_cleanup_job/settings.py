@@ -6,6 +6,8 @@ Defaults aimed at local docker-compose; connect direct to Postgres
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,3 +33,21 @@ class RetentionCleanupSettings(BaseSettings):
     # doesn't take an autovacuum-blocking lock for too long; with
     # ``WHERE`` predicates each DELETE is plan-time pruned.
     batch_size: int = Field(default=10000, gt=0, le=1000000)
+
+    # --------------------------------------------------- image retention (Mini-ADR J-32)
+    # Image lifecycle hard-delete window. Rows in ``image_upload`` with
+    # ``created_at < now() - image_retention_days`` get their object
+    # store key removed + the row hard-deleted. M0 has no per-tenant
+    # override; tenants needing longer retention set the env var.
+    image_retention_days: int = Field(default=90, ge=1, le=3650)
+
+    # Object-store backend that owns the uploaded image bytes. ``memory``
+    # (default) skips the image pass — useful for unit-tested local cron
+    # ticks and for envs that haven't deployed J.6 yet. ``s3-compatible``
+    # points at the same MinIO / OSS / S3 bucket the control-plane writes.
+    object_store_backend: Literal["memory", "s3-compatible"] = "memory"
+    object_store_endpoint_url: str | None = None
+    object_store_region: str = "us-east-1"
+    object_store_bucket: str = "helix-agent"
+    object_store_access_key: str | None = None
+    object_store_secret_key: str | None = None
