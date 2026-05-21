@@ -374,19 +374,25 @@ class MemorySpec(BaseModel):                # 扩充现有 AgentSpecBody.memory
 
 ## 9. J.15 — 有状态 per-user 执行环境
 
-### 9.1 现状（2026-05-20 设计 PR 修订）
+### 9.1 现状（2026-05-21 J.15 收尾 — M0 全交付）
 
 **已落地（M0 内已交付）**：
-- ✅ **热会话 + TTL reaper**（Mini-ADR J-10）：`supervisor.acquire(user_id)` 取/建 per-`(tenant,user)` 会话；`release` 对会话沙盒 = no-op 留热（对无 user_id 临时沙盒销毁）；`exec` 刷新 `last_used_at`；reaper 按 `last_used_at + session_idle_ttl_s`（默认 15min）回收（`supervisor.py:119-291` + `reaper.py:39-58` + `store.py:92-126`）
-- ✅ **持久卷创建 + 登记**：`user_workspace` 表 + `sandbox_instance.user_id / workspace_id`（迁移 0018）+ `sandbox_instance.last_used_at`（迁移 0020）；runtime_provider 用 `--volume {workspace_volume}:/workspace` 挂载（`runtime_provider.py:109-122`）；首次 acquire 自动创建卷
-- ✅ **per-session 锁 + held-pipe**：同会话并发 exec 经 `asyncio.Lock` 串行化（`supervisor.py:211-218`）；held-pipe 一容器多 exec 协议完整
+- ✅ **热会话 + TTL reaper**（Mini-ADR J-10）：`supervisor.acquire(user_id)` 取/建 per-`(tenant,user)` 会话；`release` 对会话沙盒 = no-op 留热；`exec` 刷新 `last_used_at`；reaper 按 `last_used_at + session_idle_ttl_s`（默认 15min）回收（`supervisor.py:119-291` + `reaper.py:39-58` + `store.py:92-126`）
+- ✅ **持久卷创建 + 登记**：`user_workspace` 表 + `sandbox_instance.user_id / workspace_id`（迁移 0018）+ `sandbox_instance.last_used_at`（迁移 0020）；runtime_provider 用 `--volume {workspace_volume}:/workspace` 挂载；首次 acquire 自动创建卷
+- ✅ **per-session 锁 + held-pipe**：同会话并发 exec 经 `asyncio.Lock` 串行化；held-pipe 一容器多 exec 协议完整
+- ✅ **Volume quota 准入**（J.15-补强-1 / Mini-ADR J-29 第 1 项 / PR #211）：迁移 0026 加 `size_limit_bytes` 列（默认 10 GiB）；`quota_enforcer.py` 预检 + release 后异步对账；超 quota → HTTP 429；audit `WORKSPACE_QUOTA_DENIED`
+- ✅ **Volume lifecycle 状态机 第 1→2 档**（J.15-补强-1 / Mini-ADR J-36 / PR #211）：`mark_workspace_deleted` 公共 API soft-delete + 强销毁 warm session；soft-deleted 卷 acquire → HTTP 410 Gone；迁移 0026 加 `deleted_at` + `archived_object_key` + CHECK invariant + partial index
+- ✅ **Volume lifecycle 状态机 第 2→3 档物理回收**（J.15-补强-2 / PR #212）：`lifecycle.py:VolumeLifecycleManager.archive_pending` 扫 list_pending_archive → `DockerClient.archive_volume` tar.gz → ObjectStore put → `mark_archived` → `remove_volume`；reaper 每 tick 触发
+- ✅ **Daily backup pipeline**（J.15-补强-2 / Mini-ADR J-29 第 2 项 / PR #212）：app.py lifespan 起 `_run_daily_backup` 任务循环到 `workspace_backup_hour`（默认 03:00 UTC）→ `lifecycle.backup_active(now=date)` 扫 `list_active` → 每卷写 ObjectStore key `volume-backups/{tenant}/{user}/{YYYY-MM-DD}/{volume_name}.tar.gz`；rolling window 7 天
+- ✅ **DLQ retry (K7 模式)**（J.15-补强-2 / PR #212）：迁移 0027 `volume_backup_dlq` 表 + `VolumeBackupDLQ` ABC + SQL/In-Memory 实现；reaper 每 tick `drain_dlq(limit=16)`；backoff 1m → 5m → 30m → 2h → 6h → dead-letter 365d
+- ✅ **At-rest 加密文档化**（J.15-补强-2 / Mini-ADR J-29 第 3 项 / PR #212）：`docs/runbooks/deployment.md` 新增 "Volume at-rest encryption" 章节锁定阿里云 ECS 数据盘加密 / 自托管 LUKS / macOS FileVault 强约束 + 部署 checklist
+- ✅ **Restore 演练能力**（J.15-补强-2 / PR #212）：`tools/persistence/restore_volume.py` 库 + CLI（优先 J-36 archive，次选 J-29 daily）+ `docs/runbooks/volume-restore.md` operator 手册（pre-flight / find artifact / 跑 script / 验证 / 升级 SQL / failure modes）
 
-**未落地（本设计 PR 锚定 M0 补强清单）**：
-- ❌ **Volume quota 准入**（J-29 第 1 项）：`user_workspace.size_bytes` 字段有记录但 supervisor 写文件前无 enforcement；单用户能爆磁盘
-- ❌ **Volume backup pipeline**（J-29 第 2 项）：daily rsync 到对象存储 + 7 天保留 + restore runbook 全无；卷数据无 DR 路径
-- ❌ **At-rest 加密文档化**（J-29 第 3 项）：宿主机 LUKS / 云厂托管磁盘加密的依赖关系未文档化（落实 P0 #9）
-- ❌ **Volume lifecycle / 销毁**（新 Mini-ADR J-36）：用户软删除 / `user_workspace` 整 row 删除时无级联卷归档 → hard delete 流程
-- (b) 跨 host 调度 → 推 M1-A（与 sandbox warm pool 同期）
+**显式推 M1（按 [memory:no-design-choice-disguise] 不允许"软推迟"）**：
+- 跨 host 调度 → M1-A（与 sandbox warm pool 同期）
+- 90 天 archive hard-delete（retention-cleanup-job 加 volume 维度）→ M1
+- Recovery API（un-soft-delete workspace）→ M1
+- Multipart streaming `ObjectStore.put`（M0 单批 in-mem 1.5 GiB cap 够用）→ M1
 
 历史背景：沙盒 per-run 临时无状态（Mini-ADR F-2）的设计已被 J.15 的"per-user 持久卷 + 热沙盒会话"取代；无 `user_id` 的 run 仍走 tmpfs 临时沙盒兼容（见 § 9.2）。
 

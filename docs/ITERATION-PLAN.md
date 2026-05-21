@@ -446,11 +446,12 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] **J.12 学习 / 反馈闭环** — 把 L7 trajectory ObjectStore + G.6 feedback → 策划 `eval_dataset` 表（与 J.13 共用）；不含训练 / 微调（推 M2+）。**2026-05-20 修订（Mini-ADR J-27）**：与 L7 trajectory 分工修剪 —— J.12 不再写 `trajectory` PG 表（L7 ObjectStore 已是底座），middleware 改为"读 L7 + 关联 feedback → 策划"。STREAM-J-DESIGN § 17 + Mini-ADR J-19 / J-27
 - [ ] **J.13a 逐能力 eval 场景集（M0）** — J.1-J.14 各一套 eval 场景；锁定 canonical agent baseline 作为 Stream M Gate 锚点；`eval_dataset` 表 J.12 / J.13 共用。**2026-05-20 修订（Mini-ADR J-28）**：J.13 拆 3 子项，**M0 仅交付 J.13a**；~~J.13b 在线采样 + LLM-judge 配额 + budget cap~~ → M1 早期 / 并入 M2-D；~~J.13c CI 回归门 + flakiness 缓解~~ → M1 早期 / 并入 M2-D。STREAM-J-DESIGN § 18 + Mini-ADR J-20 / J-28
 - [x] **J.14 租户内 per-user 隔离** — `(tenant_id, user_id)` 复合 scope;thread / 长期记忆 / 工作区按用户隔离(多租户深化,Stream C 性质)。PR1:`tenant_user` 注册表(迁移 0015)+ `TenantUserStore` + `thread_meta.user_id`;PR2:control-plane 接入 —— 会话创建 stamp `user_id`、读 / run / 状态流转的用户所有权强制隔离(`caller_owns_thread`,admin 旁路、机器主体租户级)。STREAM-J-DESIGN § 4。
-- [~] **J.15 有状态 per-user 执行环境** — **主体已落地（已纠正状态）**：docker named volume per user + 热沙盒会话 + 空闲 TTL reaper（default 15min）+ restore = 冷启动挂暖卷；不走 CRIU（held-pipe 限制）。supervisor.py + reaper.py + 迁移 0018/0020 已交付。**2026-05-20 设计 PR 修订（STREAM-J-DESIGN § 9.5 + Mini-ADR J-36 lifecycle）**：剩 4 项 M0 补强 → 2 实施 PR：
-  - [x] **J.15-补强-1** Volume quota enforcement + soft-delete lifecycle 状态（迁移 0026 + `quota_enforcer.py` + `mark_workspace_deleted` API + audit + 429/410 HTTP；PR #211 已合 2026-05-21）
-  - [ ] **J.15-补强-2** Volume archive + daily backup pipeline + at-rest 加密文档化（`lifecycle.py` archive_pending + backup_active + DLQ retry + `tools/persistence/restore_volume.py` + `docs/runbooks/volume-restore.md` + `deployment.md` at-rest 加密章节；迁移 0027 `volume_backup_dlq`；不开新服务，复用 supervisor reaper + lifespan）
-  - 跨 host 调度 (b) 推 M1-A（与 sandbox warm pool 同期）
-  - STREAM-J-DESIGN § 9 + § 9.5 + Mini-ADR J-9 / J-10 / J-29 / J-36
+- [x] **J.15 有状态 per-user 执行环境** — docker named volume per user + 热沙盒会话 + 空闲 TTL reaper（default 15min）+ restore = 冷启动挂暖卷；不走 CRIU（held-pipe 限制）。生产级数据保护三维全到位：quota / lifecycle / archive / daily backup / at-rest 加密文档化。STREAM-J-DESIGN § 9 + § 9.5 + Mini-ADR J-9 / J-10 / J-29 / J-36。**2026-05-21 完成（4 PR）**：
+  - [x] **设计 PR** #210 — § 9 修订 + § 9.5 J-29 + J-36 详化
+  - [x] **J.15-补强-1** #211 — Volume quota enforcement + soft-delete 状态机（迁移 0026 + `quota_enforcer.py` + `mark_workspace_deleted` API + audit + 429/410 HTTP）
+  - [x] **J.15-补强-2** #212 — Volume archive + daily backup + at-rest 加密文档（迁移 0027 DLQ + `lifecycle.py` archive/backup/drain_dlq + `DockerClient.archive_volume/remove_volume` + lifespan daily backup task + `tools/persistence/restore_volume.py` + `docs/runbooks/volume-restore.md` + `deployment.md` at-rest 加密章节）
+  - **零债 6 条核验 ✅**：(1) 代码干净（无 TODO/FIXME/XXX）/ (2) 测试达标（103 个新单测 +设计 PR / 补强-1 70 / 补强-2 40）/ (3) 文档同步（STREAM-J-DESIGN § 9 / § 9.5 / Mini-ADR J-29/J-36 与代码一致）/ (4) 可观测齐全（4 个 audit action：`WORKSPACE_QUOTA_DENIED` / `_SOFT_DELETE` / `_ARCHIVE` / `_BACKUP` 入 audit_log）/ (5) CI 全绿（#210-#212 各自 8/8）/ (6) bug 不遗留（K7 backoff 模式复用 / 设计 PR + 补强 PR 一线对齐）
+  - **(a) 显式推 M1**：跨 host 调度（与 M1-A sandbox warm pool 同期）/ 90 天 archive hard-delete（retention-cleanup 加 volume 维度）/ recovery API（un-soft-delete workspace）/ multipart streaming ObjectStore.put（M0 单批 in-mem 1.5 GiB cap 够用）
 
 **Stream J Verification**：每子项接入 live agent 路径、单测 + 集成测试 80% 覆盖；26 维能力矩阵无"缺失 / 骨架"遗留（eval 按 J.13 结论）；canonical per-user 持久 agent 端到端跑通。
 
