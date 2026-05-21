@@ -1,0 +1,111 @@
+# J.15 persistent volume — M0 baseline dataset (Stream J.13a).
+#
+# 11 cases drive InMemoryUserWorkspaceStore + QuotaEnforcer through the
+# Mini-ADR J-29 / J-36 state machine:
+#   - 6 lifecycle (resolve / soft_delete / mark_archived + state-machine
+#     guard)
+#   - 2 listing (list_pending_archive / list_active)
+#   - 3 quota (passes / rejects-over-limit / rejects-soft-deleted)
+#
+# Threshold pass-rate ≥ 0.90 (§ 18.3). Real cross-host scheduling +
+# 90-day hard-delete are M1 (Mini-ADR J-29 (4) / ITERATION-PLAN J.15
+# closeout deferrals).
+
+name: persistent_volume-m0-baseline
+
+cases:
+  # ---------- lifecycle (6) ----------
+  - id: lifecycle-001-resolve-creates-active
+    setup: []
+    test_action: resolve
+    expected_outcome: ok
+    expected:
+      deleted_at_is_none: true
+
+  - id: lifecycle-002-resolve-existing-idempotent
+    setup:
+      - action: resolve
+    test_action: resolve
+    expected_outcome: ok
+    expected:
+      deleted_at_is_none: true
+
+  - id: lifecycle-003-soft-delete-sets-flag
+    setup:
+      - action: resolve
+    test_action: soft_delete
+    expected_outcome: ok
+    expected:
+      deleted_at_is_none: false
+
+  - id: lifecycle-004-soft-delete-idempotent
+    setup:
+      - action: resolve
+      - action: soft_delete
+    test_action: soft_delete
+    expected_outcome: ok
+    expected:
+      deleted_at_is_none: false
+
+  - id: lifecycle-005-mark-archived-requires-soft-delete
+    # State-machine invariant — cannot archive an active workspace.
+    setup:
+      - action: resolve
+    test_action: mark_archived
+    expected_outcome: error_state_invariant
+
+  - id: lifecycle-006-mark-archived-after-soft-delete
+    setup:
+      - action: resolve
+      - action: soft_delete
+    test_action: mark_archived
+    test_args:
+      archived_object_key: "tenant/archives/2026-05-21/ws.tar.gz"
+    expected_outcome: ok
+    expected:
+      archived_object_key_is_set: true
+
+  # ---------- listing (2) ----------
+  - id: list-001-pending-archive-shows-soft-deleted-only
+    setup:
+      - action: resolve
+      - action: soft_delete
+    test_action: list_pending_archive
+    expected_outcome: ok
+    expected:
+      list_length: 1
+
+  - id: list-002-active-excludes-soft-deleted
+    setup:
+      - action: resolve
+      - action: soft_delete
+    test_action: list_active
+    expected_outcome: ok
+    expected:
+      list_length: 0
+
+  # ---------- quota (3) ----------
+  - id: quota-001-passes-active-under-limit
+    setup:
+      - action: resolve
+    test_action: quota_check
+    test_args:
+      override_size_bytes: 0
+      override_size_limit_bytes: 1073741824  # 1 GiB
+    expected_outcome: ok
+
+  - id: quota-002-rejects-over-limit
+    setup:
+      - action: resolve
+    test_action: quota_check
+    test_args:
+      override_size_bytes: 2147483648  # 2 GiB
+      override_size_limit_bytes: 1073741824  # 1 GiB
+    expected_outcome: error_quota_exceeded
+
+  - id: quota-003-rejects-soft-deleted
+    setup:
+      - action: resolve
+      - action: soft_delete
+    test_action: quota_check
+    expected_outcome: error_workspace_deleted

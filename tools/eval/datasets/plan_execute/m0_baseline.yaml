@@ -1,0 +1,249 @@
+# J.1 plan_execute — M0 baseline dataset (Stream J.13a).
+#
+# 20 cases driving parse_plan() against pre-recorded planner LLM replies.
+# Two metric axes:
+#   - structural pass-rate: goal contains every expected_goal_keyword AND
+#     plan has >= min_steps. Even fallback (single-step) plans must clear
+#     this bar.
+#   - judge mean: mock_judge_score from ScriptedJudge (Mini-ADR J-39 — CI
+#     path); real Haiku weekly run swaps in AnthropicHaikuJudge via
+#     make_judge_from_env().
+#
+# Score distribution: 12*5 + 6*4 + 2*3 = 90 / 20 = 4.5  (≥ threshold 4.0).
+
+name: plan_execute-m0-baseline
+
+cases:
+  # ---------- well-formed plans (score 5) ----------
+  - id: plan-001-todo-cli
+    task: Implement a TODO list CLI in Python
+    llm_reply: |
+      {"goal": "Build a TODO list CLI in Python",
+       "steps": ["Parse command-line arguments",
+                 "Persist tasks to a JSON file",
+                 "Render the task list to stdout"]}
+    expected_goal_keywords: [TODO, CLI]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-002-refactor-auth
+    task: Refactor the auth middleware to split JWT and API key paths
+    llm_reply: |
+      {"goal": "Refactor auth middleware to split JWT and API key paths",
+       "steps": ["Audit current middleware for shared code",
+                 "Extract JWT verifier into a dedicated module",
+                 "Extract API key verifier into a dedicated module",
+                 "Wire both into the FastAPI dependency tree",
+                 "Update tests for the split"]}
+    expected_goal_keywords: [Refactor, auth, JWT]
+    min_steps: 4
+    mock_judge_score: 5
+
+  - id: plan-003-translate
+    task: Translate the project README to Japanese
+    llm_reply: |
+      {"goal": "Translate the project README to Japanese",
+       "steps": ["Read the source README",
+                 "Translate section by section",
+                 "Save the result as README.ja.md"]}
+    expected_goal_keywords: [Translate, Japanese]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-004-research-summary
+    task: Research and summarize 2026 LLM context-compression techniques
+    llm_reply: |
+      {"goal": "Research and summarize 2026 LLM context-compression techniques",
+       "steps": ["Survey recent papers and blog posts",
+                 "Group techniques by approach",
+                 "Write a one-page summary with citations"]}
+    expected_goal_keywords: [Research, summarize, context-compression]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-005-build-deploy
+    task: Build the service Docker image and deploy to staging
+    llm_reply: |
+      {"goal": "Build the Docker image and deploy to staging",
+       "steps": ["Bump version in pyproject.toml",
+                 "Build the Docker image",
+                 "Push to the container registry",
+                 "Update the staging compose file",
+                 "Roll the staging deployment"]}
+    expected_goal_keywords: [Docker, deploy, staging]
+    min_steps: 4
+    mock_judge_score: 5
+
+  - id: plan-006-debug-503
+    task: Debug intermittent 503 errors on the /v1/runs endpoint
+    llm_reply: |
+      {"goal": "Debug intermittent 503 errors on /v1/runs",
+       "steps": ["Pull recent /v1/runs error rates from Grafana",
+                 "Correlate with deploy and traffic timelines",
+                 "Read service logs around 503 spikes",
+                 "Reproduce the failure in staging",
+                 "Land a fix or open a ticket with the root cause"]}
+    expected_goal_keywords: [Debug, 503]
+    min_steps: 4
+    mock_judge_score: 5
+
+  - id: plan-007-data-analysis
+    task: Analyze last quarter's sandbox cold-start latencies
+    llm_reply: |
+      {"goal": "Analyze last quarter's sandbox cold-start latencies",
+       "steps": ["Export cold-start span data from Langfuse",
+                 "Compute p50 / p95 / p99 by week",
+                 "Plot weekly trend",
+                 "Write up findings"]}
+    expected_goal_keywords: [Analyze, cold-start, latencies]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-008-test-suite
+    task: Write integration tests for the new memory recall endpoint
+    llm_reply: |
+      {"goal": "Write integration tests for the memory recall endpoint",
+       "steps": ["Set up a test tenant + user fixture",
+                 "Seed sample memory items",
+                 "Exercise the recall endpoint",
+                 "Assert on the returned ranking"]}
+    expected_goal_keywords: [integration, tests, memory]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-009-docs
+    task: Document the J.15 volume lifecycle for new operators
+    llm_reply: |
+      {"goal": "Document J.15 volume lifecycle for operators",
+       "steps": ["Outline the three lifecycle states",
+                 "Document each state transition",
+                 "Add the runbook to the deployment doc"]}
+    expected_goal_keywords: [volume, lifecycle]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-010-cli-tool
+    task: Build a CLI to inspect agent run audit trails
+    llm_reply: |
+      {"goal": "Build a CLI to inspect agent run audit trails",
+       "steps": ["Define CLI subcommands and arguments",
+                 "Query the audit log via the existing client",
+                 "Format results with rich for the terminal",
+                 "Add usage examples to README"]}
+    expected_goal_keywords: [CLI, audit]
+    min_steps: 3
+    mock_judge_score: 5
+
+  - id: plan-011-migration
+    task: Migrate the run_history table to a partitioned schema
+    llm_reply: |
+      {"goal": "Migrate run_history to a partitioned schema",
+       "steps": ["Design the new partitioned schema",
+                 "Write the Alembic migration",
+                 "Backfill historical rows",
+                 "Cut the application over",
+                 "Drop the old table"]}
+    expected_goal_keywords: [Migrate, partitioned]
+    min_steps: 4
+    mock_judge_score: 5
+
+  - id: plan-012-api-impl
+    task: Implement the /v1/skills/refine API
+    llm_reply: |
+      {"goal": "Implement the /v1/skills/refine API",
+       "steps": ["Define the request and response schemas",
+                 "Wire the FastAPI route",
+                 "Implement the skill refinement logic",
+                 "Add an OpenAPI example",
+                 "Add tests for the new route"]}
+    expected_goal_keywords: [Implement, /v1/skills/refine]
+    min_steps: 4
+    mock_judge_score: 5
+
+  # ---------- partial plans (score 4) ----------
+  - id: plan-013-greet
+    task: Greet the user by name
+    llm_reply: |
+      {"goal": "Greet the user by name",
+       "steps": ["Read the user's name",
+                 "Print a greeting"]}
+    expected_goal_keywords: [Greet]
+    min_steps: 2
+    mock_judge_score: 4
+
+  - id: plan-014-fix-typo
+    task: Fix the typo in the welcome banner
+    llm_reply: |
+      {"goal": "Fix the typo in the welcome banner",
+       "steps": ["Locate the banner string",
+                 "Replace the typo"]}
+    expected_goal_keywords: [Fix, typo]
+    min_steps: 2
+    mock_judge_score: 4
+
+  - id: plan-015-add-log
+    task: Add a debug log to the sandbox reaper
+    llm_reply: |
+      {"goal": "Add a debug log to the sandbox reaper",
+       "steps": ["Identify the reaper sweep entrypoint",
+                 "Add a debug log line",
+                 "Verify the log appears at the configured level"]}
+    expected_goal_keywords: [debug log, reaper]
+    min_steps: 2
+    mock_judge_score: 4
+
+  - id: plan-016-update-version
+    task: Update the project version to 0.2.0
+    llm_reply: |
+      {"goal": "Update project version to 0.2.0",
+       "steps": ["Edit pyproject.toml",
+                 "Tag the release commit"]}
+    expected_goal_keywords: [Update, version, 0.2.0]
+    min_steps: 2
+    mock_judge_score: 4
+
+  - id: plan-017-fence-prose
+    task: Lint and reformat the orchestrator package
+    llm_reply: |
+      Here is the plan you asked for, wrapped in a fence:
+      ```json
+      {"goal": "Lint and reformat the orchestrator package",
+       "steps": ["Run ruff with --fix on services/orchestrator/",
+                 "Run ruff-format on the same tree",
+                 "Open a review-only PR"]}
+      ```
+    expected_goal_keywords: [Lint, reformat, orchestrator]
+    min_steps: 3
+    mock_judge_score: 4
+
+  - id: plan-018-prose-before
+    task: Audit secrets handling in the control plane
+    llm_reply: |
+      Sure! Here is the plan:
+      {"goal": "Audit secrets handling in the control plane",
+       "steps": ["Enumerate every secret consumer",
+                 "Verify each reads from the secret store",
+                 "Open issues for any that bypass it"]}
+    expected_goal_keywords: [Audit, secrets]
+    min_steps: 3
+    mock_judge_score: 4
+
+  # ---------- fallback / malformed (score 3) ----------
+  - id: plan-019-malformed-no-steps
+    task: Brainstorm three retention metrics
+    # ``steps`` key missing on purpose — parse_plan falls back to a single-
+    # step plan whose goal is the original task. The keyword check still
+    # passes because the fallback goal *is* the task.
+    llm_reply: |
+      {"goal": "ok", "garbled": true}
+    expected_goal_keywords: [Brainstorm, retention]
+    min_steps: 1
+    mock_judge_score: 3
+
+  - id: plan-020-no-json-at-all
+    task: Summarize today's standup notes
+    llm_reply: |
+      Sorry, I cannot generate JSON right now. Please ask differently.
+    expected_goal_keywords: [Summarize, standup]
+    min_steps: 1
+    mock_judge_score: 3

@@ -1,0 +1,128 @@
+# J.2 reflect — M0 baseline dataset (Stream J.13a).
+#
+# 16 cases driving _parse_reflection() against pre-recorded reflect-LLM
+# replies. Eight buggy-trajectory cases (expected verdict = revise),
+# eight correct-trajectory cases (expected verdict = accept). One of
+# each kind carries a malformed reply so the fail-safe-to-accept guard
+# (Mini-ADR J-5a) is visible in the baseline:
+#
+#   correction_rate        = 7/8  = 0.875  (≥ 0.75)
+#   false_positive_rate    = 0/8  = 0.00   (≤ 0.20)
+#
+# The eval tests parser semantics; LLM judgement quality lives in J.13b.
+
+name: reflect-m0-baseline
+
+cases:
+  # ---------- buggy trajectories (expect revise) ----------
+  - id: buggy-001-skipped-step
+    kind: buggy
+    reflect_llm_reply: |
+      {"verdict": "revise", "critique": "Agent claimed completion but skipped the validation step the task required."}
+    expected_verdict: revise
+
+  - id: buggy-002-partial-answer
+    kind: buggy
+    reflect_llm_reply: |
+      {"verdict": "revise", "critique": "Answer covers only half the requested topics; second half missing."}
+    expected_verdict: revise
+
+  - id: buggy-003-incorrect-output
+    kind: buggy
+    reflect_llm_reply: |
+      {"verdict": "revise", "critique": "Computed sum is wrong: 7 + 13 is 20, not 19."}
+    expected_verdict: revise
+
+  - id: buggy-004-todo-placeholder
+    kind: buggy
+    reflect_llm_reply: |
+      {"verdict": "revise", "critique": "Implementation left a TODO comment in the critical path; not actually done."}
+    expected_verdict: revise
+
+  - id: buggy-005-irrelevant
+    kind: buggy
+    reflect_llm_reply: |
+      {"verdict": "revise", "critique": "Output answers a different question than the user asked."}
+    expected_verdict: revise
+
+  - id: buggy-006-with-fence
+    kind: buggy
+    reflect_llm_reply: |
+      Sure, here's my judgement:
+      ```json
+      {"verdict": "revise", "critique": "The code path for the empty-input case is missing."}
+      ```
+    expected_verdict: revise
+
+  - id: buggy-007-uppercase
+    kind: buggy
+    # Verifies the parser's case-insensitive verdict normalization.
+    reflect_llm_reply: |
+      {"verdict": "REVISE", "critique": "Lint errors remain after the supposed cleanup."}
+    expected_verdict: revise
+
+  - id: buggy-008-malformed-fails-safe
+    kind: buggy
+    # Malformed reply trips the parser's fail-safe accept (Mini-ADR
+    # J-5a) — even though the trajectory was buggy, the parser cannot
+    # know that and *correctly* errs on the side of letting the run end.
+    # Counts against correction_rate by design.
+    reflect_llm_reply: |
+      reviewer notes only, no JSON object
+    expected_verdict: accept
+
+  # ---------- correct trajectories (expect accept) ----------
+  - id: correct-001-clean
+    kind: correct
+    reflect_llm_reply: |
+      {"verdict": "accept", "critique": "All requested items delivered."}
+    expected_verdict: accept
+
+  - id: correct-002-thorough
+    kind: correct
+    reflect_llm_reply: |
+      {"verdict": "accept", "critique": "Code passes the full test matrix and matches the requirements."}
+    expected_verdict: accept
+
+  - id: correct-003-with-prose
+    kind: correct
+    reflect_llm_reply: |
+      Looks complete to me.
+      {"verdict": "accept", "critique": "Translation matches source segment-for-segment."}
+    expected_verdict: accept
+
+  - id: correct-004-uppercase
+    kind: correct
+    reflect_llm_reply: |
+      {"verdict": "ACCEPT", "critique": "Plan covers every requirement and is unambiguous."}
+    expected_verdict: accept
+
+  - id: correct-005-empty-critique
+    kind: correct
+    reflect_llm_reply: |
+      {"verdict": "accept", "critique": ""}
+    expected_verdict: accept
+
+  - id: correct-006-with-fence
+    kind: correct
+    reflect_llm_reply: |
+      ```json
+      {"verdict": "accept", "critique": "Bug fix applies and tests added."}
+      ```
+    expected_verdict: accept
+
+  - id: correct-007-extra-fields
+    kind: correct
+    # Extra keys must not derail parsing.
+    reflect_llm_reply: |
+      {"verdict": "accept", "critique": "Done", "confidence": 0.95, "scratch": [1, 2, 3]}
+    expected_verdict: accept
+
+  - id: correct-008-malformed-fails-safe
+    kind: correct
+    # Malformed reply trips the parser's fail-safe accept (Mini-ADR
+    # J-5a) — happens to coincide with the right verdict here. Does not
+    # contribute to false_positive_rate.
+    reflect_llm_reply: |
+      hmm, no JSON at all
+    expected_verdict: accept

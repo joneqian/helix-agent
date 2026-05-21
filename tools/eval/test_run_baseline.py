@@ -44,19 +44,25 @@ def test_runner_registry_has_fourteen_capabilities() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_produces_three_pass_eleven_deferred(tmp_path: Path) -> None:
-    """J.13a-1 scope: J.3 / J.11 / J.14 PASS; everything else DEFERRED."""
+async def test_run_baseline_produces_seven_pass_seven_deferred(tmp_path: Path) -> None:
+    """J.13a-2 scope: 7 shipped capabilities PASS; remaining 7 DEFERRED."""
     out = tmp_path / "baseline.yaml"
     reports = await run_baseline(out_path=out)
 
     pass_caps = sorted(c for c, r in reports.items() if r.status == "PASS")
     deferred_caps = sorted(c for c, r in reports.items() if r.status == "DEFERRED")
+    # ``sorted()`` is lexicographic — "J.11" < "J.1_" because '1' (0x31)
+    # precedes '_' (0x5F).
     assert pass_caps == [
         "J.11_model_routing",
         "J.14_per_user_isolation",
+        "J.15_persistent_volume",
+        "J.1_plan_execute",
+        "J.2_reflect",
         "J.3_memory_recall",
+        "J.6_multimodal",
     ]
-    assert len(deferred_caps) == 11
+    assert len(deferred_caps) == 7
     assert all(r.status != "FAIL" for r in reports.values())
 
 
@@ -84,3 +90,11 @@ async def test_baseline_yaml_layout_is_stable(tmp_path: Path) -> None:
     assert j4["status"] == "DEFERRED"
     assert j4["score"] == {}
     assert "deferred_reason" in j4
+
+    j1 = payload["capabilities"]["J.1_plan_execute"]
+    assert j1["status"] == "PASS"
+    assert j1["score"]["judge_mean"] >= 4.0
+
+    j15 = payload["capabilities"]["J.15_persistent_volume"]
+    assert j15["status"] == "PASS"
+    assert j15["score"]["pass_rate"] >= 0.90
