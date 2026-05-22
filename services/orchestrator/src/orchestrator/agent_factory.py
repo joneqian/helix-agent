@@ -369,6 +369,9 @@ async def build_agent(
         after_llm_chain=chains.after_llm_call,
         before_tool_dispatch_chain=chains.before_tool_dispatch,
         context_compressor=context_compressor,
+        # Stream J.8 (Mini-ADR J-24) — declarative approval gate.
+        approval_required_tools=frozenset(spec.spec.policies.approval_required_tools),
+        approval_timeout_s=spec.spec.policies.approval_timeout_s,
     )
     compiled = GraphRunner(checkpointer=checkpointer).compile(graph)
     return BuiltAgent(

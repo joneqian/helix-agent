@@ -23,6 +23,13 @@ class RunStatus(StrEnum):
     ERROR = "error"
     TIMEOUT = "timeout"
     INTERRUPTED = "interrupted"
+    #: Stream J.8 (Mini-ADR J-24) — run ended at an approval gate and is
+    #: resumable. The graph routed to END after writing
+    #: ``AgentState.pending_approval``; the checkpoint persists so
+    #: ``POST /v1/runs/{id}/resume`` can re-invoke from it. Distinct from
+    #: ``INTERRUPTED`` (a user-driven cancel) — a PAUSED run is waiting
+    #: on a human verdict, not aborted.
+    PAUSED = "paused"
 
 
 class DisconnectMode(StrEnum):

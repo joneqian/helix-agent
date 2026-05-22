@@ -126,7 +126,8 @@ async def test_run_agent_records_success_outcome_on_clean_finish() -> None:
     success_keys = await store.list_prefix(f"trajectories/{record.tenant_id}/success/")
     assert len(success_keys) == 1
     assert str(record.thread_id) in success_keys[0]
-    assert graph.aget_state_calls == 1
+    # Two reads: the J.8 pause-check + the L.L7 trajectory recorder.
+    assert graph.aget_state_calls == 2
 
 
 @pytest.mark.asyncio
@@ -254,8 +255,9 @@ async def test_run_agent_with_no_recorder_does_not_break() -> None:
         config={"configurable": {"thread_id": str(record.thread_id)}},
     )
     await _drain(bridge, record.run_id)
-    # aget_state is only called when a recorder is configured.
-    assert graph.aget_state_calls == 0
+    # With no recorder the trajectory read is skipped, but the J.8
+    # pause-check still consults final state once.
+    assert graph.aget_state_calls == 1
 
 
 # ---------------------------------------------------------------------------

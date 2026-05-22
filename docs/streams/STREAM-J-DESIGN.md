@@ -897,12 +897,12 @@ class VisionSpec(BaseModel):                # AgentSpecBody.vision —— 仅 Pa
 
 run 一旦启动,人无法中途审批 / 纠偏。危险操作（如 sub-agent 派生、外部写操作）无人工门。
 
-**当前已实装**：`audit_log` 表 + `AuditAction` enum + emit/write 路径（Stream D.1）；`PolicySpec` 容器（通用字段，审批字段未加）；LangGraph `interrupt()` + checkpointer 暂停/恢复机制（天然支持）。**尚缺**：approval DTO / `AgentState.pending_approval` / approval 图节点 / resume endpoint / 超时 job / `ask_for_approval` tool / eval。
+**当前已实装**：`audit_log` 表 + `AuditAction` enum + emit/write 路径（Stream D.1）；`PolicySpec` 容器（通用字段，审批字段未加）；checkpointer 暂停/恢复机制。**尚缺**：approval DTO / `AgentState.pending_approval` / approval 检查 / resume endpoint / 超时 job / `ask_for_approval` tool / eval。
 
 ### 14.2 设计与边界
 
-- 用 LangGraph 原生 `interrupt()`：`approval` 节点在危险操作前 `interrupt`,run 暂停并 checkpoint。
-- control-plane 暴露暂停态：`GET /v1/runs/{id}`（含 `pending_approval`）+ `POST /v1/runs/{id}/resume`（批准 / 拒绝 / 修改后继续）。
+- **暂停机制 = end-and-resume**（2026-05-22 deer-flow 对比后定）：`tools_node` 在并行 staging 之前做审批前置检查 —— 命中 gated tool / `ask_for_approval` → 写 `AgentState.pending_approval` + 图路由到 `END`，run 以 `RunStatus.PAUSED` 结束并 checkpoint 持久。**不用 LangGraph 原生 `interrupt()`** —— helix `tools_node` 是 L.L6 并行分阶段调度（`asyncio.gather`），`interrupt()` 的"节点 resume 时整体重跑"语义与之难干净接合；deer-flow `ClarificationMiddleware` 已验证 `goto=END` + checkpoint 续跑这套范式在生产可行。
+- control-plane 暴露暂停态：`GET /v1/runs/{id}`（含 `pending_approval`）+ `POST /v1/runs/{id}/resume`（批准 / 拒绝 / 修改后继续）—— resume 写 `ApprovalDecision` 进 checkpoint state 后重新 `graph.ainvoke(None, config)` 从 checkpoint 续。
 - **两条触发路径并存**（2026-05-22 修订）：
   1. **声明式门控**（主路径）—— 危险操作按 `PolicySpec.approval_required_tools` 声明门控，平台强制，agent 不可绕过。
   2. **agent 主动请求**（§ 14.5，deer-flow 启发）—— agent 跑到不确定决策点时调 `ask_for_approval` builtin 工具主动请求人确认。

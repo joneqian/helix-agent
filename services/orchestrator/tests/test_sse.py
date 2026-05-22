@@ -11,6 +11,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -57,6 +58,12 @@ class _ScriptedGraph:
             if self.chunk_delay_s:
                 await asyncio.sleep(self.chunk_delay_s)
             yield chunk
+
+    async def aget_state(self, config: Any) -> Any:
+        """Stub final-state read — J.8 pause-check + L.L7 trajectory both
+        consult it. No ``pending_approval`` → the run finalises normally."""
+        del config
+        return SimpleNamespace(values={})
 
 
 async def _new_record(
