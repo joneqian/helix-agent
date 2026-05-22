@@ -190,8 +190,10 @@ async def test_get_and_patch_and_delete_eval_dataset(ctx: _Ctx) -> None:
 
     deleted = await ctx.client.delete(f"/v1/eval-datasets/{dataset_id}")
     assert deleted.status_code == 200
-    assert (await ctx.client.get(f"/v1/eval-datasets/{dataset_id}")).status_code == 404
-    assert (await ctx.client.delete(f"/v1/eval-datasets/{dataset_id}")).status_code == 404
+    gone = await ctx.client.get(f"/v1/eval-datasets/{dataset_id}")
+    assert gone.status_code == 404
+    delete_again = await ctx.client.delete(f"/v1/eval-datasets/{dataset_id}")
+    assert delete_again.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -204,7 +206,8 @@ async def test_eval_dataset_quota_returns_429(ctx: _Ctx) -> None:
         "source": "golden",
     }
     for _ in range(3):  # max_eval_dataset_rows_per_tenant=3
-        assert (await ctx.client.post("/v1/eval-datasets", json=body)).status_code == 201
+        created = await ctx.client.post("/v1/eval-datasets", json=body)
+        assert created.status_code == 201
     over = await ctx.client.post("/v1/eval-datasets", json=body)
     assert over.status_code == 429
 
