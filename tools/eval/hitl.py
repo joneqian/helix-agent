@@ -116,7 +116,8 @@ async def _run_detect_first_hit() -> tuple[bool, str]:
 async def _run_request_policy_gate() -> tuple[bool, str]:
     calls = [_tc("send_email", {"to": "x"})]
     target = find_approval_target(calls, frozenset({"send_email"}))
-    assert target is not None
+    if target is None:
+        return False, "gated call not detected"
     req = build_approval_request(target, thread_id="r-1", timeout_s=3600)
     if req.reason_kind != "policy_gate":
         return False, f"expected policy_gate, got {req.reason_kind}"
@@ -128,7 +129,8 @@ async def _run_request_policy_gate() -> tuple[bool, str]:
 async def _run_request_agent_reason_kind() -> tuple[bool, str]:
     calls = [_tc(ASK_FOR_APPROVAL_TOOL, {"reason_kind": "approach_choice", "action_summary": "?"})]
     target = find_approval_target(calls, frozenset())
-    assert target is not None
+    if target is None:
+        return False, "ask_for_approval call not detected"
     req = build_approval_request(target, thread_id="r-1", timeout_s=86400)
     if req.reason_kind != "approach_choice":
         return False, f"expected approach_choice, got {req.reason_kind}"
@@ -138,7 +140,8 @@ async def _run_request_agent_reason_kind() -> tuple[bool, str]:
 async def _run_request_bogus_reason_kind_falls_back() -> tuple[bool, str]:
     calls = [_tc(ASK_FOR_APPROVAL_TOOL, {"reason_kind": "nonsense"})]
     target = find_approval_target(calls, frozenset())
-    assert target is not None
+    if target is None:
+        return False, "ask_for_approval call not detected"
     req = build_approval_request(target, thread_id="r-1", timeout_s=86400)
     if req.reason_kind != "risk_confirmation":
         return False, f"bogus reason_kind should fall back, got {req.reason_kind}"
@@ -245,14 +248,10 @@ async def _run_store_list_expired() -> tuple[bool, str]:
     store = InMemoryApprovalStore()
     now = datetime.now(UTC)
     await store.create(
-        _record(
-            run_id=uuid4(), timeout_at=now - timedelta(hours=1), status=ApprovalStatus.PENDING
-        )
+        _record(run_id=uuid4(), timeout_at=now - timedelta(hours=1), status=ApprovalStatus.PENDING)
     )
     await store.create(
-        _record(
-            run_id=uuid4(), timeout_at=now + timedelta(hours=1), status=ApprovalStatus.PENDING
-        )
+        _record(run_id=uuid4(), timeout_at=now + timedelta(hours=1), status=ApprovalStatus.PENDING)
     )
     expired = await store.list_expired(before=now)
     if len(expired) != 1:
