@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -431,7 +432,7 @@ async def _seed_pending_approval(
 ) -> UUID:
     """Seed an ``agent_approval`` row directly into the in-memory store."""
     from datetime import UTC, datetime, timedelta
-    from uuid import UUID, uuid4
+    from uuid import uuid4
 
     from helix_agent.protocol import ApprovalRecord, ApprovalStatus
 
