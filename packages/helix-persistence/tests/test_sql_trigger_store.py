@@ -15,11 +15,17 @@ from testcontainers.postgres import PostgresContainer
 
 from helix_agent.persistence import (
     DatabaseConfig,
+    SqlTriggerRunStore,
     SqlTriggerStore,
     create_async_engine_from_config,
     create_async_session_factory,
 )
-from helix_agent.protocol import TriggerKind, TriggerRecord
+from helix_agent.protocol import (
+    TriggerKind,
+    TriggerRecord,
+    TriggerRunRecord,
+    TriggerRunStatus,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -172,3 +178,93 @@ async def test_delete(trigger_store: SqlTriggerStore) -> None:
     assert await trigger_store.get(trigger_id=tid, tenant_id=tenant) is None
     deleted_again = await trigger_store.delete(trigger_id=tid, tenant_id=tenant)
     assert deleted_again is False
+
+
+# --- SqlTriggerRunStore ---------------------------------------------------
+
+
+@pytest.fixture
+def trigger_run_store(postgres_container: PostgresContainer) -> Iterator[SqlTriggerRunStore]:
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("sqlalchemy.url", _sync_dsn(postgres_container))
+    command.upgrade(cfg, "head")
+
+    engine = create_async_engine_from_config(DatabaseConfig(dsn=_async_dsn(postgres_container)))
+    yield SqlTriggerRunStore(create_async_session_factory(engine))
+
+
+def _run_record(
+    *,
+    run_record_id: UUID | None = None,
+    tenant_id: UUID | None = None,
+    trigger_id: UUID | None = None,
+    status: TriggerRunStatus = TriggerRunStatus.FIRED,
+    triggered_at: datetime = _BASE,
+) -> TriggerRunRecord:
+    return TriggerRunRecord(
+        id=run_record_id or uuid4(),
+        tenant_id=tenant_id or uuid4(),
+        trigger_id=trigger_id or uuid4(),
+        run_id=uuid4(),
+        status=status,
+        attempt=1,
+        triggered_at=triggered_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_store_create_then_get(trigger_run_store: SqlTriggerRunStore) -> None:
+    rid, tenant = uuid4(), uuid4()
+    await trigger_run_store.create(_run_record(run_record_id=rid, tenant_id=tenant))
+
+    fetched = await trigger_run_store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert fetched is not None
+    assert fetched.id == rid
+    assert fetched.status is TriggerRunStatus.FIRED
+    assert fetched.attempt == 1
+
+
+@pytest.mark.asyncio
+async def test_run_store_get_cross_tenant_returns_none(
+    trigger_run_store: SqlTriggerRunStore,
+) -> None:
+    rid, tenant_a, tenant_b = uuid4(), uuid4(), uuid4()
+    await trigger_run_store.create(_run_record(run_record_id=rid, tenant_id=tenant_a))
+
+    assert await trigger_run_store.get(trigger_run_id=rid, tenant_id=tenant_b) is None
+
+
+@pytest.mark.asyncio
+async def test_run_store_update_transitions_status(
+    trigger_run_store: SqlTriggerRunStore,
+) -> None:
+    rid, tenant = uuid4(), uuid4()
+    await trigger_run_store.create(_run_record(run_record_id=rid, tenant_id=tenant))
+
+    rec = await trigger_run_store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert rec is not None
+    done = await trigger_run_store.update(
+        rec.model_copy(update={"status": TriggerRunStatus.FAILED, "error": "boom"})
+    )
+    assert done is True
+
+    again = await trigger_run_store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert again is not None
+    assert again.status is TriggerRunStatus.FAILED
+    assert again.error == "boom"
+
+
+@pytest.mark.asyncio
+async def test_run_store_list_by_trigger(trigger_run_store: SqlTriggerRunStore) -> None:
+    tenant, trigger_id = uuid4(), uuid4()
+    await trigger_run_store.create(
+        _run_record(tenant_id=tenant, trigger_id=trigger_id, triggered_at=_BASE)
+    )
+    await trigger_run_store.create(
+        _run_record(tenant_id=tenant, trigger_id=trigger_id, triggered_at=_BASE.replace(hour=15))
+    )
+    await trigger_run_store.create(_run_record(tenant_id=tenant, trigger_id=uuid4()))
+
+    listed = await trigger_run_store.list_by_trigger(trigger_id=trigger_id, tenant_id=tenant)
+    assert len(listed) == 2
+    assert listed[0].triggered_at > listed[1].triggered_at  # newest first

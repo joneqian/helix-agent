@@ -53,6 +53,10 @@ dependencies = [
     # surface; strip cost < 100 LOC + transitive dep already pinned by
     # markitdown.
     "pillow>=12.0,<13",
+    # Stream J.10 (Mini-ADR J-42) — cron-expression math for the trigger
+    # scheduler. Lightweight pure-Python; the scheduler polls the
+    # agent_trigger table rather than running APScheduler.
+    "croniter>=2.0,<7",
 ]
 
 [build-system]

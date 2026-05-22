@@ -257,6 +257,15 @@ class Settings(BaseSettings):
     #: promptly.
     memory_dlq_worker_interval_s: int = Field(default=30, gt=0)
 
+    # ------------------------------------------------------------------ trigger scheduler (J.10)
+    #: Stream J.10 — how often the trigger scheduler sweeps the
+    #: ``agent_trigger`` table for due cron triggers. Cron granularity
+    #: is one minute, so 60s is the natural cadence.
+    trigger_scheduler_interval_s: int = Field(default=60, gt=0)
+
+    #: Max triggers fired per scheduler sweep — caps a single cycle's work.
+    trigger_scheduler_batch_size: int = Field(default=100, gt=0)
+
     # ------------------------------------------------------------------ tenant rate limit (C.6)
     #: Per-tenant request bucket capacity (tokens). Drained one token
     #: per authenticated request.

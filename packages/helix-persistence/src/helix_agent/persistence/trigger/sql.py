@@ -10,9 +10,15 @@ from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from helix_agent.persistence.models import AgentTriggerRow
-from helix_agent.persistence.trigger.base import TriggerStore
-from helix_agent.protocol import TriggerKind, TriggerRecord, TriggerSource
+from helix_agent.persistence.models import AgentTriggerRow, TriggerRunRow
+from helix_agent.persistence.trigger.base import TriggerRunStore, TriggerStore
+from helix_agent.protocol import (
+    TriggerKind,
+    TriggerRecord,
+    TriggerRunRecord,
+    TriggerRunStatus,
+    TriggerSource,
+)
 
 
 def _row_to_dto(row: AgentTriggerRow) -> TriggerRecord:
@@ -145,3 +151,91 @@ class SqlTriggerStore(TriggerStore):
             )
             await session.commit()
         return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
+def _run_row_to_dto(row: TriggerRunRow) -> TriggerRunRecord:
+    return TriggerRunRecord(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        trigger_id=row.trigger_id,
+        run_id=row.run_id,
+        status=TriggerRunStatus(row.status),
+        attempt=row.attempt,
+        next_retry_at=row.next_retry_at,
+        error=row.error,
+        triggered_at=row.triggered_at,
+    )
+
+
+class SqlTriggerRunStore(TriggerRunStore):
+    """Postgres-backed trigger-firing registry — the ``trigger_run`` table."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sf = session_factory
+
+    async def create(self, record: TriggerRunRecord) -> TriggerRunRecord:
+        async with self._sf() as session:
+            session.add(
+                TriggerRunRow(
+                    id=record.id,
+                    tenant_id=record.tenant_id,
+                    trigger_id=record.trigger_id,
+                    run_id=record.run_id,
+                    status=record.status.value,
+                    attempt=record.attempt,
+                    next_retry_at=record.next_retry_at,
+                    error=record.error,
+                    triggered_at=record.triggered_at,
+                )
+            )
+            await session.commit()
+        return record
+
+    async def get(self, *, trigger_run_id: UUID, tenant_id: UUID) -> TriggerRunRecord | None:
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(TriggerRunRow).where(
+                        TriggerRunRow.id == trigger_run_id,
+                        TriggerRunRow.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+        return _run_row_to_dto(row) if row is not None else None
+
+    async def update(self, record: TriggerRunRecord) -> bool:
+        async with self._sf() as session:
+            result = await session.execute(
+                sa_update(TriggerRunRow)
+                .where(
+                    TriggerRunRow.id == record.id,
+                    TriggerRunRow.tenant_id == record.tenant_id,
+                )
+                .values(
+                    run_id=record.run_id,
+                    status=record.status.value,
+                    attempt=record.attempt,
+                    next_retry_at=record.next_retry_at,
+                    error=record.error,
+                )
+            )
+            await session.commit()
+        return int(getattr(result, "rowcount", 0) or 0) > 0
+
+    async def list_by_trigger(self, *, trigger_id: UUID, tenant_id: UUID) -> list[TriggerRunRecord]:
+        async with self._sf() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(TriggerRunRow)
+                        .where(
+                            TriggerRunRow.trigger_id == trigger_id,
+                            TriggerRunRow.tenant_id == tenant_id,
+                        )
+                        .order_by(TriggerRunRow.triggered_at.desc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_run_row_to_dto(r) for r in rows]

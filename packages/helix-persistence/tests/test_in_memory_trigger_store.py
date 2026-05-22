@@ -7,8 +7,13 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from helix_agent.persistence import InMemoryTriggerStore
-from helix_agent.protocol import TriggerKind, TriggerRecord
+from helix_agent.persistence import InMemoryTriggerRunStore, InMemoryTriggerStore
+from helix_agent.protocol import (
+    TriggerKind,
+    TriggerRecord,
+    TriggerRunRecord,
+    TriggerRunStatus,
+)
 
 _BASE = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
 
@@ -147,3 +152,104 @@ async def test_delete() -> None:
     assert await store.get(trigger_id=tid, tenant_id=tenant) is None
     deleted_again = await store.delete(trigger_id=tid, tenant_id=tenant)
     assert deleted_again is False
+
+
+# --- InMemoryTriggerRunStore ----------------------------------------------
+
+
+def _run_record(
+    *,
+    run_record_id: UUID | None = None,
+    tenant_id: UUID | None = None,
+    trigger_id: UUID | None = None,
+    status: TriggerRunStatus = TriggerRunStatus.FIRED,
+    triggered_at: datetime = _BASE,
+) -> TriggerRunRecord:
+    return TriggerRunRecord(
+        id=run_record_id or uuid4(),
+        tenant_id=tenant_id or uuid4(),
+        trigger_id=trigger_id or uuid4(),
+        run_id=uuid4(),
+        status=status,
+        attempt=1,
+        triggered_at=triggered_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_store_create_then_get() -> None:
+    store = InMemoryTriggerRunStore()
+    rid, tenant = uuid4(), uuid4()
+    await store.create(_run_record(run_record_id=rid, tenant_id=tenant))
+
+    fetched = await store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert fetched is not None
+    assert fetched.id == rid
+    assert fetched.status is TriggerRunStatus.FIRED
+
+
+@pytest.mark.asyncio
+async def test_run_store_get_unknown_and_cross_tenant() -> None:
+    store = InMemoryTriggerRunStore()
+    rid, tenant_a, tenant_b = uuid4(), uuid4(), uuid4()
+    await store.create(_run_record(run_record_id=rid, tenant_id=tenant_a))
+
+    assert await store.get(trigger_run_id=uuid4(), tenant_id=tenant_a) is None
+    assert await store.get(trigger_run_id=rid, tenant_id=tenant_b) is None
+
+
+@pytest.mark.asyncio
+async def test_run_store_create_duplicate_id_raises() -> None:
+    store = InMemoryTriggerRunStore()
+    rid = uuid4()
+    await store.create(_run_record(run_record_id=rid))
+    with pytest.raises(ValueError, match="already exists"):
+        await store.create(_run_record(run_record_id=rid))
+
+
+@pytest.mark.asyncio
+async def test_run_store_update_transitions_status() -> None:
+    store = InMemoryTriggerRunStore()
+    rid, tenant = uuid4(), uuid4()
+    await store.create(_run_record(run_record_id=rid, tenant_id=tenant))
+
+    rec = await store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert rec is not None
+    done = await store.update(rec.model_copy(update={"status": TriggerRunStatus.SUCCEEDED}))
+    assert done is True
+
+    again = await store.get(trigger_run_id=rid, tenant_id=tenant)
+    assert again is not None
+    assert again.status is TriggerRunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_run_store_update_cross_tenant_returns_false() -> None:
+    store = InMemoryTriggerRunStore()
+    rid, tenant_a, tenant_b = uuid4(), uuid4(), uuid4()
+    await store.create(_run_record(run_record_id=rid, tenant_id=tenant_a))
+
+    rec = await store.get(trigger_run_id=rid, tenant_id=tenant_a)
+    assert rec is not None
+    miss = await store.update(rec.model_copy(update={"tenant_id": tenant_b}))
+    assert miss is False
+
+
+@pytest.mark.asyncio
+async def test_run_store_list_by_trigger_filters_and_sorts() -> None:
+    store = InMemoryTriggerRunStore()
+    tenant, trigger_id = uuid4(), uuid4()
+    await store.create(_run_record(tenant_id=tenant, trigger_id=trigger_id, triggered_at=_BASE))
+    await store.create(
+        _run_record(
+            tenant_id=tenant,
+            trigger_id=trigger_id,
+            triggered_at=_BASE.replace(hour=13),
+        )
+    )
+    await store.create(_run_record(tenant_id=tenant, trigger_id=uuid4()))
+
+    listed = await store.list_by_trigger(trigger_id=trigger_id, tenant_id=tenant)
+    assert len(listed) == 2
+    # newest first
+    assert listed[0].triggered_at > listed[1].triggered_at
