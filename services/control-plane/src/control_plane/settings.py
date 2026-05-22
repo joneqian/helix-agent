@@ -188,9 +188,12 @@ class Settings(BaseSettings):
     oidc_jwt_leeway_s: int = Field(default=30, ge=0)
 
     #: Path-prefix exemption list. Health + metrics are always allowed
-    #: through; any other path requires a valid JWT in M0.
+    #: through; ``/v1/webhooks`` is exempt because an external webhook
+    #: caller has no helix principal — that endpoint authenticates with
+    #: a per-trigger secret instead (Stream J.10 / Mini-ADR J-42). Any
+    #: other path requires a valid JWT in M0.
     auth_exempt_path_prefixes: list[str] = Field(
-        default_factory=lambda: ["/healthz", "/metrics"],
+        default_factory=lambda: ["/healthz", "/metrics", "/v1/webhooks"],
     )
 
     # ------------------------------------------------------------------ mTLS (C.2)

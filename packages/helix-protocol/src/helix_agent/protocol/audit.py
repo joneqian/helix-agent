@@ -83,6 +83,11 @@ class AuditAction(StrEnum):
     # approval / HITL (Stream J.8 — Mini-ADR J-24)
     APPROVAL_REQUESTED = "approval:requested"
     APPROVAL_DECIDED = "approval:decided"
+    # triggers (Stream J.10 — Mini-ADR J-26 / J-42)
+    TRIGGER_CREATE = "trigger:create"
+    TRIGGER_UPDATE = "trigger:update"
+    TRIGGER_DELETE = "trigger:delete"
+    TRIGGER_FIRE = "trigger:fire"
     # tools (Stream E.6 + E.8 + onwards)
     TOOL_CALL = "tool:call"
     TOOL_BLOCKED = "tool:blocked"
@@ -146,6 +151,7 @@ class AuditEntry(BaseModel):
         "skill",  # Stream J.7a — Mini-ADR J-23
         "artifact",  # Stream J.9-step3 — Mini-ADR J-25
         "approval",  # Stream J.8 — Mini-ADR J-24
+        "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
     ]
     resource_id: str | None = None
     result: AuditResult

@@ -152,6 +152,16 @@ class SqlTriggerStore(TriggerStore):
             await session.commit()
         return int(getattr(result, "rowcount", 0) or 0) > 0
 
+    async def get_for_webhook(self, *, trigger_id: UUID) -> TriggerRecord | None:
+        # Tenant-unscoped — RLS is bypassed by the caller's contextvar.
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    select(AgentTriggerRow).where(AgentTriggerRow.id == trigger_id)
+                )
+            ).scalar_one_or_none()
+        return _row_to_dto(row) if row is not None else None
+
 
 def _run_row_to_dto(row: TriggerRunRow) -> TriggerRunRecord:
     return TriggerRunRecord(

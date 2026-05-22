@@ -1175,7 +1175,7 @@ class TriggerSpec(BaseModel):                # AgentSpecBody.triggers 元素
 
 ### 16.5 webhook 入站
 
-入站 endpoint `POST /v1/triggers/{trigger_id}/webhook` —— 经 `AuthMiddleware` 豁免（加 path 前缀），改用**每触发器独立 secret token** 鉴权：创建 webhook 触发器时生成 secret，哈希存 `webhook_secret_hash`，明文仅返回一次（API key 同款）；入站请求带 secret（header），端点 `compare_digest` 校验，失败 403。命中即复用 `run_agent` 发起链起 run + 写 `trigger_run`。
+入站 endpoint `POST /v1/webhooks/{trigger_id}` —— 独立 `/v1/webhooks` path 前缀（非 `/v1/triggers/.../webhook`），整段经 `AuthMiddleware` 前缀豁免，而 `/v1/triggers` CRUD 仍走正常鉴权。改用**每触发器独立 secret token** 鉴权：创建 webhook 触发器时生成 secret，SHA-256 哈希存 `webhook_secret_hash`，明文仅返回一次（API key 同款）；入站请求带 secret（`X-Helix-Webhook-Secret` header），端点 `hmac.compare_digest` 校验，失败 403、触发器不存在 / 非 webhook / 已禁用一律 404。命中即经 RLS-bypass 按 id 解析触发器（无租户上下文）→ 复用 `fire_trigger` 起 run + 写 `trigger_run`。
 
 ### 16.6 DLQ 重试（M0 — Mini-ADR J-26 (1)）
 

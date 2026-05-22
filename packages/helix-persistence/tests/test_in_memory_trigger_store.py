@@ -154,6 +154,19 @@ async def test_delete() -> None:
     assert deleted_again is False
 
 
+@pytest.mark.asyncio
+async def test_get_for_webhook_is_tenant_unscoped() -> None:
+    """The webhook ingest path resolves a trigger by id alone."""
+    store = InMemoryTriggerStore()
+    tid, tenant = uuid4(), uuid4()
+    await store.create(_record(trigger_id=tid, tenant_id=tenant, kind="webhook"))
+
+    found = await store.get_for_webhook(trigger_id=tid)
+    assert found is not None
+    assert found.tenant_id == tenant
+    assert await store.get_for_webhook(trigger_id=uuid4()) is None
+
+
 # --- InMemoryTriggerRunStore ----------------------------------------------
 
 
