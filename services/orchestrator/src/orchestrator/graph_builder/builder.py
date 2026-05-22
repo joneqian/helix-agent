@@ -70,6 +70,10 @@ from helix_agent.runtime.middleware import (
 )
 from orchestrator.context import ContextCompressor
 from orchestrator.errors import MaxStepsExceededError
+from orchestrator.graph_builder._approval import (
+    build_approval_request,
+    find_approval_target,
+)
 from orchestrator.graph_builder._config import cancellation_token
 from orchestrator.graph_builder.memory import MemoryNode
 from orchestrator.graph_builder.planner import PlannerNode, render_plan
@@ -130,6 +134,8 @@ def build_react_graph(
     after_llm_chain: MiddlewareChain | None = None,
     before_tool_dispatch_chain: MiddlewareChain | None = None,
     context_compressor: ContextCompressor | None = None,
+    approval_required_tools: frozenset[str] = frozenset(),
+    approval_timeout_s: int = 86400,
 ) -> StateGraph[AgentState, None, AgentState, AgentState]:
     """Assemble the ReAct ``StateGraph`` and return it uncompiled.
 
@@ -281,6 +287,28 @@ def build_react_graph(
         if not tool_calls:
             return {}
 
+        # Stream J.8 (Mini-ADR J-24) — approval gate. Before staging,
+        # scan for the first approval-gated call: a tool named in
+        # ``approval_required_tools`` (the declarative gate) or the
+        # ``ask_for_approval`` builtin (agent-initiated). On a hit, write
+        # ``pending_approval`` and dispatch nothing — ``_after_tools``
+        # routes the run to END (RunStatus.PAUSED) with its checkpoint
+        # intact for ``POST /v1/runs/{id}/resume``. The end-and-resume
+        # model (vs LangGraph ``interrupt()``) keeps the parallel L.L6
+        # staging below untouched — see ``_approval`` module docstring.
+        if not state.get("pending_approval"):
+            target = find_approval_target(tool_calls, approval_required_tools)
+            if target is not None:
+                configurable = config.get("configurable") or {}
+                thread_id = str(configurable.get("run_id") or "run")
+                return {
+                    "pending_approval": build_approval_request(
+                        target,
+                        thread_id=thread_id,
+                        timeout_s=approval_timeout_s,
+                    )
+                }
+
         ctx_obj = _build_tool_context(config, plan=state.get("plan"))
         # Stream L.L6 — group tool_calls into stages of mutually-non-
         # conflicting calls. Within a stage we ``asyncio.gather`` (capped
@@ -408,7 +436,11 @@ def build_react_graph(
         graph.add_conditional_edges("reflect", _after_reflect, {"agent": "agent", END: end_target})
     else:
         graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: end_target})
-    graph.add_edge("tools", "agent")
+    # Stream J.8 — after ``tools``, a run with ``pending_approval`` set
+    # routes straight to END (RunStatus.PAUSED): the checkpoint persists
+    # and ``memory_writeback`` is deliberately skipped (the run is paused,
+    # not finished). Otherwise the normal ReAct loop continues to ``agent``.
+    graph.add_conditional_edges("tools", _after_tools, {"agent": "agent", END: END})
     return graph
 
 
@@ -486,6 +518,18 @@ def _should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     if _extract_tool_calls(last):
         return "tools"
     return "__end__"
+
+
+def _after_tools(state: AgentState) -> Literal["agent", "__end__"]:
+    """Route out of ``tools`` — Stream J.8.
+
+    A run with ``pending_approval`` set ends here (RunStatus.PAUSED);
+    the checkpoint is what ``POST /v1/runs/{id}/resume`` re-invokes
+    from. A normal tools batch loops back to ``agent``.
+    """
+    if state.get("pending_approval"):
+        return "__end__"
+    return "agent"
 
 
 def _extract_tool_calls(message: BaseMessage) -> list[dict[str, Any]]:

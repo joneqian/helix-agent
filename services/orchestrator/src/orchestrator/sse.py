@@ -228,26 +228,52 @@ async def run_agent(
                 first_chunk_seen = True
             await bridge.publish(run_id, stream_mode, _to_jsonable(chunk))
 
-        final = RunStatus.INTERRUPTED if record.abort_event.is_set() else RunStatus.SUCCESS
-        session_outcome = "interrupted" if final is RunStatus.INTERRUPTED else "success"
+        # Stream J.8 (Mini-ADR J-24) — a run that streamed to its natural
+        # end with ``pending_approval`` set did not finish: it paused at
+        # an approval gate (RunStatus.PAUSED). The checkpoint persists so
+        # ``POST /v1/runs/{id}/resume`` can re-invoke. A paused run emits
+        # no RUN_COMPLETED audit + no trajectory — both belong to the
+        # *true* run end after a resume. A failing ``aget_state`` degrades
+        # to "not paused" (same graceful-degradation contract as the
+        # trajectory recorder) rather than failing the run.
+        paused = False
+        if not record.abort_event.is_set():
+            try:
+                snapshot = await graph.aget_state(effective_config)
+                paused = bool(snapshot.values.get("pending_approval"))
+            except Exception:
+                logger.warning("run_agent.pause_check_failed run_id=%s", run_id, exc_info=True)
+
+        if record.abort_event.is_set():
+            final = RunStatus.INTERRUPTED
+        elif paused:
+            final = RunStatus.PAUSED
+        else:
+            final = RunStatus.SUCCESS
+        session_outcome = {
+            RunStatus.INTERRUPTED: "interrupted",
+            RunStatus.PAUSED: "paused",
+            RunStatus.SUCCESS: "success",
+        }[final]
         await run_manager.set_status(run_id, final)
-        await _emit_run_end_audit(
-            audit_logger,
-            record,
-            action=AuditAction.RUN_COMPLETED,
-            result=AuditResult.SUCCESS,
-            reason=None,
-            status="interrupted" if final is RunStatus.INTERRUPTED else "success",
-        )
-        # Stream L.L7 — record the trajectory for the J.13 eval gate.
-        # Fire-and-forget; failures are swallowed inside the recorder.
-        _dispatch_trajectory(
-            trajectory_recorder,
-            graph,
-            effective_config,
-            record,
-            outcome="cancelled" if final is RunStatus.INTERRUPTED else "success",
-        )
+        if final is not RunStatus.PAUSED:
+            await _emit_run_end_audit(
+                audit_logger,
+                record,
+                action=AuditAction.RUN_COMPLETED,
+                result=AuditResult.SUCCESS,
+                reason=None,
+                status="interrupted" if final is RunStatus.INTERRUPTED else "success",
+            )
+            # Stream L.L7 — record the trajectory for the J.13 eval gate.
+            # Fire-and-forget; failures are swallowed inside the recorder.
+            _dispatch_trajectory(
+                trajectory_recorder,
+                graph,
+                effective_config,
+                record,
+                outcome="cancelled" if final is RunStatus.INTERRUPTED else "success",
+            )
 
     except RunCancelledError:
         # A node surfaced cooperative cancellation mid-step (E.15) — a

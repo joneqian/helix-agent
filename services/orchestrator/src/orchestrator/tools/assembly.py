@@ -32,6 +32,7 @@ from helix_agent.protocol import (
 )
 from orchestrator.errors import AgentFactoryError
 from orchestrator.multimodal import ImageResolver
+from orchestrator.tools.approval import AskForApprovalTool
 from orchestrator.tools.artifact import ListArtifactsTool, SaveArtifactTool
 from orchestrator.tools.http import AllowlistProvider, HTTPTool
 from orchestrator.tools.knowledge import KnowledgeRetriever, KnowledgeSearchTool
@@ -50,7 +51,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 #: Built-in tool names the platform ships in M0.
-KNOWN_BUILTINS = frozenset({"web_search", "exec_python", "save_artifact", "list_artifacts"})
+KNOWN_BUILTINS = frozenset(
+    {"web_search", "exec_python", "save_artifact", "list_artifacts", "ask_for_approval"}
+)
 
 
 @dataclass(frozen=True)
@@ -252,6 +255,10 @@ def _register_builtin(
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
         registry.register(ListArtifactsTool(store=_require_artifact_store(env, "list_artifacts")))
+    elif entry.name == "ask_for_approval":
+        # Stream J.8 — zero-dependency builtin; ``tools_node`` intercepts
+        # the call before dispatch (see graph_builder/_approval.py).
+        registry.register(AskForApprovalTool())
 
 
 def _register_web_search(registry: ToolRegistry, entry: BuiltinToolSpec, env: ToolEnv) -> None:

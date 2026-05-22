@@ -101,6 +101,19 @@ async def test_builtin_unknown_name_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_builtin_ask_for_approval_assembled() -> None:
+    """Stream J.8 — ``ask_for_approval`` is a zero-dependency builtin."""
+    from orchestrator.tools.approval import AskForApprovalTool
+
+    registry = await build_tool_registry(
+        [BuiltinToolSpec(name="ask_for_approval")],
+        tool_env=ToolEnv(),
+    )
+    tool = registry.get("ask_for_approval")
+    assert isinstance(tool, AskForApprovalTool)
+
+
+@pytest.mark.asyncio
 async def test_builtin_web_search_missing_client_raises() -> None:
     with pytest.raises(AgentFactoryError, match="Tavily client"):
         await build_tool_registry([BuiltinToolSpec(name="web_search")], tool_env=ToolEnv())
