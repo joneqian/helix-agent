@@ -7,6 +7,12 @@ pipelines can load by directory. See
 [STREAM-L-DESIGN § 3.L7](../../../../../docs/streams/STREAM-L-DESIGN.md).
 """
 
+from orchestrator.trajectory.reader import (
+    StoredTrajectory as StoredTrajectory,
+)
+from orchestrator.trajectory.reader import (
+    TrajectoryReader as TrajectoryReader,
+)
 from orchestrator.trajectory.recorder import (
     TrajectoryOutcome as TrajectoryOutcome,
 )
@@ -21,7 +27,9 @@ from orchestrator.trajectory.recorder import (
 )
 
 __all__ = [
+    "StoredTrajectory",
     "TrajectoryOutcome",
+    "TrajectoryReader",
     "TrajectoryRecord",
     "TrajectoryRecorder",
     "serialize_messages_sharegpt",

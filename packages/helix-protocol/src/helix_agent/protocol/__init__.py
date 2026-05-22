@@ -62,6 +62,15 @@ from helix_agent.protocol.dr import (
     DrillRecord,
     DrillType,
 )
+from helix_agent.protocol.eval_dataset import (
+    CandidateStatus,
+    CurationCandidateRecord,
+    CurationSignal,
+    EvalDatasetRecord,
+    EvalDatasetSource,
+    FeedbackRating,
+    TrajectoryOutcome,
+)
 from helix_agent.protocol.event import EventRecord, EventType
 from helix_agent.protocol.image_upload import ImageUpload
 from helix_agent.protocol.knowledge import (
@@ -163,17 +172,23 @@ __all__ = [
     "BackupStatus",
     "BackupTier",
     "BuiltinToolSpec",
+    "CandidateStatus",
     "CheckRequest",
     "CheckResult",
     "CodePackageSpec",
     "CommitRequest",
+    "CurationCandidateRecord",
+    "CurationSignal",
     "CustomReminderSpec",
     "DocumentStatus",
     "DrillRecord",
     "DrillType",
     "DynamicContextSpec",
+    "EvalDatasetRecord",
+    "EvalDatasetSource",
     "EventRecord",
     "EventType",
+    "FeedbackRating",
     "FilesystemSpec",
     "HTTPToolSpec",
     "ImageRef",
@@ -231,6 +246,7 @@ __all__ = [
     "ThreadStatus",
     "TokenReservationRecord",
     "ToolSpecEntry",
+    "TrajectoryOutcome",
     "TriggerKind",
     "TriggerRecord",
     "TriggerRunRecord",
