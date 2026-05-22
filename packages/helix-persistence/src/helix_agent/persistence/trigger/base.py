@@ -19,7 +19,7 @@ from __future__ import annotations
 import abc
 from uuid import UUID
 
-from helix_agent.protocol import TriggerRecord
+from helix_agent.protocol import TriggerRecord, TriggerRunRecord
 
 
 class TriggerStore(abc.ABC):
@@ -61,3 +61,27 @@ class TriggerStore(abc.ABC):
     @abc.abstractmethod
     async def delete(self, *, trigger_id: UUID, tenant_id: UUID) -> bool:
         """Delete a trigger row; return ``True`` iff it existed."""
+
+
+class TriggerRunStore(abc.ABC):
+    """Registry of trigger firings — the ``trigger_run`` table.
+
+    The scheduler writes one row per firing; the DLQ sweep (Stream
+    J.10-step4) updates the retry state.
+    """
+
+    @abc.abstractmethod
+    async def create(self, record: TriggerRunRecord) -> TriggerRunRecord:
+        """Persist a new trigger-firing row."""
+
+    @abc.abstractmethod
+    async def get(self, *, trigger_run_id: UUID, tenant_id: UUID) -> TriggerRunRecord | None:
+        """Return the firing row, or ``None`` when unknown / cross-tenant."""
+
+    @abc.abstractmethod
+    async def update(self, record: TriggerRunRecord) -> bool:
+        """Replace a firing row (matched by ``id`` + ``tenant_id``); return hit."""
+
+    @abc.abstractmethod
+    async def list_by_trigger(self, *, trigger_id: UUID, tenant_id: UUID) -> list[TriggerRunRecord]:
+        """Return every firing of ``trigger_id`` under the tenant, newest first."""

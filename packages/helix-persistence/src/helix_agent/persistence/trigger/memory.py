@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from helix_agent.persistence.trigger.base import TriggerStore
-from helix_agent.protocol import TriggerRecord
+from helix_agent.persistence.trigger.base import TriggerRunStore, TriggerStore
+from helix_agent.protocol import TriggerRecord, TriggerRunRecord
 
 
 class InMemoryTriggerStore(TriggerStore):
@@ -55,3 +55,39 @@ class InMemoryTriggerStore(TriggerStore):
             return False
         del self._rows[trigger_id]
         return True
+
+
+class InMemoryTriggerRunStore(TriggerRunStore):
+    """In-memory ``TriggerRunStore`` — keyed by firing id."""
+
+    def __init__(self) -> None:
+        self._rows: dict[UUID, TriggerRunRecord] = {}
+
+    async def create(self, record: TriggerRunRecord) -> TriggerRunRecord:
+        if record.id in self._rows:
+            msg = f"trigger_run row already exists for id {record.id}"
+            raise ValueError(msg)
+        self._rows[record.id] = record
+        return record
+
+    async def get(self, *, trigger_run_id: UUID, tenant_id: UUID) -> TriggerRunRecord | None:
+        row = self._rows.get(trigger_run_id)
+        if row is None or row.tenant_id != tenant_id:
+            return None
+        return row
+
+    async def update(self, record: TriggerRunRecord) -> bool:
+        existing = self._rows.get(record.id)
+        if existing is None or existing.tenant_id != record.tenant_id:
+            return False
+        self._rows[record.id] = record
+        return True
+
+    async def list_by_trigger(self, *, trigger_id: UUID, tenant_id: UUID) -> list[TriggerRunRecord]:
+        rows = [
+            r
+            for r in self._rows.values()
+            if r.trigger_id == trigger_id and r.tenant_id == tenant_id
+        ]
+        rows.sort(key=lambda r: r.triggered_at, reverse=True)
+        return rows

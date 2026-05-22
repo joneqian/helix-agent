@@ -96,6 +96,7 @@ from control_plane.runtime import (
     resolve_reranker,
     resolve_web_search_client,
 )
+from control_plane.scheduler import TriggerScheduler
 from control_plane.settings import Settings
 from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
@@ -186,6 +187,14 @@ from helix_agent.persistence.thread_meta import (
     SqlThreadMetaStore,
     ThreadMetaStore,
 )
+from helix_agent.persistence.trigger import (
+    InMemoryTriggerRunStore,
+    InMemoryTriggerStore,
+    SqlTriggerRunStore,
+    SqlTriggerStore,
+    TriggerRunStore,
+    TriggerStore,
+)
 from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.checkpointer import make_checkpointer
 from helix_agent.runtime.runs import InMemoryRunStore, RunStore, SqlRunStore
@@ -214,6 +223,8 @@ def create_app(
     image_upload_repo: ImageUploadStore | None = None,
     approval_repo: ApprovalStore | None = None,
     run_repo: RunStore | None = None,
+    trigger_repo: TriggerStore | None = None,
+    trigger_run_repo: TriggerRunStore | None = None,
     skill_repo: SkillStore | None = None,
     knowledge_ingestion_runner: KnowledgeIngestionRunner | None = None,
     audit_logger: AuditLogger | None = None,
@@ -228,6 +239,7 @@ def create_app(
     token_reservation_repo: TokenReservationStore | None = None,
     quota_service: QuotaService | None = None,
     enable_reaper: bool = True,
+    enable_scheduler: bool = True,
     tenant_rate_limiter: RateLimiter | None = None,
     tenant_config_repo: TenantConfigStore | None = None,
     tenant_config_service: TenantConfigService | None = None,
@@ -304,6 +316,13 @@ def create_app(
     resolved_run_store: RunStore = run_repo or (
         sql_stores.run if sql_stores else InMemoryRunStore()
     )
+    # Stream J.10 (Mini-ADR J-26 / J-42) — trigger registry + firing log.
+    resolved_trigger_store: TriggerStore = trigger_repo or (
+        sql_stores.trigger if sql_stores else InMemoryTriggerStore()
+    )
+    resolved_trigger_run_store: TriggerRunStore = trigger_run_repo or (
+        sql_stores.trigger_run if sql_stores else InMemoryTriggerRunStore()
+    )
     # Stream J.7a (Mini-ADR J-23) — skill registry.
     resolved_skill_store: SkillStore = skill_repo or (
         sql_stores.skill if sql_stores else InMemorySkillStore()
@@ -370,6 +389,22 @@ def create_app(
             batch_size=resolved_settings.quota_reaper_batch_size,
         )
         if enable_reaper
+        else None
+    )
+    # Stream J.10 — single-replica trigger scheduler (Mini-ADR J-18 / J-42).
+    scheduler: TriggerScheduler | None = (
+        TriggerScheduler(
+            trigger_store=resolved_trigger_store,
+            trigger_run_store=resolved_trigger_run_store,
+            agent_spec_store=resolved_repo,
+            thread_store=resolved_threads,
+            runtime=resolved_agent_runtime,
+            audit_logger=resolved_audit,
+            approval_store=resolved_approval_store,
+            interval_s=resolved_settings.trigger_scheduler_interval_s,
+            batch_size=resolved_settings.trigger_scheduler_batch_size,
+        )
+        if enable_scheduler
         else None
     )
     health_provider = DefaultHealthProvider(
@@ -499,6 +534,9 @@ def create_app(
                     )
             if reaper is not None:
                 reaper.start()
+            if scheduler is not None:
+                scheduler.start()
+                _app.state.trigger_scheduler = scheduler
             # Stream K.K7 — start the DLQ retry worker only when an
             # embedder is available (the worker re-embeds before write;
             # without one it would dead-letter every row immediately).
@@ -524,6 +562,8 @@ def create_app(
                     await memory_dlq_worker.stop()
                 if reaper is not None:
                     await reaper.stop()
+                if scheduler is not None:
+                    await scheduler.stop()
                 ingestion_runner: KnowledgeIngestionRunner | None = getattr(
                     _app.state, "knowledge_ingestion_runner", None
                 )
@@ -555,6 +595,8 @@ def create_app(
     app.state.artifact_store = resolved_artifact_store
     app.state.approval_store = resolved_approval_store
     app.state.run_store = resolved_run_store
+    app.state.trigger_store = resolved_trigger_store
+    app.state.trigger_run_store = resolved_trigger_run_store
     app.state.knowledge_store = resolved_knowledge_store
     app.state.image_upload_store = resolved_image_upload_store
     app.state.skill_store = resolved_skill_store
@@ -681,6 +723,8 @@ class _SqlStores:
     artifact: ArtifactStore
     approval: ApprovalStore  # Stream J.8 (Mini-ADR J-24)
     run: RunStore  # Stream J.8 closeout follow-up (Mini-ADR J-41)
+    trigger: TriggerStore  # Stream J.10 (Mini-ADR J-26 / J-42)
+    trigger_run: TriggerRunStore  # Stream J.10
     service_account: ServiceAccountStore
     api_key: ApiKeyStore
     role_binding: RoleBindingStore
@@ -719,6 +763,8 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         artifact=SqlArtifactStore(session_factory),
         approval=SqlApprovalStore(session_factory),
         run=SqlRunStore(session_factory),
+        trigger=SqlTriggerStore(session_factory),
+        trigger_run=SqlTriggerRunStore(session_factory),
         service_account=SqlServiceAccountStore(session_factory),
         api_key=SqlApiKeyStore(session_factory),
         role_binding=SqlRoleBindingStore(session_factory),
