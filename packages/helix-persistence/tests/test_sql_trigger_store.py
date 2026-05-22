@@ -147,7 +147,8 @@ async def test_update_replaces_mutable_fields(trigger_store: SqlTriggerStore) ->
     assert rec is not None
     fired_at = _BASE.replace(hour=9)
     updated = rec.model_copy(update={"enabled": False, "last_fired_at": fired_at})
-    assert await trigger_store.update(updated) is True
+    did_update = await trigger_store.update(updated)
+    assert did_update is True
 
     again = await trigger_store.get(trigger_id=tid, tenant_id=tenant)
     assert again is not None
@@ -157,7 +158,8 @@ async def test_update_replaces_mutable_fields(trigger_store: SqlTriggerStore) ->
 
 @pytest.mark.asyncio
 async def test_update_unknown_returns_false(trigger_store: SqlTriggerStore) -> None:
-    assert await trigger_store.update(_record()) is False
+    did_update = await trigger_store.update(_record())
+    assert did_update is False
 
 
 @pytest.mark.asyncio
@@ -165,6 +167,8 @@ async def test_delete(trigger_store: SqlTriggerStore) -> None:
     tid, tenant = uuid4(), uuid4()
     await trigger_store.create(_record(trigger_id=tid, tenant_id=tenant))
 
-    assert await trigger_store.delete(trigger_id=tid, tenant_id=tenant) is True
+    deleted = await trigger_store.delete(trigger_id=tid, tenant_id=tenant)
+    assert deleted is True
     assert await trigger_store.get(trigger_id=tid, tenant_id=tenant) is None
-    assert await trigger_store.delete(trigger_id=tid, tenant_id=tenant) is False
+    deleted_again = await trigger_store.delete(trigger_id=tid, tenant_id=tenant)
+    assert deleted_again is False

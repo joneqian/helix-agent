@@ -115,7 +115,8 @@ async def test_update_replaces_row() -> None:
 
     rec = await store.get(trigger_id=tid, tenant_id=tenant)
     assert rec is not None
-    assert await store.update(rec.model_copy(update={"enabled": False})) is True
+    updated = await store.update(rec.model_copy(update={"enabled": False}))
+    assert updated is True
 
     again = await store.get(trigger_id=tid, tenant_id=tenant)
     assert again is not None
@@ -131,7 +132,8 @@ async def test_update_cross_tenant_returns_false() -> None:
     rec = await store.get(trigger_id=tid, tenant_id=tenant_a)
     assert rec is not None
     impostor = rec.model_copy(update={"tenant_id": tenant_b})
-    assert await store.update(impostor) is False
+    updated = await store.update(impostor)
+    assert updated is False
 
 
 @pytest.mark.asyncio
@@ -140,6 +142,8 @@ async def test_delete() -> None:
     tid, tenant = uuid4(), uuid4()
     await store.create(_record(trigger_id=tid, tenant_id=tenant))
 
-    assert await store.delete(trigger_id=tid, tenant_id=tenant) is True
+    deleted = await store.delete(trigger_id=tid, tenant_id=tenant)
+    assert deleted is True
     assert await store.get(trigger_id=tid, tenant_id=tenant) is None
-    assert await store.delete(trigger_id=tid, tenant_id=tenant) is False
+    deleted_again = await store.delete(trigger_id=tid, tenant_id=tenant)
+    assert deleted_again is False
