@@ -56,6 +56,9 @@ class InMemoryTriggerStore(TriggerStore):
         del self._rows[trigger_id]
         return True
 
+    async def get_for_webhook(self, *, trigger_id: UUID) -> TriggerRecord | None:
+        return self._rows.get(trigger_id)
+
 
 class InMemoryTriggerRunStore(TriggerRunStore):
     """In-memory ``TriggerRunStore`` — keyed by firing id."""

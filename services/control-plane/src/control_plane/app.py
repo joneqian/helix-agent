@@ -46,7 +46,9 @@ from control_plane.api import (
     build_skills_router,
     build_tenant_config_router,
     build_tenant_quotas_router,
+    build_triggers_router,
     build_uploads_router,
+    build_webhooks_router,
 )
 from control_plane.audit import TenantConfigPiiResolver, build_default_audit_logger
 from control_plane.auth import (
@@ -699,6 +701,8 @@ def create_app(
     app.include_router(build_quota_router())
     app.include_router(build_tenant_quotas_router())
     app.include_router(build_tenant_config_router())
+    app.include_router(build_triggers_router())
+    app.include_router(build_webhooks_router())
 
     return app
 

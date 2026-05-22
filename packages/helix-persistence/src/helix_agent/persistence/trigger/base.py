@@ -62,6 +62,17 @@ class TriggerStore(abc.ABC):
     async def delete(self, *, trigger_id: UUID, tenant_id: UUID) -> bool:
         """Delete a trigger row; return ``True`` iff it existed."""
 
+    @abc.abstractmethod
+    async def get_for_webhook(self, *, trigger_id: UUID) -> TriggerRecord | None:
+        """Tenant-unscoped lookup for the webhook ingest path.
+
+        The webhook caller is an external system with no tenant
+        context; the endpoint resolves the trigger by id alone to learn
+        its tenant + secret hash. The caller enters an RLS-bypass
+        context (``bypass_rls_var``) around this — it is the only
+        cross-tenant read on the trigger store.
+        """
+
 
 class TriggerRunStore(abc.ABC):
     """Registry of trigger firings — the ``trigger_run`` table.

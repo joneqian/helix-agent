@@ -123,6 +123,7 @@ ResourceType = Literal[
     "feedback",
     "image_upload",  # Stream J.6.补强-2 — Mini-ADR J-31
     "skill",  # Stream J.7a — Mini-ADR J-23
+    "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
 ]
 
 
