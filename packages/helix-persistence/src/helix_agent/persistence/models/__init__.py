@@ -13,6 +13,7 @@ from helix_agent.persistence.models.credential_proxy import (
     SecretAllowlistRow,
 )
 from helix_agent.persistence.models.dr_drill import DrDrillRow
+from helix_agent.persistence.models.eval_dataset import CurationCandidateRow, EvalDatasetRow
 from helix_agent.persistence.models.event_log import EventLogRow
 from helix_agent.persistence.models.feedback import FeedbackRow
 from helix_agent.persistence.models.image_upload import ImageUploadRow
@@ -47,7 +48,9 @@ __all__ = [
     "AuditLogRow",
     "BackupRecordRow",
     "CredentialProxyAuditRow",
+    "CurationCandidateRow",
     "DrDrillRow",
+    "EvalDatasetRow",
     "EventLogRow",
     "FeedbackRow",
     "ImageUploadRow",

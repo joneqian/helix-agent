@@ -18,6 +18,20 @@ from helix_agent.persistence.audit_log import (
 )
 from helix_agent.persistence.audit_log import SqlAuditLogStore as SqlAuditLogStore
 from helix_agent.persistence.base import Base as Base
+from helix_agent.persistence.curation import (
+    CurationCandidateStore as CurationCandidateStore,
+)
+from helix_agent.persistence.curation import EvalDatasetStore as EvalDatasetStore
+from helix_agent.persistence.curation import (
+    InMemoryCurationCandidateStore as InMemoryCurationCandidateStore,
+)
+from helix_agent.persistence.curation import (
+    InMemoryEvalDatasetStore as InMemoryEvalDatasetStore,
+)
+from helix_agent.persistence.curation import (
+    SqlCurationCandidateStore as SqlCurationCandidateStore,
+)
+from helix_agent.persistence.curation import SqlEvalDatasetStore as SqlEvalDatasetStore
 from helix_agent.persistence.database import DatabaseConfig as DatabaseConfig
 from helix_agent.persistence.database import (
     create_async_engine_from_config as create_async_engine_from_config,
@@ -168,14 +182,18 @@ __all__ = [
     "BackupRecordRow",
     "BackupRecordStore",
     "Base",
+    "CurationCandidateStore",
     "DatabaseConfig",
     "DrDrillRow",
     "DuplicateKnowledgeBaseError",
+    "EvalDatasetStore",
     "EventLogRow",
     "InMemoryApprovalStore",
     "InMemoryArtifactStore",
     "InMemoryAuditLogStore",
     "InMemoryBackupRecordStore",
+    "InMemoryCurationCandidateStore",
+    "InMemoryEvalDatasetStore",
     "InMemoryKnowledgeStore",
     "InMemoryMemoryStore",
     "InMemoryTenantConfigStore",
@@ -197,6 +215,8 @@ __all__ = [
     "SqlArtifactStore",
     "SqlAuditLogStore",
     "SqlBackupRecordStore",
+    "SqlCurationCandidateStore",
+    "SqlEvalDatasetStore",
     "SqlKnowledgeStore",
     "SqlMemoryStore",
     "SqlTenantConfigStore",
