@@ -4,6 +4,11 @@ name: Admin UI CI
 # ``apps/admin-ui/`` workspace. The visual-baseline sandbox
 # (apps/admin-ui-demo) was removed after H.1b PR 2b, since admin-ui
 # itself is the production baseline.
+#
+# Stream H.1b PR 4 adds:
+#   - storybook-build  — verifies the Storybook bundle compiles.
+#   - e2e              — Playwright smoke tests + axe a11y against the
+#                        dev server (control-plane stubbed via page.route).
 
 on:
   push:
@@ -55,3 +60,94 @@ jobs:
 
       - name: Build (vite)
         run: pnpm build
+
+  storybook-build:
+    name: admin-ui (storybook build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/admin-ui
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/admin-ui/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Storybook
+        run: pnpm build-storybook
+
+      - name: Upload Storybook artefact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storybook-static
+          path: apps/admin-ui/storybook-static
+          retention-days: 7
+
+  e2e:
+    name: admin-ui (Playwright + axe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/admin-ui
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/admin-ui/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('apps/admin-ui/pnpm-lock.yaml') }}
+
+      - name: Install Playwright (chromium)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Playwright deps only (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Run Playwright + axe
+        run: pnpm e2e
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/admin-ui/playwright-report
+            apps/admin-ui/test-results
+          retention-days: 7
