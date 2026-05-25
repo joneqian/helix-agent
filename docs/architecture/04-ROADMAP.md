@@ -67,7 +67,7 @@
   - [ ] `thread_data_middleware`（118 行）— tenant/thread 元数据传播底座
   - [ ] `uploads_middleware`（295 行）— 文件上传 + 大纲提取（line number 引用，省 token）
   - [ ] `deferred_tool_filter_middleware`（107 行）— 配合 tool_search 解决工具数量爆炸
-  - [ ] `token_usage_middleware`（303 行）— 步骤归因，dogfood 阶段成本分析
+  - [x] ~~`token_usage_middleware`（303 行）~~ — **已提前到 M0 Stream G.9**（PR #282，2026-05-25）
   - [ ] `reflection/resolvers.py`（98 行）— 字符串路径动态类加载
 
 ### M1 新增工时（vs 原估计）
