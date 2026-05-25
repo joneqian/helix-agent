@@ -228,12 +228,12 @@ apps/admin-ui/
 
 | PR | 内容 | 估时 |
 |----|------|------|
-| PR1 | H.1a 设计基线 PR1 — philosophy.md + language.md + STREAM-H-DESIGN.md + tokens.css + shell.css + ITERATION-PLAN 修订 | 1.5 天 |
-| PR2 | H.1a 设计基线 PR2 — 8 张 mockup HTML + mockups/README.md + brand glyph SVG + a11y 自检截图 | 2-3 天 |
-| PR3 | H.1b — `apps/admin-ui/` Vite 工程 scaffold + Antd 5 + i18n + 路由 + 鉴权 + Shell + Sidebar + Topbar + 空状态首页 | 3-4 天 |
-| PR4 | H.1b — CommandPalette + TenantSwitcher + 主题切换 + Lucide 接入 | 1-2 天 |
-| PR5 | H.2 — Agents 列表 + 创建 + 详情 Overview tab + Manifest tab(Monaco YAML)| 3-4 天 |
-| PR6 | H.2 — Agent 详情 Playground tab(SSE 流 + tool calls + trace timeline + 改 manifest 重跑) | 3-4 天 |
+| PR1 ✅ | H.1a 设计基线 PR1 — philosophy.md + language.md + STREAM-H-DESIGN.md + tokens.css + shell.css + ITERATION-PLAN 修订 #262 | 1.5 天 |
+| PR2 ✅ | H.1a 设计基线 PR2 — 8 张 mockup HTML + mockups/README.md + brand glyph SVG + a11y 自检截图 #263 | 2-3 天 |
+| PR3 ✅ | H.1b — `apps/admin-ui/` Vite 工程 scaffold + Antd 5 + i18n + 路由 + 鉴权 + Shell #264 #272 #274 | 3-4 天 |
+| PR4 ✅ | H.1b — CommandPalette + TenantSwitcher + 主题切换 + Lucide 接入 + OIDC + 6 SDK + Storybook/E2E #277 #278 #279 #280 #281 | 1-2 天 |
+| PR5 ✅ | H.2 — Agent 详情 Manifest tab Monaco YAML(view/edit/save)+ Create Agent drawer + POST/PUT /v1/agents #284 #285 | 3-4 天 |
+| PR6 ✅ | H.2 — Agent 详情 Playground tab(fetch+ReadableStream SSE + 色彩分类事件日志 + Stop)#286;**(a) 推迟**:改 manifest 重跑(需后端 ad-hoc spec override)/ 工具调用语义化时间线 / 审批 mid-run UX(H.3) | 3-4 天 |
 | PR7 | H.3 — Runs 列表 + 详情 + Trace + Approval 面板 | 3-4 天 |
 | PR8 | H.4(Curation+Eval)— 候选评审 + eval dataset CRUD | 2 天 |
 | PR9 | H.4(Memory)— per-user memory 列表 + 编辑 + 删除 | 1.5 天 |
@@ -268,3 +268,4 @@ apps/admin-ui/
 | 日期 | 版本 | 说明 |
 |---|---|---|
 | 2026-05-25 | v1.0 | 初稿:设计基线 PR 链 + IA + 工程目录 + 5 个 Mini-ADR + 12 个 PR 估时;H.4 用户面取消,改为治理面;Playground 嵌 per-agent tab |
+| 2026-05-25 | v1.1 | H.1a / H.1b / H.2 全部完成(PR1–6,合并 #262–264 / #272 / #274 / #277–281 / #284–286);PR 链表加 ✅ 标记 + #PR 引用;H.2 PR 6 显式推迟项落到 PR 行尾 |
