@@ -21,3 +21,4 @@ node_modules/
 .vite/
 apps/*/dist/
 apps/*/.turbo/
+apps/*/*.tsbuildinfo
