@@ -121,6 +121,9 @@ class AuditAction(StrEnum):
     # audit (meta)
     AUDIT_READ = "audit:read"
     AUDIT_EXPORT = "audit:export"
+    # system / cross-tenant (Stream N — Mini-ADR N-5)
+    SYSTEM_CROSS_TENANT_QUERY = "system:cross_tenant_query"
+    SYSTEM_TENANT_SWITCH = "system:tenant_switch"
 
 
 class AuditEntry(BaseModel):
@@ -160,6 +163,7 @@ class AuditEntry(BaseModel):
         "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
         "eval_dataset",  # Stream J.12 — Mini-ADR J-43
         "curation_candidate",  # Stream J.12 — Mini-ADR J-43
+        "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
     ]
     resource_id: str | None = None
     result: AuditResult

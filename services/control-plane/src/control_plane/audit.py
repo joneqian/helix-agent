@@ -126,6 +126,7 @@ ResourceType = Literal[
     "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
     "eval_dataset",  # Stream J.12 — Mini-ADR J-43
     "curation_candidate",  # Stream J.12 — Mini-ADR J-43
+    "system",  # Stream N — Mini-ADR N-5
 ]
 
 
