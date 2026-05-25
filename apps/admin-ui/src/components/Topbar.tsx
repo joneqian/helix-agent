@@ -1,12 +1,15 @@
 import { Button, Dropdown, Tooltip } from "antd";
 import { Bell, LogOut, Moon, Search, Sun, UserCircle2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../theme/ThemeContext";
 import { TenantSwitcher } from "./TenantSwitcher";
 import { useCommandPalette } from "./CommandPalette";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 
 export function Topbar() {
+  const { t } = useTranslation();
   const { mode, toggle } = useTheme();
   const { open } = useCommandPalette();
   const { identity, logout } = useAuth();
@@ -15,7 +18,6 @@ export function Topbar() {
     <>
       <TenantSwitcher />
 
-      {/* Cmd+K palette opener */}
       <button
         type="button"
         onClick={open}
@@ -35,21 +37,23 @@ export function Topbar() {
         }}
       >
         <Search size={14} strokeWidth={1.5} />
-        <span>搜索或跳转</span>
+        <span>{t("common.search_or_jump")}</span>
         <span style={{ flex: 1 }} />
         <span className="hx-kbd">⌘K</span>
       </button>
 
       <div style={{ flex: 1 }} />
 
-      <Tooltip title={mode === "dark" ? "切到 Light" : "切到 Dark"}>
+      <LanguageSwitcher />
+
+      <Tooltip title={mode === "dark" ? t("theme.switch_to_light") : t("theme.switch_to_dark")}>
         <Button type="text" size="small" onClick={toggle} icon={
           mode === "dark" ? <Sun size={16} strokeWidth={1.5} /> : <Moon size={16} strokeWidth={1.5} />
-        } aria-label="切换主题" />
+        } aria-label={t("theme.toggle")} />
       </Tooltip>
 
-      <Tooltip title="通知">
-        <Button type="text" size="small" icon={<Bell size={16} strokeWidth={1.5} />} aria-label="通知" />
+      <Tooltip title={t("common.notifications")}>
+        <Button type="text" size="small" icon={<Bell size={16} strokeWidth={1.5} />} aria-label={t("common.notifications")} />
       </Tooltip>
 
       <Dropdown
@@ -60,7 +64,7 @@ export function Topbar() {
               disabled: true,
               label: (
                 <span style={{ fontSize: 12, color: "var(--hx-text-tertiary)" }}>
-                  {identity?.displayName ?? "anonymous"}
+                  {identity?.displayName ?? t("common.anonymous")}
                   {identity?.isSystemAdmin && (
                     <span
                       style={{
@@ -81,7 +85,7 @@ export function Topbar() {
             { type: "divider" },
             {
               key: "logout",
-              label: "Sign out",
+              label: t("common.sign_out"),
               icon: <LogOut size={14} strokeWidth={1.5} />,
               onClick: logout,
             },
@@ -90,12 +94,12 @@ export function Topbar() {
         trigger={["click"]}
         placement="bottomRight"
       >
-        <Tooltip title={identity?.displayName ?? "用户菜单"}>
+        <Tooltip title={identity?.displayName ?? t("common.user_menu")}>
           <Button
             type="text"
             size="small"
             icon={<UserCircle2 size={16} strokeWidth={1.5} />}
-            aria-label="用户菜单"
+            aria-label={t("common.user_menu")}
             data-testid="user-menu"
           />
         </Tooltip>

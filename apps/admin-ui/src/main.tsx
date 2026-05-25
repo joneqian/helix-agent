@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
 import { AuthProvider } from "./auth/AuthContext";
+import "./i18n";
 import { TenantScopeProvider } from "./tenant/TenantScopeContext";
 import { ThemeProvider } from "./theme/ThemeContext";
 import "./theme/tokens.css";

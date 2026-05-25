@@ -1,14 +1,13 @@
 /**
- * TenantSwitcher — Stream H.1b (Stream N integration).
+ * TenantSwitcher — Stream H.1b (Stream N integration) + PR 2a (i18n).
  *
  * Topbar dropdown that drives :class:`TenantScopeContext`:
  *
  *   - tenant_admin: only their home tenant is shown (the switcher is
  *     effectively a read-only label; we still render the dropdown for
  *     visual consistency with system_admin).
- *   - system_admin: home tenant + "All tenants" + a placeholder for
- *     "Switch to specific tenant…" (PR 2 of H.1b wires a server-side
- *     tenant list).
+ *   - system_admin: home tenant + "All tenants" (PR 2b of H.1b wires a
+ *     server-side tenant list for "Switch to specific tenant…").
  *
  * The control-plane enforces this server-side via ``ensure_tenant_scope``
  * — selecting "All tenants" merely puts ``"*"`` on the wire; an
@@ -16,6 +15,7 @@
  */
 import { Select, Tag } from "antd";
 import { Globe2, Building2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { useAuth } from "../auth/AuthContext";
 import {
@@ -32,26 +32,27 @@ interface ScopeOption {
 }
 
 export function TenantSwitcher() {
+  const { t } = useTranslation();
   const { identity } = useAuth();
   const { scope, setScope } = useTenantScope();
 
   const isSystemAdmin = identity?.isSystemAdmin ?? false;
   const homeLabel = identity?.homeTenantId
-    ? `Home · ${identity.homeTenantId.slice(0, 8)}…`
-    : "Home tenant";
+    ? `${t("tenant.home_label_prefix")} · ${identity.homeTenantId.slice(0, 8)}…`
+    : t("tenant.home_tenant");
 
   const options: ScopeOption[] = [
     {
       value: SCOPE_HOME,
       label: homeLabel,
-      hint: "your tenant",
+      hint: t("tenant.your_tenant"),
     },
   ];
   if (isSystemAdmin) {
     options.push({
       value: SCOPE_ALL,
-      label: "All tenants",
-      hint: "system admin",
+      label: t("tenant.all_tenants"),
+      hint: t("tenant.system_admin_hint"),
     });
   }
 
@@ -64,9 +65,6 @@ export function TenantSwitcher() {
       size="middle"
       labelInValue={false}
       optionLabelProp="label"
-      // Disable when there is exactly one choice — the dropdown becomes
-      // a label, which matches the spec for tenant_admin (visual parity
-      // with system_admin without the affordance to act).
       disabled={options.length === 1}
       options={options.map((o) => ({
         value: o.value,
@@ -79,7 +77,7 @@ export function TenantSwitcher() {
             <span>{o.label}</span>
             {o.value === SCOPE_ALL && (
               <Tag color="purple" style={{ marginLeft: 4 }}>
-                cross
+                {t("tenant.cross_tag")}
               </Tag>
             )}
             {o.hint && (

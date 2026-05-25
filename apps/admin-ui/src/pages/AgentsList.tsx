@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Breadcrumb, Empty, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { TableColumnsType } from "antd";
 import { Bot, ChevronRight, Globe2, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { listAgents, type AgentRecord, type AgentList } from "../api/agents";
 import { ApiError } from "../api/client";
@@ -30,6 +31,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 export function AgentsList() {
+  const { t } = useTranslation();
   const { scope, apiTenantScope } = useTenantScope();
   const [data, setData] = useState<AgentList | null>(null);
   const [loading, setLoading] = useState(false);
@@ -60,7 +62,7 @@ export function AgentsList() {
 
   const columns: TableColumnsType<AgentRecord> = [
     {
-      title: "Name",
+      title: t("agents_page.column_name"),
       dataIndex: "name",
       key: "name",
       render: (name: string, record) => (
@@ -74,7 +76,7 @@ export function AgentsList() {
       ),
     },
     {
-      title: "Status",
+      title: t("agents_page.column_status"),
       dataIndex: "status",
       key: "status",
       width: 120,
@@ -83,7 +85,7 @@ export function AgentsList() {
       ),
     },
     {
-      title: "Tenant",
+      title: t("agents_page.column_tenant"),
       dataIndex: "tenant_id",
       key: "tenant_id",
       width: 160,
@@ -96,7 +98,7 @@ export function AgentsList() {
       ),
     },
     {
-      title: "Created",
+      title: t("agents_page.column_created"),
       dataIndex: "created_at",
       key: "created_at",
       width: 200,
@@ -115,7 +117,7 @@ export function AgentsList() {
       <div className="hx-page-header">
         <Breadcrumb
           separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: "Home" }, { title: "Agents" }]}
+          items={[{ title: t("common.home") }, { title: t("agents_page.page_title") }]}
         />
         <div
           style={{
@@ -126,14 +128,14 @@ export function AgentsList() {
             marginBottom: 16,
           }}
         >
-          <h1 style={{ margin: 0 }}>Agents</h1>
+          <h1 style={{ margin: 0 }}>{t("agents_page.page_title")}</h1>
           {isCrossTenant && (
             <Tag
               icon={<Globe2 size={12} strokeWidth={1.5} />}
               color="purple"
               data-testid="cross-tenant-banner"
             >
-              cross-tenant view
+              {t("agents_page.cross_tenant_banner")}
             </Tag>
           )}
           <span style={{ flex: 1 }} />
@@ -141,7 +143,7 @@ export function AgentsList() {
             type="button"
             onClick={refresh}
             disabled={loading}
-            aria-label="Refresh"
+            aria-label={t("common.refresh")}
             data-testid="agents-refresh"
             style={{
               display: "inline-flex",
@@ -157,7 +159,7 @@ export function AgentsList() {
             }}
           >
             <RefreshCw size={14} strokeWidth={1.5} />
-            {loading ? "Loading…" : "Refresh"}
+            {loading ? t("common.loading") : t("common.refresh")}
           </button>
         </div>
       </div>
@@ -166,7 +168,7 @@ export function AgentsList() {
         <Alert
           type="error"
           showIcon
-          message="Failed to load agents"
+          message={t("agents_page.failed_to_load")}
           description={error}
           style={{ marginBottom: 16 }}
           data-testid="agents-error"
@@ -188,8 +190,8 @@ export function AgentsList() {
             <Empty
               description={
                 scope === "*"
-                  ? "No agents across all tenants yet."
-                  : "No agents in this tenant. Use POST /v1/agents to create one."
+                  ? t("agents_page.empty_cross")
+                  : t("agents_page.empty_home")
               }
             />
           ),
