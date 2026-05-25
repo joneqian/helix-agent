@@ -1,0 +1,58 @@
+name: Admin UI CI
+
+# Stream H CI infrastructure — typecheck + test + build any
+# ``apps/admin-ui*/`` workspace. Currently exercises ``admin-ui-demo``
+# (the visual-baseline sandbox shipped in PR #264); when Stream H.1b
+# adds ``apps/admin-ui/`` the workflow will pick it up via the path
+# trigger automatically.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/admin-ui*/**"
+      - ".github/workflows/admin-ui-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/admin-ui*/**"
+      - ".github/workflows/admin-ui-ci.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  admin-ui-demo:
+    name: admin-ui-demo (typecheck + test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/admin-ui-demo
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.14.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/admin-ui-demo/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test (vitest)
+        run: pnpm test
+
+      - name: Build (vite)
+        run: pnpm build
