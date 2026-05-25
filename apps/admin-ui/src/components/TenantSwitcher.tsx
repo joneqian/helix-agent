@@ -59,6 +59,7 @@ export function TenantSwitcher() {
   return (
     <Select<TenantScopeValue>
       data-testid="tenant-switcher"
+      aria-label={t("tenant.home_tenant")}
       value={scope}
       onChange={setScope}
       style={{ minWidth: 220 }}

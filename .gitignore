@@ -22,3 +22,8 @@ node_modules/
 apps/*/dist/
 apps/*/.turbo/
 apps/*/*.tsbuildinfo
+
+# Stream H.1b PR 4 — Storybook + Playwright artefacts
+apps/admin-ui/storybook-static/
+apps/admin-ui/playwright-report/
+apps/admin-ui/test-results/
