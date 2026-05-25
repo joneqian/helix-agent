@@ -1,4 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+/**
+ * Settings · API Keys — Stream H.1b PR 3.
+ *
+ * Real CRUD against ``/v1/api_keys`` + ``/v1/service_accounts``:
+ *
+ *   - list across the caller's tenant (system_admin → all tenants via
+ *     :ref:`TenantSwitcher`)
+ *   - create under a chosen service account; surface the plaintext
+ *     bearer **once** in a confirmation modal that cannot be re-opened
+ *   - rotate (double-active grace window per Mini-ADR K-1) — again
+ *     show-once for the new plaintext
+ *   - revoke (DELETE) with an explicit confirm dialog
+ *
+ * Scopes are READ / WRITE / ADMIN (helix's API-key scope alphabet —
+ * narrower than the per-resource RBAC matrix; see
+ * ``ApiKeyScope`` in ``helix_agent.protocol.service_account``).
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Alert,
@@ -7,41 +24,115 @@ import {
   Button,
   Checkbox,
   Col,
+  DatePicker,
+  Empty,
   Form,
-  Input,
   Layout,
   Menu,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
   Table,
   Tag,
   Tooltip,
+  Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { AlertTriangle, ChevronRight, Copy, Key, MoreHorizontal, Plus, ShieldAlert } from "lucide-react";
-import { ALL_SCOPES, generateMockKey, mockApiKeys, type MockApiKey } from "../mock/apiKeys";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Copy,
+  Key,
+  RotateCcw,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { Dayjs } from "dayjs";
+
+import { ApiError } from "../api/client";
+import {
+  API_KEY_SCOPES,
+  createApiKey,
+  listApiKeys,
+  listServiceAccounts,
+  revokeApiKey,
+  rotateApiKey,
+  type ApiKeyCreated,
+  type ApiKeyRecord,
+  type ApiKeyScope,
+  type ServiceAccountRecord,
+} from "../api/api_keys";
+import { useTenantScope } from "../tenant/TenantScopeContext";
 
 const { Sider } = Layout;
+const { Text } = Typography;
 
 const SETTINGS_MENU = [
   { key: "api-keys", label: "API Keys" },
   { key: "service-accounts", label: "Service Accounts" },
   { key: "role-bindings", label: "Role Bindings" },
-  { key: "quotas", label: "Quotas" },
-  { key: "tenant-config", label: "Tenant Config" },
   { key: "audit", label: "Audit" },
 ];
 
+type RowStatus = "active" | "grace" | "revoked" | "expired";
+
+function classifyKey(k: ApiKeyRecord): RowStatus {
+  if (k.revoked_at !== null) return "revoked";
+  if (k.expires_at !== null && new Date(k.expires_at) < new Date()) return "expired";
+  if (k.rotated_at !== null && k.grace_period_s !== null) {
+    const graceEnd = new Date(k.rotated_at).getTime() + k.grace_period_s * 1000;
+    if (graceEnd > Date.now()) return "grace";
+  }
+  return "active";
+}
+
 export function SettingsApiKeys() {
+  const { t } = useTranslation();
+  const { apiTenantScope } = useTenantScope();
   const [searchParams, setSearchParams] = useSearchParams();
   const { message } = App.useApp();
 
-  const [keys, setKeys] = useState<MockApiKey[]>(mockApiKeys);
+  const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
+  const [accounts, setAccounts] = useState<ServiceAccountRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [showOnce, setShowOnce] = useState<{ full: string; prefix: string } | null>(null);
-  const [form] = Form.useForm();
+  const [showOnce, setShowOnce] = useState<ApiKeyCreated | null>(null);
+  const [form] = Form.useForm<{
+    serviceAccountId: string;
+    scopes: ApiKeyScope[];
+    expiresAt: Dayjs | null;
+  }>();
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [keyList, saList] = await Promise.all([
+        listApiKeys({ tenantScope: apiTenantScope }),
+        listServiceAccounts({ tenantScope: apiTenantScope }),
+      ]);
+      setKeys(keyList.items);
+      setAccounts(saList.items);
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? `${err.code}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "unknown error";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiTenantScope]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   useEffect(() => {
     if (searchParams.get("action") === "create") {
@@ -50,95 +141,194 @@ export function SettingsApiKeys() {
     }
   }, [searchParams, setSearchParams]);
 
-  const inRotation = useMemo(() => keys.filter((k) => k.status === "grace").length, [keys]);
+  const inRotation = useMemo(
+    () => keys.filter((k) => classifyKey(k) === "grace").length,
+    [keys],
+  );
 
-  const columns: TableColumnsType<MockApiKey> = [
+  const saName = useCallback(
+    (id: string): string => accounts.find((a) => a.id === id)?.name ?? id.slice(0, 8) + "…",
+    [accounts],
+  );
+
+  const handleCreate = async () => {
+    try {
+      const values = await form.validateFields();
+      const created = await createApiKey(values.serviceAccountId, {
+        scopes: values.scopes,
+        expires_at: values.expiresAt ? values.expiresAt.toISOString() : null,
+      });
+      setCreateOpen(false);
+      form.resetFields();
+      setShowOnce(created);
+      await refresh();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        message.error(`${err.code}: ${err.message}`);
+      } else if (err instanceof Error) {
+        message.error(err.message);
+      }
+    }
+  };
+
+  const handleRotate = async (apiKeyId: string) => {
+    try {
+      const rotated = await rotateApiKey(apiKeyId, { grace_period_s: 300 });
+      setShowOnce(rotated.new);
+      message.success(t("api_keys.rotated"));
+      await refresh();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      message.error(msg);
+    }
+  };
+
+  const handleRevoke = async (apiKeyId: string) => {
+    try {
+      await revokeApiKey(apiKeyId);
+      message.success(t("api_keys.revoked"));
+      await refresh();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      message.error(msg);
+    }
+  };
+
+  const statusTagColor: Record<RowStatus, string> = {
+    active: "success",
+    grace: "warning",
+    revoked: "error",
+    expired: "default",
+  };
+
+  const columns: TableColumnsType<ApiKeyRecord> = [
     {
-      title: "名称",
-      dataIndex: "name",
-      key: "name",
-      render: (n: string, r) => (
-        <span>
-          <span className="mono" style={{ fontWeight: 500 }}>{n}</span>
-          {r.status === "grace" && (
-            <span style={{ fontSize: 11, color: "var(--hx-text-tertiary)", marginLeft: 6 }}>(rotation old)</span>
-          )}
-        </span>
-      ),
-    },
-    {
-      title: "Prefix",
+      title: t("api_keys.col_prefix"),
       dataIndex: "prefix",
       key: "prefix",
-      width: 200,
-      render: (p) => (
-        <span
-          className="mono"
-          style={{
-            background: "var(--hx-surface-raised)",
-            padding: "2px 6px",
-            borderRadius: 2,
-            fontSize: 11,
-            color: "var(--hx-text-tertiary)",
-          }}
-        >{p}</span>
+      render: (p: string) => (
+        <Text code style={{ fontSize: 11 }}>
+          {p}
+        </Text>
       ),
     },
     {
-      title: "Scopes",
+      title: t("api_keys.col_scopes"),
       dataIndex: "scopes",
       key: "scopes",
-      render: (s: string[]) => (
+      render: (s: ApiKeyScope[]) => (
         <Space size={4} wrap>
           {s.map((scope) => (
-            <Tag key={scope} bordered={false} style={{ borderRadius: 2 }}>{scope}</Tag>
+            <Tag key={scope} bordered={false}>
+              {scope}
+            </Tag>
           ))}
         </Space>
       ),
     },
-    { title: "Service Account", dataIndex: "serviceAccount", key: "serviceAccount", width: 180 },
     {
-      title: "状态",
-      dataIndex: "status",
+      title: t("api_keys.col_service_account"),
+      dataIndex: "service_account_id",
+      key: "service_account_id",
+      render: (id: string) => <span>{saName(id)}</span>,
+    },
+    {
+      title: t("api_keys.col_status"),
       key: "status",
       width: 120,
-      render: (s: MockApiKey["status"], r) => {
-        if (s === "active") return <Tag color="success" bordered={false} style={{ borderRadius: 2 }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 999, background: "currentColor", marginRight: 4 }} />active</Tag>;
-        if (s === "grace") return <Tag color="warning" bordered={false} style={{ borderRadius: 2 }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 999, background: "currentColor", marginRight: 4 }} />grace {r.graceUntil}</Tag>;
-        return <Tag color="error" bordered={false} style={{ borderRadius: 2 }}><span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 999, background: "currentColor", marginRight: 4 }} />revoked</Tag>;
+      render: (_v, r) => {
+        const cls = classifyKey(r);
+        return (
+          <Tag color={statusTagColor[cls]} bordered={false}>
+            {cls}
+          </Tag>
+        );
       },
     },
-    { title: "Last used", dataIndex: "lastUsed", key: "lastUsed", width: 100, render: (u) => <span style={{ fontSize: 12, color: "var(--hx-text-secondary)" }}>{u}</span> },
-    { title: "过期", dataIndex: "expiresAt", key: "expiresAt", width: 140, render: (e) => <span style={{ fontSize: 12, color: "var(--hx-text-secondary)" }}>{e}</span> },
+    {
+      title: t("api_keys.col_last_used"),
+      dataIndex: "last_used_at",
+      key: "last_used_at",
+      width: 160,
+      render: (v: string | null) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {v ? new Date(v).toLocaleString() : "—"}
+        </Text>
+      ),
+    },
+    {
+      title: t("api_keys.col_expires"),
+      dataIndex: "expires_at",
+      key: "expires_at",
+      width: 160,
+      render: (v: string | null) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {v ? new Date(v).toLocaleDateString() : t("api_keys.never")}
+        </Text>
+      ),
+    },
     {
       title: "",
       key: "actions",
-      width: 32,
-      render: () => (
-        <Tooltip title="更多操作">
-          <Button type="text" size="small" icon={<MoreHorizontal size={14} strokeWidth={1.5} />} />
-        </Tooltip>
-      ),
+      width: 100,
+      render: (_v, r) => {
+        const cls = classifyKey(r);
+        if (cls === "revoked") return null;
+        return (
+          <Space size={4}>
+            <Tooltip title={t("api_keys.rotate")}>
+              <Button
+                type="text"
+                size="small"
+                icon={<RotateCcw size={14} strokeWidth={1.5} />}
+                onClick={() => void handleRotate(r.id)}
+                data-testid={`api-key-rotate-${r.id}`}
+              />
+            </Tooltip>
+            <Popconfirm
+              title={t("api_keys.revoke_confirm")}
+              okType="danger"
+              onConfirm={() => void handleRevoke(r.id)}
+            >
+              <Tooltip title={t("api_keys.revoke")}>
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<Trash2 size={14} strokeWidth={1.5} />}
+                  data-testid={`api-key-revoke-${r.id}`}
+                />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
   return (
     <div>
       <Breadcrumb
-        items={[{ title: "acme-corp" }, { title: "Settings" }, { title: "API Keys" }]}
+        items={[{ title: "Settings" }, { title: "API Keys" }]}
         style={{ marginBottom: 8, fontSize: 13 }}
         separator={<ChevronRight size={12} strokeWidth={1.5} style={{ verticalAlign: "middle" }} />}
       />
 
       <div className="hx-page-header">
         <div>
-          <h1>API Keys</h1>
+          <h1>{t("api_keys.page_title")}</h1>
           <p style={{ margin: "8px 0 0", color: "var(--hx-text-secondary)" }}>
-            服务账户的访问密钥;每个 key 绑定 scopes(权限范围)。支持轮换(双活窗口)与立即撤销。
+            {t("api_keys.subtitle")}
           </p>
         </div>
-        <Button type="primary" icon={<Plus size={14} strokeWidth={1.5} />} onClick={() => setCreateOpen(true)}>
-          创建 API Key
+        <Button
+          type="primary"
+          icon={<Key size={14} strokeWidth={1.5} />}
+          disabled={accounts.length === 0}
+          onClick={() => setCreateOpen(true)}
+          data-testid="api-key-create-open"
+        >
+          {t("api_keys.create")}
         </Button>
       </div>
 
@@ -156,125 +346,131 @@ export function SettingsApiKeys() {
           </Layout>
         </Col>
         <Col flex="auto">
+          {error !== null && (
+            <Alert
+              type="error"
+              showIcon
+              message={t("api_keys.failed_to_load")}
+              description={error}
+              style={{ marginBottom: 16 }}
+              data-testid="api-keys-error"
+            />
+          )}
+
           {inRotation > 0 && (
             <Alert
               showIcon
               icon={<AlertTriangle size={16} strokeWidth={1.5} />}
               type="warning"
-              message={<strong>{inRotation} 个 key 处于轮换 grace 窗口</strong>}
-              description="旧 key 仍可用;到期后失效。引导调用方尽快切到新 key。"
-              action={<Button size="small">查看详情</Button>}
+              message={<strong>{t("api_keys.rotation_banner", { count: inRotation })}</strong>}
+              description={t("api_keys.rotation_help")}
               style={{ marginBottom: 16 }}
             />
           )}
 
-          <Table<MockApiKey>
+          <Table<ApiKeyRecord>
             className="hx-table"
             rowKey="id"
             columns={columns}
             dataSource={keys}
+            loading={loading}
             pagination={false}
+            locale={{
+              emptyText: (
+                <Empty description={t("api_keys.empty")} />
+              ),
+            }}
+            data-testid="api-keys-table"
           />
         </Col>
       </Row>
 
-      {/* 创建 modal */}
       <Modal
-        title="创建 API Key"
+        title={t("api_keys.create")}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
-        okText="创建"
-        cancelText="取消"
-        onOk={() => {
-          form
-            .validateFields()
-            .then((values: { name: string; serviceAccount: string; scopes: string[]; expiresIn: string }) => {
-              const { full, prefix } = generateMockKey();
-              const newKey: MockApiKey = {
-                id: `key_${Date.now()}`,
-                name: values.name,
-                prefix,
-                scopes: values.scopes,
-                serviceAccount: values.serviceAccount,
-                status: "active",
-                lastUsed: "—",
-                expiresAt: values.expiresIn === "never" ? "永不过期" : values.expiresIn,
-              };
-              setKeys((prev) => [newKey, ...prev]);
-              setCreateOpen(false);
-              form.resetFields();
-              setShowOnce({ full, prefix });
-            })
-            .catch(() => undefined);
-        }}
+        okText={t("api_keys.create")}
+        cancelText={t("common.cancel")}
+        onOk={() => void handleCreate()}
+        data-testid="api-key-create-modal"
       >
         <Form
           form={form}
           layout="vertical"
           style={{ marginTop: 16 }}
-          initialValues={{
-            scopes: ["agents:read", "runs:read"],
-            serviceAccount: "prod-ingest-svc",
-            expiresIn: "2027-05-25",
-          }}
+          initialValues={{ scopes: ["read"], expiresAt: null }}
         >
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
-            <Input placeholder="如 prod-ingest / staging-readonly" />
-          </Form.Item>
-          <Form.Item name="serviceAccount" label="绑定 Service Account" rules={[{ required: true }]}>
+          <Form.Item
+            name="serviceAccountId"
+            label={t("api_keys.service_account_label")}
+            rules={[{ required: true, message: t("api_keys.service_account_required") }]}
+          >
             <Select
-              options={[
-                { value: "prod-ingest-svc", label: "prod-ingest-svc" },
-                { value: "analyst-svc", label: "analyst-svc" },
-                { value: "ci-bot-svc", label: "ci-bot-svc" },
-              ]}
+              data-testid="api-key-sa-select"
+              options={accounts.map((a) => ({ value: a.id, label: a.name }))}
             />
           </Form.Item>
-          <Form.Item name="scopes" label="Scopes(多选)" rules={[{ required: true, message: "至少选一个 scope" }]}>
+          <Form.Item
+            name="scopes"
+            label={t("api_keys.scopes_label")}
+            rules={[{ required: true, message: t("api_keys.scopes_required") }]}
+          >
             <Checkbox.Group>
               <Row>
-                {ALL_SCOPES.map((s) => (
-                  <Col key={s.value} span={12} style={{ marginBottom: 6 }}>
-                    <Checkbox value={s.value}>
-                      <span className="mono" style={{ fontSize: 12 }}>{s.label}</span>
-                      {s.danger && <Tag color="error" bordered={false} style={{ marginLeft: 6, fontSize: 10 }}><ShieldAlert size={10} strokeWidth={1.5} style={{ verticalAlign: "middle", marginRight: 2 }} />危险</Tag>}
+                {API_KEY_SCOPES.map((s) => (
+                  <Col key={s} span={12} style={{ marginBottom: 6 }}>
+                    <Checkbox value={s}>
+                      <Text code style={{ fontSize: 12 }}>
+                        {s}
+                      </Text>
+                      {s === "admin" && (
+                        <Tag color="error" bordered={false} style={{ marginLeft: 6, fontSize: 10 }}>
+                          <ShieldAlert size={10} strokeWidth={1.5} style={{ verticalAlign: "middle", marginRight: 2 }} />
+                          {t("api_keys.dangerous")}
+                        </Tag>
+                      )}
                     </Checkbox>
                   </Col>
                 ))}
               </Row>
             </Checkbox.Group>
           </Form.Item>
-          <Form.Item name="expiresIn" label="过期时间">
-            <Select
-              options={[
-                { value: "2026-08-23", label: "90 天" },
-                { value: "2026-11-21", label: "180 天" },
-                { value: "2027-05-25", label: "1 年" },
-                { value: "never", label: "永不过期 (不推荐)" },
-              ]}
-            />
+          <Form.Item name="expiresAt" label={t("api_keys.expires_label")}>
+            <DatePicker style={{ width: "100%" }} />
           </Form.Item>
         </Form>
       </Modal>
 
-      {/* show-once modal */}
       <Modal
-        open={!!showOnce}
+        open={showOnce !== null}
         onCancel={() => setShowOnce(null)}
-        title={<span style={{ color: "var(--hx-color-brand-400)" }}><Key size={16} strokeWidth={1.5} style={{ verticalAlign: "middle", marginRight: 6 }} />API Key 已创建</span>}
-        okText="我已保存,关闭"
+        title={
+          <span style={{ color: "var(--hx-color-brand-400)" }}>
+            <Key
+              size={16}
+              strokeWidth={1.5}
+              style={{ verticalAlign: "middle", marginRight: 6 }}
+            />
+            {t("api_keys.show_once_title")}
+          </span>
+        }
+        okText={t("api_keys.show_once_ack")}
         onOk={() => setShowOnce(null)}
         cancelButtonProps={{ style: { display: "none" } }}
+        data-testid="api-key-show-once"
       >
-        {showOnce && (
+        {showOnce !== null && (
           <div style={{ marginTop: 12 }}>
-            <p>请立即复制此 key 并安全保存 — <strong>窗口关闭后无法再次查看完整 key</strong>。</p>
+            <p>
+              {t("api_keys.show_once_help_prefix")}
+              <strong>{t("api_keys.show_once_help_emphasis")}</strong>。
+            </p>
             <div
               style={{
                 fontFamily: "var(--hx-font-mono)",
                 fontSize: 14,
                 padding: 12,
-                background: "var(--hx-color-neutral-950)",
+                background: "var(--hx-color-neutral-950, #0a0a0a)",
                 border: "1px solid var(--hx-border-default)",
                 borderRadius: 6,
                 display: "flex",
@@ -282,20 +478,21 @@ export function SettingsApiKeys() {
                 margin: "12px 0",
               }}
             >
-              <code style={{ flex: 1, wordBreak: "break-all" }}>{showOnce.full}</code>
+              <code style={{ flex: 1, wordBreak: "break-all" }}>{showOnce.plaintext}</code>
               <Button
                 size="small"
                 icon={<Copy size={12} strokeWidth={1.5} />}
                 onClick={() => {
-                  navigator.clipboard.writeText(showOnce.full);
-                  message.success("已复制到剪贴板");
+                  void navigator.clipboard.writeText(showOnce.plaintext);
+                  message.success(t("api_keys.copied"));
                 }}
               >
-                复制
+                {t("api_keys.copy")}
               </Button>
             </div>
             <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: 0 }}>
-              prefix <code className="mono">{showOnce.prefix}</code> 会保留显示在列表中,完整 key 仅此一次。
+              {t("api_keys.show_once_prefix_note")}{" "}
+              <Text code>{showOnce.api_key.prefix}</Text>
             </p>
           </div>
         )}

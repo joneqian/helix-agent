@@ -150,7 +150,9 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
         subtitle,
         icon: <Bot size={16} strokeWidth={1.5} />,
         action: () => {
-          nav(`/agents/${a.id}/overview`);
+          nav(
+            `/agents/${encodeURIComponent(a.name)}/${encodeURIComponent(a.version)}/overview`,
+          );
           close();
         },
       });

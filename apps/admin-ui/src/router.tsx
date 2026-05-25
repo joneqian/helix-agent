@@ -10,10 +10,10 @@ export function AppRouter() {
     <Routes>
       <Route path="/" element={<Navigate to="/agents" replace />} />
       <Route path="/agents" element={<AgentsList />} />
-      <Route path="/agents/:agentId" element={<AgentDetail />} />
-      <Route path="/agents/:agentId/:tab" element={<AgentDetail />} />
+      <Route path="/agents/:name/:version" element={<AgentDetail />} />
+      <Route path="/agents/:name/:version/:tab" element={<AgentDetail />} />
       <Route path="/runs" element={<ComingSoon title="Runs(跨 agent)" />} />
-      <Route path="/runs/:runId" element={<RunDetail />} />
+      <Route path="/runs/:threadId/:runId" element={<RunDetail />} />
       <Route path="/curation" element={<ComingSoon title="Curation+Eval" />} />
       <Route path="/memory" element={<ComingSoon title="Memory" />} />
       <Route path="/skills" element={<ComingSoon title="Skills" />} />

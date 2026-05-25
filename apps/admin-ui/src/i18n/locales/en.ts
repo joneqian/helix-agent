@@ -50,6 +50,76 @@ export interface TranslationKeys {
     exchanging: string;
     failed: string;
   };
+  agent_detail: {
+    failed_to_load: string;
+    tab_overview: string;
+    tab_manifest: string;
+    tab_playground: string;
+    tab_runs: string;
+    tab_skills: string;
+    tab_triggers: string;
+    tab_memory: string;
+    tab_coming_soon: string;
+    config_summary: string;
+    field_id: string;
+    field_tenant: string;
+    field_spec_sha: string;
+    field_status: string;
+    field_created: string;
+    field_updated: string;
+  };
+  run_detail: {
+    failed_to_load: string;
+    thread_label: string;
+    awaiting_approval: string;
+    reason_kind: string;
+    requested_at: string;
+    timeout_at: string;
+    proposed_args: string;
+    approve: string;
+    reject: string;
+    approved: string;
+    rejected: string;
+    run_metadata: string;
+    run_id: string;
+    thread_id: string;
+    status: string;
+    trace_in_observability: string;
+  };
+  api_keys: {
+    page_title: string;
+    subtitle: string;
+    create: string;
+    failed_to_load: string;
+    empty: string;
+    never: string;
+    rotation_banner: string;
+    rotation_help: string;
+    col_prefix: string;
+    col_scopes: string;
+    col_service_account: string;
+    col_status: string;
+    col_last_used: string;
+    col_expires: string;
+    rotate: string;
+    revoke: string;
+    revoke_confirm: string;
+    rotated: string;
+    revoked: string;
+    service_account_label: string;
+    service_account_required: string;
+    scopes_label: string;
+    scopes_required: string;
+    expires_label: string;
+    dangerous: string;
+    show_once_title: string;
+    show_once_ack: string;
+    show_once_help_prefix: string;
+    show_once_help_emphasis: string;
+    show_once_prefix_note: string;
+    copy: string;
+    copied: string;
+  };
   tenant: {
     home_label_prefix: string;
     home_tenant: string;
@@ -143,6 +213,83 @@ const en: TranslationKeys = {
     exchanging:
       "Exchanging the authorization code with your identity provider.",
     failed: "Sign-in failed",
+  },
+  agent_detail: {
+    failed_to_load: "Failed to load agent",
+    tab_overview: "Overview",
+    tab_manifest: "Manifest",
+    tab_playground: "Playground",
+    tab_runs: "Runs",
+    tab_skills: "Skills",
+    tab_triggers: "Triggers",
+    tab_memory: "Memory",
+    tab_coming_soon: "Tab \"{{tab}}\" lands in Stream H.2.",
+    config_summary: "Configuration",
+    field_id: "Record ID",
+    field_tenant: "Tenant",
+    field_spec_sha: "Spec sha256",
+    field_status: "Status",
+    field_created: "Created",
+    field_updated: "Updated",
+  },
+  run_detail: {
+    failed_to_load: "Failed to load run",
+    thread_label: "Thread",
+    awaiting_approval: "awaiting approval",
+    reason_kind: "Reason",
+    requested_at: "Requested",
+    timeout_at: "Timeout",
+    proposed_args: "Proposed arguments",
+    approve: "Approve",
+    reject: "Reject",
+    approved: "Approved — run resuming.",
+    rejected: "Rejected — run cancelled.",
+    run_metadata: "Run metadata",
+    run_id: "Run ID",
+    thread_id: "Thread ID",
+    status: "Status",
+    trace_in_observability:
+      "Trace + span timeline live in the OTLP / Grafana observability stack; H.4 will embed them here.",
+  },
+  api_keys: {
+    page_title: "API Keys",
+    subtitle:
+      "Service-account access keys. Each key carries scopes (read / write / admin). Supports rotation (double-active grace) and immediate revocation.",
+    create: "Create API Key",
+    failed_to_load: "Failed to load API keys",
+    empty:
+      "No API keys yet. Create one bound to a service account to start.",
+    never: "never",
+    rotation_banner: "{{count}} keys in rotation grace window",
+    rotation_help:
+      "Old keys are still valid until the grace window expires; have callers swap to the new key now.",
+    col_prefix: "Prefix",
+    col_scopes: "Scopes",
+    col_service_account: "Service Account",
+    col_status: "Status",
+    col_last_used: "Last used",
+    col_expires: "Expires",
+    rotate: "Rotate",
+    revoke: "Revoke",
+    revoke_confirm: "Revoke this key immediately?",
+    rotated: "API key rotated. Old key remains valid until the grace window expires.",
+    revoked: "API key revoked.",
+    service_account_label: "Service Account",
+    service_account_required: "Pick a service account",
+    scopes_label: "Scopes",
+    scopes_required: "Pick at least one scope",
+    expires_label: "Expires at",
+    dangerous: "dangerous",
+    show_once_title: "API Key created",
+    show_once_ack: "I saved the key, close",
+    show_once_help_prefix:
+      "Copy this key immediately and store it securely — ",
+    show_once_help_emphasis:
+      "you will not be able to view the full key again",
+    show_once_prefix_note:
+      "Only the prefix is retained on the list:",
+    copy: "Copy",
+    copied: "Copied to clipboard",
   },
   tenant: {
     home_label_prefix: "Home",
