@@ -38,6 +38,7 @@ from control_plane.api import (
     build_feedback_router,
     build_health_router,
     build_knowledge_router,
+    build_me_router,
     build_memory_router,
     build_metrics_router,
     build_quota_router,
@@ -738,6 +739,7 @@ def create_app(
     app.include_router(build_feedback_router())
     app.include_router(build_artifacts_router())
     app.include_router(build_knowledge_router())
+    app.include_router(build_me_router())
     app.include_router(build_memory_router())
     app.include_router(build_skills_router())
     app.include_router(build_uploads_router())

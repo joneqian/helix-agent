@@ -1,13 +1,54 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+/**
+ * Command palette (Cmd+K) — Stream H.1b PR 2a.
+ *
+ * Wired to the live Agents API (drops the demo's ``mockAgents``).
+ * Agents are loaded once when the palette opens; we keep a short
+ * client-side TTL so re-opening it inside the same tab feels instant
+ * but a freshly created Agent shows up after at most a few seconds.
+ * Tenant scope flows from :ref:`TenantScopeContext` so a system_admin
+ * in "All tenants" mode sees Agents across every tenant they can
+ * reach.
+ *
+ * Static jumps (Runs / Curation / Memory / Skills / Triggers /
+ * Settings · API Keys) point at the real router paths already wired
+ * by the H.1b scaffold — entries here are the single source of truth
+ * for the keyboard-first navigation surface.
+ */
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Modal, Input, type InputRef } from "antd";
 import { useNavigate } from "react-router-dom";
-import { Bot, Activity, CheckSquare, Brain, FileText, Clock, Key, Plus, ArrowRight, Cog } from "lucide-react";
-import { mockAgents } from "../mock/agents";
+import { useTranslation } from "react-i18next";
+import {
+  Bot,
+  Activity,
+  CheckSquare,
+  Brain,
+  FileText,
+  Clock,
+  Key,
+  Plus,
+  ArrowRight,
+  Cog,
+} from "lucide-react";
+
+import { listAgents, type AgentRecord } from "../api/agents";
+import { useAuth } from "../auth/AuthContext";
+import { useTenantScope } from "../tenant/TenantScopeContext";
 
 interface CmdItem {
   group: string;
   key: string;
   label: ReactNode;
+  searchText: string;
   subtitle?: string;
   icon?: ReactNode;
   shortcut?: string[];
@@ -27,10 +68,21 @@ export function useCommandPalette() {
   return ctx;
 }
 
+/** Re-fetch the Agents list at most every ``AGENT_TTL_MS`` ms — same
+ *  tab + same tenant scope reuses the cached list, avoiding a blank
+ *  flash on every Cmd+K press. */
+const AGENT_TTL_MS = 60_000;
+
 export function CommandPaletteProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  const { status } = useAuth();
+  const { apiTenantScope } = useTenantScope();
+
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [agents, setAgents] = useState<AgentRecord[]>([]);
+  const lastFetchRef = useRef<{ at: number; scope: string | undefined } | null>(null);
   const inputRef = useRef<InputRef>(null);
   const nav = useNavigate();
 
@@ -41,7 +93,6 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   }, []);
   const close = useCallback(() => setIsOpen(false), []);
 
-  // Global Cmd+K
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -54,23 +105,49 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Focus input on open
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
 
+  // Refresh agents whenever the palette is opened — but only if the
+  // cache is stale OR the tenant scope changed since the last fetch.
+  useEffect(() => {
+    if (!isOpen || status !== "authenticated") return;
+    const now = Date.now();
+    const last = lastFetchRef.current;
+    if (last && last.scope === apiTenantScope && now - last.at < AGENT_TTL_MS) {
+      return;
+    }
+    let cancelled = false;
+    void listAgents({ tenantScope: apiTenantScope, limit: 50 })
+      .then((result) => {
+        if (cancelled) return;
+        setAgents(result.items);
+        lastFetchRef.current = { at: now, scope: apiTenantScope };
+      })
+      .catch(() => {
+        // Failing silently is fine — the palette still works for static
+        // jumps + actions; the Agents-list page will surface real
+        // errors to the user.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, status, apiTenantScope]);
+
   const allItems: CmdItem[] = useMemo(() => {
     const items: CmdItem[] = [];
 
-    // Agents
-    mockAgents.forEach((a) => {
+    agents.forEach((a) => {
+      const subtitle = `${a.version} · ${a.status}`;
       items.push({
-        group: "Agents",
-        key: `agent-${a.id}`,
+        group: t("cmdk.group_agents"),
+        key: `agent-${a.tenant_id}-${a.id}`,
         label: a.name,
-        subtitle: `${a.version} · ${a.status}`,
+        searchText: `${a.name} ${subtitle} ${a.tenant_id}`,
+        subtitle,
         icon: <Bot size={16} strokeWidth={1.5} />,
         action: () => {
           nav(`/agents/${a.id}/overview`);
@@ -79,20 +156,21 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       });
     });
 
-    // 顶级跳转
-    [
-      { key: "go-agents", label: "Agents", path: "/agents", icon: <Bot size={16} strokeWidth={1.5} />, sc: ["g", "a"] },
-      { key: "go-runs", label: "Runs(跨 agent)", path: "/runs", icon: <Activity size={16} strokeWidth={1.5} />, sc: ["g", "r"] },
-      { key: "go-curation", label: "Curation 评审", path: "/curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, sc: ["g", "c"] },
-      { key: "go-memory", label: "Memory", path: "/memory", icon: <Brain size={16} strokeWidth={1.5} />, sc: ["g", "m"] },
-      { key: "go-skills", label: "Skills", path: "/skills", icon: <FileText size={16} strokeWidth={1.5} />, sc: ["g", "s"] },
-      { key: "go-triggers", label: "Triggers", path: "/triggers", icon: <Clock size={16} strokeWidth={1.5} />, sc: ["g", "t"] },
-      { key: "go-api-keys", label: "Settings · API Keys", path: "/settings/api-keys", icon: <Key size={16} strokeWidth={1.5} />, sc: [] },
-    ].forEach((g) => {
+    const jumpItems = [
+      { key: "go-agents", label: t("agents_page.page_title"), path: "/agents", icon: <Bot size={16} strokeWidth={1.5} />, sc: ["g", "a"] },
+      { key: "go-runs", label: t("cmdk.label_runs"), path: "/runs", icon: <Activity size={16} strokeWidth={1.5} />, sc: ["g", "r"] },
+      { key: "go-curation", label: t("cmdk.label_curation"), path: "/curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, sc: ["g", "c"] },
+      { key: "go-memory", label: t("cmdk.label_memory"), path: "/memory", icon: <Brain size={16} strokeWidth={1.5} />, sc: ["g", "m"] },
+      { key: "go-skills", label: t("cmdk.label_skills"), path: "/skills", icon: <FileText size={16} strokeWidth={1.5} />, sc: ["g", "s"] },
+      { key: "go-triggers", label: t("cmdk.label_triggers"), path: "/triggers", icon: <Clock size={16} strokeWidth={1.5} />, sc: ["g", "t"] },
+      { key: "go-api-keys", label: t("cmdk.label_settings_api_keys"), path: "/settings/api-keys", icon: <Key size={16} strokeWidth={1.5} />, sc: [] as string[] },
+    ];
+    jumpItems.forEach((g) => {
       items.push({
-        group: "跳转",
+        group: t("cmdk.group_jump"),
         key: g.key,
         label: g.label,
+        searchText: g.label,
         icon: g.icon,
         shortcut: g.sc,
         action: () => {
@@ -102,11 +180,11 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       });
     });
 
-    // 动作
     items.push({
-      group: "动作",
+      group: t("cmdk.group_action"),
       key: "create-agent",
-      label: "创建新 Agent…",
+      label: t("cmdk.action_create_agent"),
+      searchText: t("cmdk.action_create_agent"),
       icon: <Plus size={16} strokeWidth={1.5} />,
       shortcut: ["N"],
       action: () => {
@@ -115,9 +193,10 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       },
     });
     items.push({
-      group: "动作",
+      group: t("cmdk.group_action"),
       key: "create-api-key",
-      label: "创建新 API Key…",
+      label: t("cmdk.action_create_api_key"),
+      searchText: t("cmdk.action_create_api_key"),
       icon: <Key size={16} strokeWidth={1.5} />,
       action: () => {
         nav("/settings/api-keys?action=create");
@@ -125,9 +204,10 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       },
     });
     items.push({
-      group: "动作",
+      group: t("cmdk.group_action"),
       key: "open-settings",
-      label: "打开 Settings",
+      label: t("cmdk.action_open_settings"),
+      searchText: t("cmdk.action_open_settings"),
       icon: <Cog size={16} strokeWidth={1.5} />,
       action: () => {
         nav("/settings/api-keys");
@@ -136,20 +216,16 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
     });
 
     return items;
-  }, [nav, close]);
+  }, [agents, nav, close, t]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return allItems.slice(0, 20);
     return allItems
-      .filter((i) => {
-        const labelStr = typeof i.label === "string" ? i.label : "";
-        return labelStr.toLowerCase().includes(q) || (i.subtitle?.toLowerCase().includes(q) ?? false);
-      })
+      .filter((i) => i.searchText.toLowerCase().includes(q))
       .slice(0, 30);
   }, [allItems, query]);
 
-  // Reset active index when filtered list changes
   useEffect(() => {
     setActiveIndex(0);
   }, [query]);
@@ -199,14 +275,17 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="搜索或跳转 — 输入命令、agent 名、run ID …"
+          placeholder={t("cmdk.placeholder")}
           variant="borderless"
           style={{ fontSize: 16, padding: "16px 20px", borderBottom: "1px solid var(--hx-border-subtle)" }}
-          aria-label="命令面板搜索"
+          aria-label={t("cmdk.aria_label")}
+          data-testid="cmdk-input"
         />
         <div style={{ maxHeight: 420, overflowY: "auto", padding: "8px 0" }} role="listbox">
           {filtered.length === 0 && (
-            <div style={{ padding: 24, textAlign: "center", color: "var(--hx-text-tertiary)" }}>没有匹配项</div>
+            <div style={{ padding: 24, textAlign: "center", color: "var(--hx-text-tertiary)" }}>
+              {t("cmdk.no_matches")}
+            </div>
           )}
           {Object.entries(groups).map(([groupName, items]) => (
             <div key={groupName}>
@@ -273,11 +352,11 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
             color: "var(--hx-text-tertiary)",
           }}
         >
-          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">↑↓</span> 选择</span>
-          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">↵</span> 跳转</span>
-          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">Esc</span> 关闭</span>
+          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">↑↓</span> {t("cmdk.hint_select")}</span>
+          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">↵</span> {t("cmdk.hint_jump")}</span>
+          <span style={{ display: "flex", gap: 4, alignItems: "center" }}><span className="hx-kbd">Esc</span> {t("cmdk.hint_close")}</span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 4, alignItems: "center" }}>
-            <ArrowRight size={10} strokeWidth={1.5} /> 输入 ? 查看快捷键
+            <ArrowRight size={10} strokeWidth={1.5} /> {t("cmdk.hint_shortcuts")}
           </span>
         </div>
       </Modal>

@@ -1,7 +1,9 @@
 import { Empty } from "antd";
 import { Construction } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export function ComingSoon({ title }: { title: string }) {
+  const { t } = useTranslation();
   return (
     <div>
       <div className="hx-page-header">
@@ -12,11 +14,11 @@ export function ComingSoon({ title }: { title: string }) {
         description={
           <>
             <div style={{ fontSize: 14, color: "var(--hx-text-primary)", marginBottom: 4 }}>
-              此页面在正式 H.1b 实施中
+              {t("coming_soon.title_prefix")}
             </div>
             <div style={{ fontSize: 13, color: "var(--hx-text-tertiary)" }}>
-              demo 仅演示 4 个核心页面:Agents 列表 / Agent 详情(含 Playground)/ Run+Approval / Settings API Keys。<br />
-              其他页面(<strong>{title}</strong>)将在 Stream H 全面落地。
+              {t("coming_soon.body")}<br />
+              {t("coming_soon.other_pages_prefix")}(<strong>{title}</strong>){t("coming_soon.other_pages_suffix")}
             </div>
           </>
         }
