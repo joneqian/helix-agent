@@ -16,6 +16,7 @@
     "@ant-design/cssinjs": "^1.21.1",
     "antd": "^5.23.0",
     "axios": "^1.7.9",
+    "dayjs": "^1.11.20",
     "i18next": "^23.16.8",
     "i18next-browser-languagedetector": "^8.0.2",
     "lucide-react": "^0.469.0",

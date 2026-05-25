@@ -1,0 +1,222 @@
+/**
+ * SDK smoke tests — Stream H.1b PR 3.
+ *
+ * Each new SDK module is a thin wrapper that builds a URL + query and
+ * unwraps the envelope. We assert that the wire shape (URL + params)
+ * matches the backend contract; full request/response flow gets
+ * exercised by the Playwright E2E in PR 4.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InternalAxiosRequestConfig } from "axios";
+
+import { apiClient } from "../client";
+import { listAgents, getAgent } from "../agents";
+import { getRun, resumeRun } from "../runs";
+import { listSkills } from "../skills";
+import { listTriggers } from "../triggers";
+import { listMemories } from "../memory";
+import { listCandidates, listEvalDatasets } from "../curation";
+import {
+  listApiKeys,
+  createApiKey,
+  revokeApiKey,
+  rotateApiKey,
+  listServiceAccounts,
+} from "../api_keys";
+
+interface Capture {
+  url: string;
+  params: Record<string, unknown> | undefined;
+  data: unknown;
+  method: string;
+}
+
+function captureAdapter(body: unknown) {
+  const calls: Capture[] = [];
+  apiClient.defaults.adapter = (config: InternalAxiosRequestConfig) => {
+    calls.push({
+      url: config.url ?? "",
+      params: config.params as Record<string, unknown> | undefined,
+      data: config.data,
+      method: (config.method ?? "get").toLowerCase(),
+    });
+    return Promise.resolve({
+      data: body,
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      config,
+      request: {},
+    });
+  };
+  return calls;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("listAgents — tenant scope threading", () => {
+  it("omits tenant_id when tenantScope is undefined", async () => {
+    const calls = captureAdapter({
+      success: true,
+      data: { items: [], total: 0, cross_tenant: false },
+      error: null,
+    });
+    await listAgents();
+    expect(calls[0].url).toBe("/v1/agents");
+    expect(calls[0].params?.tenant_id).toBeUndefined();
+  });
+
+  it("threads tenant_id=* for system_admin", async () => {
+    const calls = captureAdapter({
+      success: true,
+      data: { items: [], total: 0, cross_tenant: true },
+      error: null,
+    });
+    await listAgents({ tenantScope: "*" });
+    expect(calls[0].params?.tenant_id).toBe("*");
+  });
+});
+
+describe("getAgent — URL encoding of name + version", () => {
+  it("encodes path segments", async () => {
+    const calls = captureAdapter({
+      success: true,
+      data: { record: { id: "1", tenant_id: "t", name: "a/b", version: "1.0", status: "active", spec_sha256: "x".repeat(64), spec: {}, created_by: "x", created_at: "", updated_at: "" } },
+      error: null,
+    });
+    await getAgent("a/b", "1.0+rc.1");
+    expect(calls[0].url).toBe("/v1/agents/a%2Fb/1.0%2Brc.1");
+  });
+});
+
+describe("getRun — raw (un-enveloped) endpoint", () => {
+  it("does not unwrap an envelope; returns the payload directly", async () => {
+    captureAdapter({
+      run_id: "r-1",
+      thread_id: "t-1",
+      status: "completed",
+      pending_approval: null,
+    });
+    const result = await getRun("t-1", "r-1");
+    expect(result.run_id).toBe("r-1");
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("resumeRun POSTs the approval body", () => {
+  it("includes approved + reason in body", async () => {
+    const calls = captureAdapter({
+      run_id: "r-1",
+      thread_id: "t-1",
+      status: "running",
+      pending_approval: null,
+    });
+    await resumeRun("t-1", "r-1", { approved: true, reason: "ship it" });
+    expect(calls[0].url).toBe("/v1/sessions/t-1/runs/r-1/resume");
+    expect(calls[0].method).toBe("post");
+    const parsed = JSON.parse(calls[0].data as string);
+    expect(parsed.approved).toBe(true);
+    expect(parsed.reason).toBe("ship it");
+  });
+});
+
+describe("list endpoints share the envelope path", () => {
+  it.each([
+    ["skills", () => listSkills(), "/v1/skills"],
+    ["triggers", () => listTriggers(), "/v1/triggers"],
+    ["memory", () => listMemories(), "/v1/memory"],
+    ["candidates", () => listCandidates(), "/v1/curation/candidates"],
+    ["eval-datasets", () => listEvalDatasets(), "/v1/eval-datasets"],
+    ["api-keys", () => listApiKeys(), "/v1/api_keys"],
+    ["service-accounts", () => listServiceAccounts(), "/v1/service_accounts"],
+  ])("%s hits %s", async (_name, call, expectedUrl) => {
+    const calls = captureAdapter({
+      success: true,
+      data: { items: [], total: 0, cross_tenant: false },
+      error: null,
+    });
+    await call();
+    expect(calls[0].url).toBe(expectedUrl);
+  });
+});
+
+describe("api_keys mutations", () => {
+  it("createApiKey POSTs to the SA-scoped path", async () => {
+    const calls = captureAdapter({
+      success: true,
+      data: {
+        api_key: {
+          id: "k1",
+          service_account_id: "sa1",
+          tenant_id: "t1",
+          prefix: "aforge_pat_abc",
+          scopes: ["read"],
+          expires_at: null,
+          last_used_at: null,
+          revoked_at: null,
+          rotated_at: null,
+          grace_period_s: null,
+          created_by: "u1",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        plaintext: "aforge_pat_abc_xyz",
+      },
+      error: null,
+    });
+    await createApiKey("sa1", { scopes: ["read"] });
+    expect(calls[0].url).toBe("/v1/service_accounts/sa1/api_keys");
+    expect(calls[0].method).toBe("post");
+  });
+
+  it("revokeApiKey DELETEs the id-scoped path", async () => {
+    const calls = captureAdapter("");
+    await revokeApiKey("k1");
+    expect(calls[0].url).toBe("/v1/api_keys/k1");
+    expect(calls[0].method).toBe("delete");
+  });
+
+  it("rotateApiKey POSTs to /rotate", async () => {
+    const calls = captureAdapter({
+      success: true,
+      data: {
+        old: {
+          id: "k1",
+          service_account_id: "sa1",
+          tenant_id: "t1",
+          prefix: "aforge_pat_abc",
+          scopes: ["read"],
+          expires_at: null,
+          last_used_at: null,
+          revoked_at: null,
+          rotated_at: "2026-01-01T00:00:00Z",
+          grace_period_s: 300,
+          created_by: "u1",
+          created_at: "2025-12-01T00:00:00Z",
+        },
+        new: {
+          api_key: {
+            id: "k2",
+            service_account_id: "sa1",
+            tenant_id: "t1",
+            prefix: "aforge_pat_def",
+            scopes: ["read"],
+            expires_at: null,
+            last_used_at: null,
+            revoked_at: null,
+            rotated_at: null,
+            grace_period_s: null,
+            created_by: "u1",
+            created_at: "2026-01-01T00:00:00Z",
+          },
+          plaintext: "aforge_pat_def_xyz",
+        },
+      },
+      error: null,
+    });
+    await rotateApiKey("k1", { grace_period_s: 600 });
+    expect(calls[0].url).toBe("/v1/api_keys/k1/rotate");
+    expect(calls[0].method).toBe("post");
+  });
+});

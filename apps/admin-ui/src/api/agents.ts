@@ -41,3 +41,20 @@ export async function listAgents(params: ListAgentsParams = {}): Promise<AgentLi
   );
   return getJson<AgentList>("/v1/agents", { params: query });
 }
+
+export interface AgentDetailResponse {
+  record: AgentRecord & {
+    /** Full spec — same shape as POST /v1/agents accepts. Used by
+     *  the Manifest preview / edit tab in :ref:`AgentDetail`. */
+    spec: Record<string, unknown>;
+  };
+}
+
+export async function getAgent(
+  name: string,
+  version: string,
+): Promise<AgentDetailResponse> {
+  return getJson<AgentDetailResponse>(
+    `/v1/agents/${encodeURIComponent(name)}/${encodeURIComponent(version)}`,
+  );
+}
