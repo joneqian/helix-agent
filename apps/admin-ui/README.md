@@ -1,9 +1,9 @@
 # helix Admin UI
 
 Production scaffold for the operator-facing helix admin SPA. Tracks
-**Stream H.1b** in `docs/streams/STREAM-H-DESIGN.md`; the visual baseline
-sibling lives at [`../admin-ui-demo`](../admin-ui-demo) and stays around
-as a sandbox until H.2-H.4 wrap.
+**Stream H.1b** in `docs/streams/STREAM-H-DESIGN.md`. The visual-baseline
+sibling (`apps/admin-ui-demo/`) was removed after H.1b PR 2b — this
+workspace is now the canonical visual + functional reference.
 
 ## Run
 
@@ -47,15 +47,15 @@ downstream will reuse.
 | **Tests** | `src/api/__tests__/client.test.ts` | `withTenantScope` / `unwrap` invariants |
 | **Tests** | `src/components/__tests__/TenantSwitcher.test.tsx` | tenant_admin disabled / system_admin enabled / JWT parser |
 
-## Not in PR 1 — follow-up PRs (still under H.1b)
+## Status by PR
 
-| PR | scope |
-|---|---|
-| **H.1b PR 2** | OIDC code-flow login (replace token paste) + `GET /v1/me` for server-truth `isSystemAdmin` + i18n (zh-CN / en) + Cmd+K wired to real routes |
-| **H.1b PR 3** | Remaining 6 API clients (runs / skills / triggers / memory / curation / api_keys) + replace `mock/*` references in CommandPalette + AgentDetail + RunDetail + SettingsApiKeys |
-| **H.1b PR 4** | Storybook + E2E tests (Playwright) + a11y audit (axe) on every page |
-
-After H.1b PR 4 ships, `apps/admin-ui-demo/` can be deleted.
+| PR | what | state |
+|---|---|---|
+| **H.1b PR 1** | scaffold + auth + tenant scope + live Agents | **merged** (#274) |
+| **H.1b PR 2a** | `GET /v1/me` + i18n (zh-CN / en) + Cmd+K real Agents | **merged** (#277) |
+| **H.1b PR 2b** | OIDC code-flow (PKCE) + silent renew + Keycloak dev docs | **merged** (#278) |
+| **H.1b PR 3** | Remaining 6 SDK clients (runs / skills / triggers / memory / curation / api_keys) + drop `mock/*` from AgentDetail / RunDetail / SettingsApiKeys | pending |
+| **H.1b PR 4** | Storybook + Playwright E2E + axe a11y | pending |
 
 ## Design baseline
 

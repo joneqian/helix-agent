@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "helix Admin UI — Stream H.1b production scaffold. Operator-facing SPA for platform / tenant administrators. See memory:admin-ui-design-baseline + memory:cross-tenant-admin. demo sibling lives at apps/admin-ui-demo/ for visual-baseline reference.",
+  "description": "helix Admin UI — Stream H.1b production scaffold. Operator-facing SPA for platform / tenant administrators. See memory:admin-ui-design-baseline + memory:cross-tenant-admin.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
