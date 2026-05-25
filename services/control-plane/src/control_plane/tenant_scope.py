@@ -120,6 +120,10 @@ async def ensure_tenant_scope(
             trace_id=trace_id,
             details={"endpoint": endpoint} if endpoint else {},
         )
+        logger.info(
+            "tenant_scope.cross_tenant",
+            extra={"actor_id": principal.subject_id, "endpoint": endpoint},
+        )
         return CrossTenant()
 
     # --- single-tenant path ------------------------------------------
@@ -154,6 +158,15 @@ async def ensure_tenant_scope(
             }
             if endpoint
             else {"home_tenant": str(principal.tenant_id)},
+        )
+        logger.info(
+            "tenant_scope.tenant_switch",
+            extra={
+                "actor_id": principal.subject_id,
+                "home_tenant": str(principal.tenant_id),
+                "target_tenant": str(target),
+                "endpoint": endpoint,
+            },
         )
 
     return SingleTenant(tenant_id=target)
