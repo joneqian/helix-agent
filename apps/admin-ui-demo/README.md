@@ -30,20 +30,21 @@
 
 ## 如何跑
 
-需要 **Node.js ≥ 18**(推荐 20+)。
+需要 **Node.js ≥ 18**(推荐 20+)与 **pnpm ≥ 10**(`package.json` 已声明 `packageManager: pnpm@10.14.0`)。
+没装 pnpm:`npm install -g pnpm@10` 或 `corepack enable && corepack prepare pnpm@10.14.0 --activate`。
 
 ```bash
 cd apps/admin-ui-demo
-npm install        # 第一次:~30s 装 ~250 个 npm 包
-npm run dev        # 起 Vite dev server,自动开 http://localhost:5173
+pnpm install       # 第一次:~30s 装 ~250 个 npm 包
+pnpm dev           # 起 Vite dev server,自动开 http://localhost:5173
 ```
 
 浏览器自动开 `http://localhost:5173/agents`。**右上角 Sun/Moon 图标切 dark/light**。**任意页面 Cmd+K(或 Ctrl+K on Windows/Linux)调出命令面板**。
 
 ```bash
 # 生产构建预览(可选):
-npm run build      # tsc + vite build → dist/
-npm run preview    # 服务 dist/ 在 4173
+pnpm build         # tsc + vite build → dist/
+pnpm preview       # 服务 dist/ 在 4173
 ```
 
 ---

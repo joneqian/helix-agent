@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Modal, Input } from "antd";
+import { Modal, Input, type InputRef } from "antd";
 import { useNavigate } from "react-router-dom";
 import { Bot, Activity, CheckSquare, Brain, FileText, Clock, Key, Plus, ArrowRight, Cog } from "lucide-react";
 import { mockAgents } from "../mock/agents";
@@ -31,7 +31,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<InputRef>(null);
   const nav = useNavigate();
 
   const open = useCallback(() => {
@@ -190,7 +190,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
           content: { padding: 0, background: "var(--hx-surface-base)" },
           mask: { backdropFilter: "blur(4px)" },
         }}
-        destroyOnClose
+        destroyOnHidden
         centered={false}
         style={{ top: 80 }}
       >
