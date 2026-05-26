@@ -375,6 +375,8 @@ def build_runs_router() -> APIRouter:
                 config=config,
                 audit_logger=audit,
                 approval_store=approvals,
+                # Stream H.3 PR 3 — durable SSE mirror.
+                event_store=runtime.run_event_store,
             )
         )
         await runtime.run_manager.attach_task(run_id, worker)
@@ -623,6 +625,8 @@ def build_runs_router() -> APIRouter:
                 config=config,
                 audit_logger=audit,
                 approval_store=approvals,
+                # Stream H.3 PR 3 — durable SSE mirror.
+                event_store=runtime.run_event_store,
             )
         )
         await runtime.run_manager.attach_task(continuation_run_id, worker)

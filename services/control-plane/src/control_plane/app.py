@@ -217,7 +217,14 @@ from helix_agent.persistence.trigger import (
 )
 from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.checkpointer import make_checkpointer
-from helix_agent.runtime.runs import InMemoryRunStore, RunStore, SqlRunStore
+from helix_agent.runtime.runs import (
+    InMemoryRunEventStore,
+    InMemoryRunStore,
+    RunEventStore,
+    RunStore,
+    SqlRunEventStore,
+    SqlRunStore,
+)
 from helix_agent.runtime.secret_store import make_secret_store
 from helix_agent.runtime.storage import make_object_store
 from orchestrator import MemoryEnv
@@ -247,6 +254,7 @@ def create_app(
     image_upload_repo: ImageUploadStore | None = None,
     approval_repo: ApprovalStore | None = None,
     run_repo: RunStore | None = None,
+    run_event_repo: RunEventStore | None = None,
     trigger_repo: TriggerStore | None = None,
     trigger_run_repo: TriggerRunStore | None = None,
     skill_repo: SkillStore | None = None,
@@ -341,6 +349,10 @@ def create_app(
     resolved_run_store: RunStore = run_repo or (
         sql_stores.run if sql_stores else InMemoryRunStore()
     )
+    # Stream H.3 PR 3 (Mini-ADR H-7) — durable SSE event store.
+    resolved_run_event_store: RunEventStore = run_event_repo or (
+        sql_stores.run_event if sql_stores else InMemoryRunEventStore()
+    )
     # Stream J.10 (Mini-ADR J-26 / J-42) — trigger registry + firing log.
     resolved_trigger_store: TriggerStore = trigger_repo or (
         sql_stores.trigger if sql_stores else InMemoryTriggerStore()
@@ -373,7 +385,9 @@ def create_app(
         "local_dev", env_file=resolved_settings.secret_store_env_file
     )
     resolved_agent_runtime = agent_runtime or make_agent_runtime(
-        resolved_secret_store, run_store=resolved_run_store
+        resolved_secret_store,
+        run_store=resolved_run_store,
+        run_event_store=resolved_run_event_store,
     )
     # Late-bound PII resolver: lets the audit logger reference
     # tenant_config without forcing it to exist yet (D.2 cycle break).
@@ -652,6 +666,7 @@ def create_app(
     app.state.artifact_store = resolved_artifact_store
     app.state.approval_store = resolved_approval_store
     app.state.run_store = resolved_run_store
+    app.state.run_event_store = resolved_run_event_store
     app.state.trigger_store = resolved_trigger_store
     app.state.trigger_run_store = resolved_trigger_run_store
     app.state.curation_candidate_store = resolved_curation_candidate_store
@@ -791,6 +806,7 @@ class _SqlStores:
     artifact: ArtifactStore
     approval: ApprovalStore  # Stream J.8 (Mini-ADR J-24)
     run: RunStore  # Stream J.8 closeout follow-up (Mini-ADR J-41)
+    run_event: RunEventStore  # Stream H.3 PR 3 (Mini-ADR H-7)
     trigger: TriggerStore  # Stream J.10 (Mini-ADR J-26 / J-42)
     trigger_run: TriggerRunStore  # Stream J.10
     curation_candidate: CurationCandidateStore  # Stream J.12 (Mini-ADR J-43)
@@ -834,6 +850,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         artifact=SqlArtifactStore(session_factory),
         approval=SqlApprovalStore(session_factory),
         run=SqlRunStore(session_factory),
+        run_event=SqlRunEventStore(session_factory),
         trigger=SqlTriggerStore(session_factory),
         trigger_run=SqlTriggerRunStore(session_factory),
         curation_candidate=SqlCurationCandidateStore(session_factory),

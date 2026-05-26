@@ -25,6 +25,7 @@ from helix_agent.persistence.models.knowledge import (
 from helix_agent.persistence.models.memory_item import MemoryItemRow
 from helix_agent.persistence.models.memory_writeback_dlq import MemoryWritebackDLQRow
 from helix_agent.persistence.models.role_binding import RoleBindingRow
+from helix_agent.persistence.models.run_event import RunEventRow
 from helix_agent.persistence.models.sandbox_instance import SandboxInstanceRow
 from helix_agent.persistence.models.service_account import ServiceAccountRow
 from helix_agent.persistence.models.skill import SkillRow, SkillVersionRow
@@ -60,6 +61,7 @@ __all__ = [
     "MemoryItemRow",
     "MemoryWritebackDLQRow",
     "RoleBindingRow",
+    "RunEventRow",
     "SandboxInstanceRow",
     "SecretAllowlistRow",
     "ServiceAccountRow",
