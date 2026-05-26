@@ -179,6 +179,32 @@ export interface TranslationKeys {
     promoted: string;
     dismissed: string;
   };
+  audit: {
+    page_title: string;
+    subtitle: string;
+    cross_tenant_banner: string;
+    failed_to_load: string;
+    empty: string;
+    filter_actor: string;
+    filter_action: string;
+    filter_resource_type: string;
+    filter_result: string;
+    filter_result_all: string;
+    load_more: string;
+    detail_title: string;
+    detail_id: string;
+    detail_occurred_at: string;
+    detail_actor: string;
+    detail_on_behalf_of: string;
+    detail_action: string;
+    detail_resource: string;
+    detail_result: string;
+    detail_reason: string;
+    detail_trace_id: string;
+    detail_ip: string;
+    detail_payload: string;
+    detail_payload_hint: string;
+  };
   memory: {
     page_title: string;
     subtitle: string;
@@ -514,6 +540,34 @@ const en: TranslationKeys = {
     promote_hint: "Trajectory input + expected output are copied from the candidate. Edit later via the Eval Datasets tab.",
     promoted: "Candidate promoted to eval dataset.",
     dismissed: "Candidate dismissed.",
+  },
+  audit: {
+    page_title: "Audit",
+    subtitle:
+      "Immutable trail of every mutating action. Cross-tenant view requires system_admin. Payloads are PII-redacted at write time.",
+    cross_tenant_banner: "cross-tenant view",
+    failed_to_load: "Failed to load audit log",
+    empty: "No audit entries match these filters.",
+    filter_actor: "Actor ID (exact)",
+    filter_action: "Action (e.g. memory:update)",
+    filter_resource_type: "Resource type",
+    filter_result: "Result",
+    filter_result_all: "All results",
+    load_more: "Load more",
+    detail_title: "Audit entry detail",
+    detail_id: "ID",
+    detail_occurred_at: "Occurred at",
+    detail_actor: "Actor",
+    detail_on_behalf_of: "On behalf of",
+    detail_action: "Action",
+    detail_resource: "Resource",
+    detail_result: "Result",
+    detail_reason: "Reason",
+    detail_trace_id: "Trace ID",
+    detail_ip: "IP",
+    detail_payload: "Payload (details)",
+    detail_payload_hint:
+      "Already redactor-cleaned at write time — sensitive fields surface as [REDACTED].",
   },
   memory: {
     page_title: "Memory",
