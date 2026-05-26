@@ -1,0 +1,338 @@
+/**
+ * Settings — Tenant Config page (Stream H.4 PR 8).
+ *
+ * Per-tenant config knobs (display_name / plan / retention days /
+ * allowlists / pii fields). Backend is tenant-scoped only — same
+ * effective-tenant resolution as ``SettingsTenantQuotas``.
+ *
+ * Edit flow:
+ *   1. GET returns the current record (or 404 if no config row yet)
+ *   2. Switch to "edit" mode → Monaco JSON editor (PATCH body shape)
+ *   3. JSON.parse validation → pristine vs dirty buffer detection
+ *   4. Save → PUT → soft "Reload to see latest" hint (M0 has no ETag;
+ *      M1 adds If-Match → 412 conflict path)
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  App,
+  Breadcrumb,
+  Button,
+  Card,
+  Empty,
+  Skeleton,
+  Space,
+  Tag,
+  Typography,
+} from "antd";
+import Editor from "@monaco-editor/react";
+import { ChevronRight, Edit3, Save, Settings2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { ApiError } from "../api/client";
+import {
+  getTenantConfig,
+  upsertTenantConfig,
+  type TenantConfigPatchBody,
+  type TenantConfigRecord,
+} from "../api/tenant_config";
+import { useAuth } from "../auth/AuthContext";
+import { useTenantScope } from "../tenant/TenantScopeContext";
+
+const { Text } = Typography;
+
+type ParseResult =
+  | { ok: true; value: TenantConfigPatchBody }
+  | { ok: false; error: string };
+
+function parsePatch(buffer: string): ParseResult {
+  if (buffer.trim().length === 0) {
+    return { ok: false, error: "empty" };
+  }
+  try {
+    const parsed: unknown = JSON.parse(buffer);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, error: "top-level must be a JSON object" };
+    }
+    return { ok: true, value: parsed as TenantConfigPatchBody };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "parse error" };
+  }
+}
+
+function recordToPatchJson(record: TenantConfigRecord): string {
+  const patch: TenantConfigPatchBody = {
+    display_name: record.display_name,
+    plan: record.plan,
+    model_credentials_ref: record.model_credentials_ref,
+    mcp_allowlist: record.mcp_allowlist,
+    rate_limit_override: record.rate_limit_override,
+    pii_fields: record.pii_fields,
+    http_tool_allowlist: record.http_tool_allowlist,
+    mcp_servers: record.mcp_servers,
+    audit_retention_days: record.audit_retention_days,
+    event_log_retention_days: record.event_log_retention_days,
+  };
+  return JSON.stringify(patch, null, 2);
+}
+
+export function SettingsTenantConfig() {
+  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const { scope, apiTenantScope } = useTenantScope();
+  const auth = useAuth();
+  const homeTenantId = auth.identity?.homeTenantId ?? null;
+
+  const effectiveTenantId =
+    scope === "*"
+      ? null
+      : typeof apiTenantScope === "string" && apiTenantScope !== "*"
+        ? apiTenantScope
+        : homeTenantId;
+
+  const [record, setRecord] = useState<TenantConfigRecord | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [editing, setEditing] = useState(false);
+  const [buf, setBuf] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const pristineJson = useMemo(
+    () => (record === null ? "" : recordToPatchJson(record)),
+    [record],
+  );
+
+  const refresh = useCallback(async () => {
+    if (effectiveTenantId === null) {
+      setRecord(null);
+      setNotFound(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotFound(false);
+    try {
+      const result = await getTenantConfig(effectiveTenantId);
+      setRecord(result);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "TENANT_CONFIG_NOT_FOUND") {
+        setRecord(null);
+        setNotFound(true);
+      } else {
+        const msg =
+          err instanceof ApiError
+            ? `${err.code}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : "unknown error";
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [effectiveTenantId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const parseResult = useMemo(() => parsePatch(buf), [buf]);
+  const isDirty = buf !== pristineJson;
+
+  const onEdit = useCallback(() => {
+    setBuf(pristineJson);
+    setEditing(true);
+  }, [pristineJson]);
+
+  const onCancel = useCallback(() => {
+    setBuf(pristineJson);
+    setEditing(false);
+  }, [pristineJson]);
+
+  const onSave = useCallback(async () => {
+    if (effectiveTenantId === null) return;
+    if (!parseResult.ok) return;
+    setSubmitting(true);
+    try {
+      const updated = await upsertTenantConfig(effectiveTenantId, parseResult.value);
+      setRecord(updated);
+      setEditing(false);
+      message.success(t("settings_ops.config_saved"));
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [effectiveTenantId, parseResult, message, t]);
+
+  return (
+    <div data-testid="config-root">
+      <div className="hx-page-header">
+        <Breadcrumb
+          separator={<ChevronRight size={12} strokeWidth={1.5} />}
+          items={[{ title: t("common.home") }, { title: t("settings_ops.config_page_title") }]}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
+          <Settings2 size={20} strokeWidth={1.5} />
+          <h1 style={{ margin: 0 }}>{t("settings_ops.config_page_title")}</h1>
+          {effectiveTenantId !== null && (
+            <Tag color="default" data-testid="config-tenant-tag">
+              tenant:{" "}
+              <Text code style={{ fontSize: 11 }}>{effectiveTenantId.slice(0, 8)}…</Text>
+            </Tag>
+          )}
+          {isDirty && editing && (
+            <Tag color="warning" data-testid="config-dirty-tag">{t("settings_ops.dirty")}</Tag>
+          )}
+          <span style={{ flex: 1 }} />
+          {editing ? (
+            <Space>
+              <Button onClick={onCancel} icon={<X size={14} strokeWidth={1.75} />}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                type="primary"
+                onClick={onSave}
+                loading={submitting}
+                disabled={!parseResult.ok || !isDirty}
+                icon={<Save size={14} strokeWidth={1.75} />}
+                data-testid="config-save-btn"
+              >
+                {t("common.save")}
+              </Button>
+            </Space>
+          ) : (
+            <Button
+              type="primary"
+              onClick={onEdit}
+              icon={<Edit3 size={14} strokeWidth={1.75} />}
+              disabled={effectiveTenantId === null || record === null}
+              data-testid="config-edit-btn"
+            >
+              {t("common.edit")}
+            </Button>
+          )}
+        </div>
+        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
+          {t("settings_ops.config_subtitle")}
+        </p>
+      </div>
+
+      {effectiveTenantId === null && (
+        <Alert
+          type="info"
+          showIcon
+          message={t("settings_ops.cross_tenant_blocked_title")}
+          description={t("settings_ops.cross_tenant_blocked_body")}
+          data-testid="config-cross-tenant-block"
+        />
+      )}
+
+      {error !== null && (
+        <Alert
+          type="error"
+          showIcon
+          message={t("settings_ops.failed_to_load")}
+          description={error}
+          style={{ marginBottom: 12 }}
+          data-testid="config-error"
+        />
+      )}
+
+      {effectiveTenantId !== null && loading && record === null && !notFound && (
+        <Skeleton active paragraph={{ rows: 8 }} />
+      )}
+
+      {notFound && (
+        <Empty description={t("settings_ops.config_not_found")} data-testid="config-not-found" />
+      )}
+
+      {record !== null && !editing && (
+        <Card title={t("settings_ops.config_record_title")} size="small">
+          <dl
+            style={{
+              display: "grid",
+              gridTemplateColumns: "200px 1fr",
+              rowGap: 8,
+              columnGap: 16,
+              margin: 0,
+              fontSize: 13,
+            }}
+          >
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.display_name")}</dt>
+            <dd style={{ margin: 0 }}>{record.display_name}</dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.plan")}</dt>
+            <dd style={{ margin: 0 }}><Tag color="blue">{record.plan}</Tag></dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.audit_retention_days")}</dt>
+            <dd style={{ margin: 0 }}>{record.audit_retention_days}</dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.event_log_retention_days")}</dt>
+            <dd style={{ margin: 0 }}>{record.event_log_retention_days}</dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.mcp_allowlist")}</dt>
+            <dd style={{ margin: 0 }}>
+              {record.mcp_allowlist.length === 0 ? (
+                <Text type="secondary">—</Text>
+              ) : (
+                <Space size={4} wrap>
+                  {record.mcp_allowlist.map((m) => (
+                    <Tag key={m} bordered={false}>{m}</Tag>
+                  ))}
+                </Space>
+              )}
+            </dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.http_allowlist")}</dt>
+            <dd style={{ margin: 0 }}>
+              {record.http_tool_allowlist.length === 0 ? (
+                <Text type="secondary">—</Text>
+              ) : (
+                <Space size={4} wrap>
+                  {record.http_tool_allowlist.map((url) => (
+                    <Tag key={url} bordered={false}>{url}</Tag>
+                  ))}
+                </Space>
+              )}
+            </dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.updated")}</dt>
+            <dd style={{ margin: 0 }}>{new Date(record.updated_at).toLocaleString()} ({record.updated_by})</dd>
+          </dl>
+        </Card>
+      )}
+
+      {editing && (
+        <Card
+          title={t("settings_ops.config_edit_title")}
+          size="small"
+          data-testid="config-edit-card"
+        >
+          <Alert
+            type="warning"
+            showIcon
+            message={t("settings_ops.config_etag_hint_title")}
+            description={t("settings_ops.config_etag_hint_body")}
+            style={{ marginBottom: 12 }}
+          />
+          <div style={{ border: "1px solid var(--hx-border-default)", borderRadius: 4 }}>
+            <Editor
+              height="480px"
+              defaultLanguage="json"
+              value={buf}
+              onChange={(v) => setBuf(v ?? "")}
+              options={{ minimap: { enabled: false }, fontSize: 12, wordWrap: "on" }}
+              data-testid="config-editor"
+            />
+          </div>
+          {!parseResult.ok && (
+            <Alert
+              type="error"
+              message={t("settings_ops.config_parse_error")}
+              description={parseResult.error}
+              style={{ marginTop: 8 }}
+              data-testid="config-parse-error"
+            />
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
