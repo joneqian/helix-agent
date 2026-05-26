@@ -7,6 +7,8 @@ import { RunDetail } from "./pages/RunDetail";
 import { RunsList } from "./pages/RunsList";
 import { SettingsApiKeys } from "./pages/SettingsApiKeys";
 import { SettingsAudit } from "./pages/SettingsAudit";
+import { SettingsRoleBindings } from "./pages/SettingsRoleBindings";
+import { SettingsServiceAccounts } from "./pages/SettingsServiceAccounts";
 import { SkillDetail } from "./pages/SkillDetail";
 import { SkillsList } from "./pages/SkillsList";
 import { TriggersList } from "./pages/TriggersList";
@@ -27,6 +29,8 @@ export function AppRouter() {
       <Route path="/skills/:skillId" element={<SkillDetail />} />
       <Route path="/triggers" element={<TriggersList />} />
       <Route path="/settings/api-keys" element={<SettingsApiKeys />} />
+      <Route path="/settings/service-accounts" element={<SettingsServiceAccounts />} />
+      <Route path="/settings/role-bindings" element={<SettingsRoleBindings />} />
       <Route path="/settings/audit" element={<SettingsAudit />} />
       <Route path="/settings/*" element={<ComingSoon title="Settings" />} />
       <Route path="*" element={<ComingSoon title="404" />} />
