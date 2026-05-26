@@ -205,6 +205,49 @@ export interface TranslationKeys {
     detail_payload: string;
     detail_payload_hint: string;
   };
+  settings_ops: {
+    quotas_page_title: string;
+    quotas_subtitle: string;
+    config_page_title: string;
+    config_subtitle: string;
+    config_record_title: string;
+    config_edit_title: string;
+    config_not_found: string;
+    cross_tenant_blocked_title: string;
+    cross_tenant_blocked_body: string;
+    failed_to_load: string;
+    quota_create: string;
+    quota_create_modal_title: string;
+    quota_created: string;
+    quota_deleted: string;
+    quota_empty: string;
+    quota_delete_confirm_title: string;
+    quota_delete_confirm_body: string;
+    col_dimension: string;
+    col_limit_value: string;
+    col_burst: string;
+    col_scope: string;
+    col_updated: string;
+    col_actions: string;
+    field_dimension: string;
+    field_limit_value: string;
+    field_burst: string;
+    burst_hint: string;
+    dimension_required: string;
+    limit_required: string;
+    display_name: string;
+    plan: string;
+    audit_retention_days: string;
+    event_log_retention_days: string;
+    mcp_allowlist: string;
+    http_allowlist: string;
+    updated: string;
+    dirty: string;
+    config_saved: string;
+    config_parse_error: string;
+    config_etag_hint_title: string;
+    config_etag_hint_body: string;
+  };
   settings_iam: {
     sa_page_title: string;
     sa_subtitle: string;
@@ -711,6 +754,55 @@ const en: TranslationKeys = {
     detail_payload: "Payload (details)",
     detail_payload_hint:
       "Already redactor-cleaned at write time — sensitive fields surface as [REDACTED].",
+  },
+  settings_ops: {
+    quotas_page_title: "Tenant Quotas",
+    quotas_subtitle:
+      "Per-tenant rate / cost limits keyed by dimension. Tenant-scoped only — switch tenant via the top-bar to manage another.",
+    config_page_title: "Tenant Config",
+    config_subtitle:
+      "Per-tenant feature knobs: plan, retention, MCP/HTTP allowlists, PII fields. Same per-tenant scope as Quotas.",
+    config_record_title: "Current config",
+    config_edit_title: "Edit config (JSON patch)",
+    config_not_found:
+      "No tenant_config row exists for this tenant yet. First save will create one.",
+    cross_tenant_blocked_title: "Cross-tenant view does not apply here",
+    cross_tenant_blocked_body:
+      "Quotas + config are managed per-tenant. Switch to a specific tenant via the top-bar to view / edit.",
+    failed_to_load: "Failed to load",
+    quota_create: "Create Quota",
+    quota_create_modal_title: "Create / upsert quota",
+    quota_created: "Quota saved.",
+    quota_deleted: "Quota deleted.",
+    quota_empty: "No quotas configured for this tenant.",
+    quota_delete_confirm_title: "Delete this quota?",
+    quota_delete_confirm_body:
+      "The dimension will fall back to platform defaults until re-created.",
+    col_dimension: "Dimension",
+    col_limit_value: "Limit",
+    col_burst: "Burst",
+    col_scope: "Scope",
+    col_updated: "Updated",
+    col_actions: "Actions",
+    field_dimension: "Dimension",
+    field_limit_value: "Limit value",
+    field_burst: "Burst (optional)",
+    burst_hint: "Token-bucket burst capacity. Defaults to platform setting when empty.",
+    dimension_required: "Dimension is required",
+    limit_required: "Limit value is required",
+    display_name: "Display name",
+    plan: "Plan",
+    audit_retention_days: "Audit retention (days)",
+    event_log_retention_days: "Event log retention (days)",
+    mcp_allowlist: "MCP allowlist",
+    http_allowlist: "HTTP tool allowlist",
+    updated: "Updated",
+    dirty: "edited (unsaved)",
+    config_saved: "Tenant config saved.",
+    config_parse_error: "JSON parse error",
+    config_etag_hint_title: "Last-writer-wins (M0)",
+    config_etag_hint_body:
+      "No ETag concurrency check yet — M1 will add If-Match. If another admin is editing simultaneously, the last Save will overwrite. Reload after save to see latest.",
   },
   settings_iam: {
     sa_page_title: "Service Accounts",
