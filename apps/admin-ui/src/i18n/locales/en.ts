@@ -205,6 +205,61 @@ export interface TranslationKeys {
     detail_payload: string;
     detail_payload_hint: string;
   };
+  settings_iam: {
+    sa_page_title: string;
+    sa_subtitle: string;
+    sa_api_keys_hint: string;
+    sa_create: string;
+    sa_create_modal_title: string;
+    sa_created: string;
+    sa_deleted: string;
+    sa_empty_home: string;
+    sa_empty_cross: string;
+    sa_delete_confirm_title: string;
+    sa_delete_confirm_body: string;
+    rb_page_title: string;
+    rb_subtitle: string;
+    rb_create: string;
+    rb_create_drawer_title: string;
+    rb_create_submit: string;
+    rb_create_platform_submit: string;
+    rb_filter_platform_scope: string;
+    rb_created: string;
+    rb_deleted: string;
+    rb_empty_home: string;
+    rb_empty_cross: string;
+    rb_empty_platform: string;
+    rb_delete_confirm_title: string;
+    rb_delete_confirm_body: string;
+    rb_delete_platform_warn: string;
+    rb_confirm_required: string;
+    cross_tenant_banner: string;
+    failed_to_load: string;
+    col_name: string;
+    col_description: string;
+    col_active: string;
+    col_created: string;
+    col_subject_type: string;
+    col_subject_id: string;
+    col_role: string;
+    col_tenant: string;
+    col_granted_at: string;
+    col_actions: string;
+    field_name: string;
+    field_description: string;
+    field_subject_type: string;
+    field_subject_id: string;
+    field_role: string;
+    field_platform_scope: string;
+    platform_scope_hint: string;
+    platform_scope_warn_title: string;
+    platform_scope_warn_body: string;
+    role_requires_platform_scope: string;
+    confirm_phrase_label: string;
+    name_required: string;
+    subject_id_required: string;
+    role_required: string;
+  };
   triggers: {
     page_title: string;
     subtitle: string;
@@ -656,6 +711,69 @@ const en: TranslationKeys = {
     detail_payload: "Payload (details)",
     detail_payload_hint:
       "Already redactor-cleaned at write time — sensitive fields surface as [REDACTED].",
+  },
+  settings_iam: {
+    sa_page_title: "Service Accounts",
+    sa_subtitle:
+      "Non-human identities — bots, workflows, integrations. Each service account holds zero or more API keys.",
+    sa_api_keys_hint: "Manage the keys themselves on the API Keys page.",
+    sa_create: "Create Service Account",
+    sa_create_modal_title: "Create service account",
+    sa_created: "Service account created.",
+    sa_deleted: "Service account deleted.",
+    sa_empty_home: "No service accounts in this tenant yet.",
+    sa_empty_cross: "No service accounts across all tenants.",
+    sa_delete_confirm_title: "Delete this service account?",
+    sa_delete_confirm_body:
+      "All API keys bound to this service account will stop authenticating immediately.",
+    rb_page_title: "Role Bindings",
+    rb_subtitle:
+      "Bind a user or service account to a role. platform_scope=true grants cross-tenant SYSTEM_ADMIN; only system_admins can create those bindings.",
+    rb_create: "Create Role Binding",
+    rb_create_drawer_title: "Create role binding",
+    rb_create_submit: "Create",
+    rb_create_platform_submit: "Create platform-scope binding",
+    rb_filter_platform_scope: "Show platform-scope only",
+    rb_created: "Role binding created.",
+    rb_deleted: "Role binding deleted.",
+    rb_empty_home: "No role bindings in this tenant yet.",
+    rb_empty_cross: "No role bindings across all tenants.",
+    rb_empty_platform: "No platform-scope bindings.",
+    rb_delete_confirm_title: "Delete this role binding?",
+    rb_delete_confirm_body: "The subject loses this role immediately.",
+    rb_delete_platform_warn:
+      "Deleting a platform-scope binding revokes cross-tenant SYSTEM_ADMIN from the subject.",
+    rb_confirm_required:
+      "Type the confirmation phrase exactly to authorize the platform-scope binding.",
+    cross_tenant_banner: "cross-tenant view",
+    failed_to_load: "Failed to load",
+    col_name: "Name",
+    col_description: "Description",
+    col_active: "Active",
+    col_created: "Created",
+    col_subject_type: "Subject type",
+    col_subject_id: "Subject ID",
+    col_role: "Role",
+    col_tenant: "Tenant",
+    col_granted_at: "Granted at",
+    col_actions: "Actions",
+    field_name: "Name",
+    field_description: "Description",
+    field_subject_type: "Subject type",
+    field_subject_id: "Subject ID (UUID)",
+    field_role: "Role",
+    field_platform_scope: "platform_scope (cross-tenant)",
+    platform_scope_hint:
+      "Only system_admins can set this. Required when role=system_admin.",
+    platform_scope_warn_title: "Cross-tenant elevation",
+    platform_scope_warn_body:
+      "This grants the subject SYSTEM_ADMIN across every tenant. Cannot be undone except by deleting the binding. Operation will be audited.",
+    role_requires_platform_scope:
+      "role=system_admin requires platform_scope=true (backend DTO validator).",
+    confirm_phrase_label: "Type {{phrase}} to confirm",
+    name_required: "Name is required",
+    subject_id_required: "Subject ID is required",
+    role_required: "Role is required",
   },
   triggers: {
     page_title: "Triggers",

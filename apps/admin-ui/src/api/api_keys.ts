@@ -103,25 +103,10 @@ export async function rotateApiKey(
   return postJson<ApiKeyRotated>(`/v1/api_keys/${apiKeyId}/rotate`, body);
 }
 
-export interface ServiceAccountRecord {
-  id: string;
-  tenant_id: string;
-  name: string;
-  description: string;
-  is_active: boolean;
-  created_by: string;
-  created_at: string;
-}
-
-export interface ServiceAccountList {
-  items: ServiceAccountRecord[];
-  total: number;
-  cross_tenant: boolean;
-}
-
-export async function listServiceAccounts(
-  params: { tenantScope?: TenantScope } = {},
-): Promise<ServiceAccountList> {
-  const query = withTenantScope({}, params.tenantScope);
-  return getJson<ServiceAccountList>("/v1/service_accounts", { params: query });
-}
+/** @deprecated Moved to ``./service_accounts``. Re-exported for backward
+ *  compat — H.4 PR 7 split the IAM surface into its own SDK file. */
+export type {
+  ServiceAccountList,
+  ServiceAccountRecord,
+} from "./service_accounts";
+export { listServiceAccounts } from "./service_accounts";
