@@ -6,6 +6,7 @@ import { MemoryAdmin } from "./pages/MemoryAdmin";
 import { RunDetail } from "./pages/RunDetail";
 import { RunsList } from "./pages/RunsList";
 import { SettingsApiKeys } from "./pages/SettingsApiKeys";
+import { SettingsAudit } from "./pages/SettingsAudit";
 import { ComingSoon } from "./pages/ComingSoon";
 
 export function AppRouter() {
@@ -22,6 +23,7 @@ export function AppRouter() {
       <Route path="/skills" element={<ComingSoon title="Skills" />} />
       <Route path="/triggers" element={<ComingSoon title="Triggers" />} />
       <Route path="/settings/api-keys" element={<SettingsApiKeys />} />
+      <Route path="/settings/audit" element={<SettingsAudit />} />
       <Route path="/settings/*" element={<ComingSoon title="Settings" />} />
       <Route path="*" element={<ComingSoon title="404" />} />
     </Routes>
