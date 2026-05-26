@@ -3,6 +3,7 @@
 from control_plane.api.agents import build_agents_router
 from control_plane.api.api_keys import build_api_keys_router
 from control_plane.api.artifacts import build_artifacts_router
+from control_plane.api.audit import build_audit_router
 from control_plane.api.curation import build_curation_router, build_eval_dataset_router
 from control_plane.api.feedback import build_feedback_router
 from control_plane.api.health import build_health_router
@@ -25,6 +26,7 @@ __all__ = [
     "build_agents_router",
     "build_api_keys_router",
     "build_artifacts_router",
+    "build_audit_router",
     "build_curation_router",
     "build_eval_dataset_router",
     "build_feedback_router",

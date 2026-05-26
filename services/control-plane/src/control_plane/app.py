@@ -33,6 +33,7 @@ from control_plane.api import (
     build_agents_router,
     build_api_keys_router,
     build_artifacts_router,
+    build_audit_router,
     build_curation_router,
     build_eval_dataset_router,
     build_feedback_router,
@@ -780,6 +781,7 @@ def create_app(
     app.include_router(build_tenant_config_router())
     app.include_router(build_triggers_router())
     app.include_router(build_webhooks_router())
+    app.include_router(build_audit_router())
     app.include_router(build_curation_router())
     app.include_router(build_eval_dataset_router())
 

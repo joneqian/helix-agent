@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from typing import Literal
+from uuid import UUID
 
 from helix_agent.persistence.audit_log import AuditLogStore
 from helix_agent.protocol import AuditAction, AuditEntry, AuditPage, AuditQuery, AuditResult
@@ -118,6 +119,39 @@ class AuditLogger:
         except Exception as exc:
             logger.warning("audit.self_audit_failed actor=%s reason=%s", actor_id, exc)
         return page
+
+    async def get_by_id(
+        self,
+        audit_id: int,
+        *,
+        tenant_id: UUID,
+        actor_id: str,
+        actor_type: Literal["user", "service_account", "system", "agent"] = "user",
+    ) -> AuditEntry | None:
+        """Fetch one ``AuditEntry`` and emit a self-audit row (Stream H.4 PR 3).
+
+        Mirrors :meth:`query` semantics: returns ``None`` when the entry
+        does not exist *or* belongs to a different tenant (the store
+        enforces tenant filtering — never reveals cross-tenant existence).
+        The self-audit emits unconditionally and is best-effort.
+        """
+        entry = await self._store.get_by_id(audit_id, tenant_id=tenant_id)
+        try:
+            await self.write(
+                AuditEntry(
+                    tenant_id=tenant_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    action=AuditAction.AUDIT_READ,
+                    resource_type="audit",
+                    resource_id=str(audit_id),
+                    result=AuditResult.SUCCESS,
+                    details={"endpoint": "GET /v1/audit/{id}"},
+                )
+            )
+        except Exception as exc:
+            logger.warning("audit.self_audit_failed actor=%s reason=%s", actor_id, exc)
+        return entry
 
 
 def _self_audit_entry(
