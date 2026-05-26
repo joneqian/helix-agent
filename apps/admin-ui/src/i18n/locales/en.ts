@@ -179,6 +179,34 @@ export interface TranslationKeys {
     promoted: string;
     dismissed: string;
   };
+  memory: {
+    page_title: string;
+    subtitle: string;
+    cross_tenant_banner: string;
+    failed_to_load: string;
+    empty_home: string;
+    empty_cross: string;
+    col_kind: string;
+    col_content: string;
+    col_user: string;
+    col_created: string;
+    col_actions: string;
+    filter_kind: string;
+    filter_kind_all: string;
+    search_placeholder: string;
+    edit_title: string;
+    edit_meta_user: string;
+    edit_meta_kind: string;
+    edit_content_label: string;
+    save_dirty: string;
+    embedder_note: string;
+    embedder_unconfigured: string;
+    empty_content: string;
+    updated: string;
+    deleted: string;
+    delete_confirm_title: string;
+    delete_confirm_body: string;
+  };
   eval_datasets: {
     failed_to_load: string;
     empty_home: string;
@@ -486,6 +514,34 @@ const en: TranslationKeys = {
     promote_hint: "Trajectory input + expected output are copied from the candidate. Edit later via the Eval Datasets tab.",
     promoted: "Candidate promoted to eval dataset.",
     dismissed: "Candidate dismissed.",
+  },
+  memory: {
+    page_title: "Memory",
+    subtitle: "Per-user long-term memories used for recall during agent runs. Edit / delete here is destructive; vector embeddings re-compute on PATCH.",
+    cross_tenant_banner: "cross-tenant view",
+    failed_to_load: "Failed to load memories",
+    empty_home: "No memories in this tenant yet.",
+    empty_cross: "No memories across all tenants yet.",
+    col_kind: "Kind",
+    col_content: "Content",
+    col_user: "User",
+    col_created: "Created",
+    col_actions: "Actions",
+    filter_kind: "Kind filter",
+    filter_kind_all: "All kinds",
+    search_placeholder: "Filter by content (client-side)",
+    edit_title: "Edit memory",
+    edit_meta_user: "User",
+    edit_meta_kind: "Kind",
+    edit_content_label: "Content",
+    save_dirty: "Save (edited)",
+    embedder_note: "PATCH re-computes the embedding so vector recall stays consistent with the new content.",
+    embedder_unconfigured: "Backend has no embedder configured — memory PATCH refused (HELIX_AGENT_EMBEDDING_API_KEY_REF + MODEL required).",
+    empty_content: "Content cannot be empty.",
+    updated: "Memory updated.",
+    deleted: "Memory deleted.",
+    delete_confirm_title: "Delete this memory?",
+    delete_confirm_body: "Soft-delete; row recoverable for 30 days then gone permanently.",
   },
   eval_datasets: {
     failed_to_load: "Failed to load eval datasets",
