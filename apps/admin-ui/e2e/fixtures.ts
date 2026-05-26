@@ -91,6 +91,7 @@ const RUNS_RESPONSE = {
         created_at: "2026-05-26T08:00:00Z",
         updated_at: "2026-05-26T08:00:32Z",
         finished_at: "2026-05-26T08:00:32Z",
+        trace_id: "cafef00d".repeat(4),
       },
     ],
     total: 1,

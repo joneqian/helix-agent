@@ -103,6 +103,22 @@ class RunStore(abc.ABC):
         ``MAX_LIST_LIMIT`` (Mini-ADR H-7 D).
         """
 
+    @abc.abstractmethod
+    async def set_trace_id(
+        self,
+        *,
+        run_id: UUID,
+        tenant_id: UUID,
+        trace_id: str,
+    ) -> bool:
+        """Persist the OTel ``trace_id`` for ``run_id``.
+
+        Stream H.3 PR 2 (Mini-ADR H-9.5). Idempotent overwrite — if the
+        worker observes its own trace_id (rare), the second call wins.
+        Returns ``True`` iff the row exists; cross-tenant probes return
+        ``False`` so callers can hide existence.
+        """
+
 
 #: Stream H.3 PR 1 — Mini-ADR H-7 (D) hard cap so a single page can never
 #: return more than this many rows. Callers passing a larger ``limit``
@@ -197,6 +213,19 @@ class InMemoryRunStore(RunStore):
         clamped = _clamp_limit(limit)
         return rows[offset : offset + clamped]
 
+    async def set_trace_id(
+        self,
+        *,
+        run_id: UUID,
+        tenant_id: UUID,
+        trace_id: str,
+    ) -> bool:
+        row = self._rows.get(run_id)
+        if row is None or row.tenant_id != tenant_id:
+            return False
+        self._rows[run_id] = replace(row, trace_id=trace_id)
+        return True
+
 
 def _row_to_dto(row: AgentRunRow) -> RunInfo:
     return RunInfo(
@@ -211,6 +240,7 @@ def _row_to_dto(row: AgentRunRow) -> RunInfo:
         created_at=row.created_at,
         updated_at=row.updated_at,
         finished_at=row.finished_at,
+        trace_id=row.trace_id,
     )
 
 
@@ -235,6 +265,7 @@ class SqlRunStore(RunStore):
                     created_at=info.created_at,
                     updated_at=info.updated_at,
                     finished_at=info.finished_at,
+                    trace_id=info.trace_id,
                 )
             )
             await session.commit()
@@ -335,3 +366,19 @@ class SqlRunStore(RunStore):
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_dto(r) for r in rows]
+
+    async def set_trace_id(
+        self,
+        *,
+        run_id: UUID,
+        tenant_id: UUID,
+        trace_id: str,
+    ) -> bool:
+        async with self._sf() as session:
+            result = await session.execute(
+                update(AgentRunRow)
+                .where(AgentRunRow.id == run_id, AgentRunRow.tenant_id == tenant_id)
+                .values({"trace_id": trace_id})
+            )
+            await session.commit()
+        return int(getattr(result, "rowcount", 0) or 0) > 0

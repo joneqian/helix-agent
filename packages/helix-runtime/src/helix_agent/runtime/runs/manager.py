@@ -58,6 +58,10 @@ class RunRecord:
     #: worker observes ``helix_durable_resume_seconds`` only when ``True``
     #: so the histogram cleanly tracks SLO #5 (durable resume latency).
     is_resume: bool = False
+    #: Stream H.3 PR 2 (Mini-ADR H-9.5) — OTel trace id captured at
+    #: create time by the caller. ``None`` for auto-triggered runs
+    #: (scheduler / J.13a curation) where no caller-bound trace exists.
+    trace_id: str | None = None
 
 
 def _record_to_info(record: RunRecord) -> RunInfo:
@@ -79,6 +83,7 @@ def _record_to_info(record: RunRecord) -> RunInfo:
         created_at=record.created_at,
         updated_at=record.updated_at,
         finished_at=None,
+        trace_id=record.trace_id,
     )
 
 
@@ -108,12 +113,18 @@ class RunManager:
         user_id: UUID | None = None,
         on_disconnect: DisconnectMode = DisconnectMode.CANCEL,
         is_resume: bool = False,
+        trace_id: str | None = None,
     ) -> RunRecord:
         """Create + register a new run in PENDING state.
 
         ``is_resume`` (Stream K.K10) flags the run as resuming a thread
         with a non-empty checkpoint so the SSE worker can observe the
         durable-resume histogram only on those runs.
+
+        ``trace_id`` (Stream H.3 PR 2 — Mini-ADR H-9.5) is the OTel
+        trace id the caller observed; pass ``None`` for auto-triggered
+        runs that have no user-bound trace. The value is written through
+        to the durable ``agent_run`` row as part of the initial insert.
         """
         async with self._lock:
             if run_id in self._runs:
@@ -127,6 +138,7 @@ class RunManager:
                 status=RunStatus.PENDING,
                 on_disconnect=on_disconnect,
                 is_resume=is_resume,
+                trace_id=trace_id,
             )
             # Mirror to the durable store before the in-memory insert —
             # a store failure then leaves no orphan registry entry.

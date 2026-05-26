@@ -79,6 +79,7 @@ const sampleRuns = [
     created_at: "2026-05-26T08:00:00Z",
     updated_at: "2026-05-26T08:00:32Z",
     finished_at: null,
+    trace_id: "aaaaaaaa".repeat(4),
   },
   {
     run_id: "44444444-4444-4444-4444-444444444444",
@@ -93,6 +94,7 @@ const sampleRuns = [
     created_at: "2026-05-26T07:55:11Z",
     updated_at: "2026-05-26T07:55:48Z",
     finished_at: "2026-05-26T07:55:48Z",
+    trace_id: "bbbbbbbb".repeat(4),
   },
   {
     run_id: "66666666-6666-6666-6666-666666666666",
@@ -107,6 +109,7 @@ const sampleRuns = [
     created_at: "2026-05-26T07:50:01Z",
     updated_at: "2026-05-26T07:50:08Z",
     finished_at: "2026-05-26T07:50:08Z",
+    trace_id: null,
   },
 ];
 

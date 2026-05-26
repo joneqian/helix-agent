@@ -244,3 +244,29 @@ async def test_list_all_tenants_returns_runs_across_tenants(
     tenants = {r.tenant_id for r in listed}
     assert tenant_a in tenants
     assert tenant_b in tenants
+
+
+# ---------------------------------------------------------------------------
+# Stream H.3 PR 2 — set_trace_id (Mini-ADR H-9.5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_writes_and_reads_back_sql(run_store: SqlRunStore) -> None:
+    run_id, tenant_id = uuid4(), uuid4()
+    await run_store.create(_info(run_id=run_id, tenant_id=tenant_id))
+
+    ok = await run_store.set_trace_id(run_id=run_id, tenant_id=tenant_id, trace_id="cafef00d" * 4)
+    assert ok is True
+
+    fetched = await run_store.get(run_id=run_id, tenant_id=tenant_id)
+    assert fetched is not None
+    assert fetched.trace_id == "cafef00d" * 4
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_unknown_run_returns_false_sql(
+    run_store: SqlRunStore,
+) -> None:
+    ok = await run_store.set_trace_id(run_id=uuid4(), tenant_id=uuid4(), trace_id="abc")
+    assert ok is False
