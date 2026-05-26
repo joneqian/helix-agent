@@ -222,6 +222,157 @@ apps/admin-ui/
 **Decision**:**全栈用 Lucide**,禁止用 Antd IconFont。Antd 组件需 icon 时显式传 `icon={<LucideIcon />}`。
 **Consequences**:bundle 多 ~50KB(可接受;tree-shake 后实际更小);视觉一致性 ↑↑(混用会显得拼接)。
 
+### Mini-ADR H-6:`GET /v1/runs` 跨 thread 索引 — 偿还 Mini-ADR J-41 deferred 项
+**Context**:H.1b PR 3 RunDetail 备注里写"There is no cross-thread 'list all runs' endpoint yet (Mini-ADR J-41 keeps the per-thread shape); PR 4 wires a control-plane index when it lands" —— H.3 PR 1 兑现这条挂账。今日 RunStore 只有 `list_by_thread(thread_id, tenant_id)`,跨 thread 列表 = N+1 调用,不可接受。
+**Decision**:
+- `RunStore` ABC 加两个抽象方法,InMemory + SQL 各加实现:
+  - `list_for_tenant(*, tenant_id, status: RunStatus | None = None, limit: int = 100, offset: int = 0) -> list[RunInfo]` — newest first(ORDER BY created_at DESC)
+  - `list_all_tenants(*, status, limit, offset) -> list[RunInfo]` — 跨租户;调用方 MUST 包 `bypass_rls_session()`(Stream N 同 [trigger sql.py:117](../../packages/helix-persistence/src/helix_agent/persistence/trigger/sql.py))
+- 在 `api/runs.py` 旁加 `build_runs_list_router()` 一个新 router(prefix `/v1/runs`),只挂 `GET /v1/runs?status&tenant_id&limit&offset`;走 Stream N `ensure_tenant_scope` + `applied_scope` 框架,响应字段 `{ items, total, cross_tenant }` 与 agents/triggers 列表对齐。
+- 在 `app.py` `include_router(build_runs_list_router())`;复用同一 RunStore 单例。
+- 不动现有 `/v1/sessions/{thread_id}/runs/*` 端点 —— 这次只是**加**列表入口,旧的按 thread 查询保留。
+**Consequences**:Mini-ADR J-41 的 deferred 项("`GET .../runs` 列表 endpoint → H.3")正式偿还,挂账可在 ITERATION-PLAN J.8 行划除;后续 J.10 trigger run 列表 / J.12 curation 候选评审都能复用 `list_for_tenant` 而不必各自实现。
+
+### Mini-ADR H-7:SSE 实时回放推 M1 — H.3 M0 只做状态轮询
+**Context**:H.3 原描述含"SSE 实时回放"。要真做"re-attach to existing run's stream",得改:(1) 新 endpoint `GET .../runs/{id}/events`(SSE 重订阅);(2) `StreamBridge` 支持多消费者;(3) 重连游标处理。— 都是非平凡 backend 工作。Playground tab(H.2 PR 6)已有 live SSE(POST 时同时拿流),所以"new run + 同时观察流"已经覆盖;真正缺的是**事后**回看完成的 run 的事件流。事后回看依赖 trajectory recorder(J.13a)或 event_log,这两个都没 API-fronted。
+**Decision**:**M0 RunDetail 仅做状态轮询**(`paused` / `running` 时每 3s `getRun` 一次,terminal 时停);**SSE 实时回放推 M1**(与 J.13a trajectory API 一起做)。审批面板仍可立即操作(已具备所有所需数据);用户事后回看缺历史事件流 —— 在 M0 显式可见的 `(a)` 推迟。
+**Consequences**:H.3 M0 体感:Runs 列表 + 详情(状态 + approval + 元数据)+ 状态自动刷新;**不**显示历史事件帧。运维语境足够;开发 / debug 语境用 Playground tab(同 agent 起新 thread 直接看)。M1 再补回看。
+
+### Mini-ADR H-8:Trace 嵌入 = 外链跳 Langfuse,不 iframe — H.3 M0
+**Context**:Langfuse 自带完整 trace UI(span 树 / token 消耗 / LLM 输入输出对比),自研一份性价比极低。iframe 嵌入需要 Langfuse staging 部署 + CORS / X-Frame-Options 配置 + 跨域 token 转 —— 都是 backend infra 工作(Stream G.7 大盘正在做)。
+**Decision**:**M0 = 外链跳**。RunDetail 给一个"Open in Langfuse"按钮,带 `trace_id` 作为 query / path 参数,新窗口打开。`LANGFUSE_BASE_URL` 配在 `apps/admin-ui/.env`(已有 OIDC env 范式);未配则按钮隐藏,显示"trace_id"明码 + 复制按钮兜底。
+**Consequences**:M0 体感:点开一次 Langfuse,完整 trace 即得;不破坏 Antd 5 风格;不引入 iframe 通信 / postMessage 复杂度。M1 与 Stream G.7 一起做 inline embed(若 ops 表态要)。
+
+### Mini-ADR H-9:Approval `override_args` 用 Monaco JSON inline 编辑
+**Context**:J.8 API 已支持 `POST .../resume {approved, override_args}` 让审批者修改 agent 提议的工具参数(典型场景:agent 提议删 50 条记录,审批者改成 10 条)。当前 H.1b PR 3 的 RunDetail 只显示 `proposed_args` JSON pretty-print + Approve/Reject 二选,没 override UI。
+**Decision**:Approval Alert 里:
+- 默认显示 `proposed_args` 为只读 Monaco JSON。
+- 顶上加 toggle "Edit arguments" — 切到 edit 模式后 Monaco 可编辑;Approve 按钮文案变 "Approve with edits"(若用户编辑过 JSON;否则正常 "Approve")。
+- Save-side 校验:JSON.parse 失败时 Approve 禁用 + 显示语法错误。
+- Reject 不需 override(`override_args=null`)。
+**Consequences**:复用 H.2 PR 5 已经引入的 `@monaco-editor/react`,零新增 dep;审批者获得正确的"修订入参"能力(原始 J.8 设计目标);M0 关闭 H.1b 的 approval 半成品状态。
+
+---
+
+## 6.5 H.3 详细设计
+
+参考:[`STREAM-J-DESIGN.md § 14`](./STREAM-J-DESIGN.md)(J.8 审批 API + audit + reason_kind 5 类型)/ [`STREAM-N-DESIGN.md`](./STREAM-N-DESIGN.md)(cross-tenant 框架,本节 PR 1 直接复用)。
+
+### 6.5.1 范围 & 出入
+
+| 项 | M0 ✓ | (a) 推迟 |
+|---|---|---|
+| **跨 thread Runs 列表**(`GET /v1/runs`)| ✓(Mini-ADR H-6) | — |
+| **Status / tenant 筛选**(系统 admin 跨租户) | ✓(Stream N 框架) | — |
+| **RunDetail 状态轮询**(`paused` / `running` 时每 3s 拉一次) | ✓ | — |
+| **Approval Approve / Reject**(继承 H.1b PR 3) | ✓ | — |
+| **Approval `override_args` Monaco 编辑** | ✓(Mini-ADR H-9) | — |
+| **Approval pending 总数 badge**(顶 nav / Runs 列表头) | ✓ | — |
+| **Trace 跳 Langfuse 外链** | ✓(Mini-ADR H-8) | iframe 嵌入推 M1 |
+| **历史 SSE 回放** | — | M1 与 J.13a trajectory API 一起(Mini-ADR H-7) |
+| **审批 SLA 监控指标** | — | M1+(J.8 § 500 显式推迟项) |
+| **多审批人 / 升级链** | — | M1 高级 UI(J.8 § 500) |
+| **审计日志 inline 显示** | — | H.4 Audit 查询(同 stream H 后续 PR) |
+
+### 6.5.2 后端契约 — `GET /v1/runs`
+
+```
+GET /v1/runs?status=paused&tenant_id=*&limit=50&offset=0
+Authorization: Bearer <jwt>
+
+200 OK
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "run_id": "...",
+        "tenant_id": "...",
+        "thread_id": "...",
+        "user_id": "..." | null,
+        "status": "paused" | "running" | "success" | "error" | "interrupted" | "timeout" | "pending",
+        "is_resume": true | false,
+        "error": "..." | null,
+        "created_at": "...",
+        "updated_at": "...",
+        "finished_at": "..." | null
+      },
+      ...
+    ],
+    "total": 123,
+    "cross_tenant": true | false
+  },
+  "error": null
+}
+```
+
+- `tenant_id=*` 仅 `system_admin` 可用;否则 `ensure_tenant_scope` 抛 403 + audit。
+- `status` 是单值;多 status 用多 query(`?status=paused&status=running`)推迟。
+- `total` 严格等于 `items` 长度(M0 不做 COUNT(*) per-tenant 二次查询;`limit + offset` 决定的窗口,前端用 `items.length < limit` 判 last-page);响应字段保持与 agents/triggers 列表一致。
+- 404 不存在;403 Stream N 跨租户拒绝;429 quota(走标准 admission 框架)。
+
+### 6.5.3 前端 IA — `/runs` 页
+
+```
+[Runs] (顶 nav 等级,左侧栏一级链接,Bot 图标右下角 Activity 标)
+
+  ┌────────────────────────────────────────────────┐
+  │ Breadcrumb  Home / Runs                        │
+  │ ┌──────────────────────────────────────────┐   │
+  │ │ Runs                  [Approval pending: 3] │
+  │ │                                            │   │
+  │ │ Status: [All ▼]  Tenant: [Home ▼]  [↻]    │   │
+  │ ├──────────────────────────────────────────┤   │
+  │ │ Run ID      Status   Thread     Agent      │   │
+  │ │ a1b2c3…    paused   t-d4e5…    code-reviewer  │
+  │ │ a1b2c3…    success  t-d4e5…    code-reviewer  │
+  │ │ ...                                        │   │
+  │ └──────────────────────────────────────────┘   │
+  └────────────────────────────────────────────────┘
+```
+
+- **列**:Run ID(8-char 截断 + tooltip 完整 + 点击进 detail)/ Status(Tag 颜色)/ Thread(8-char 截断 + Link)/ Created at(相对时间 + tooltip 绝对)/ Agent(thread 不直接含 agent 字段;**M0 用 thread query;**或在响应里加一次性 JOIN — 见 § 6.5.5)。
+- **筛选**:`Status` Select(单选);`Tenant` 复用 `TenantSwitcher`(`home` / `*` / `UUID`)。无搜索框 M0(Mini-ADR J-41 没 agent_name 索引,加是 M1)。
+- **状态**:Empty(无 run)/ Loading(Skeleton)/ Error(Alert)/ Pagination(50 一页;客户端按 `items.length < limit` 判末页;total 仅作 hint)。
+- **可点击行**:点行 → `/runs/:thread_id/:run_id`(已有 RunDetail 接住)。
+
+### 6.5.4 前端 IA — RunDetail 增强(M0 增量,不重写)
+
+- 状态轮询(Mini-ADR H-7):当 `run.status in {paused, running, pending}`,每 3s `getRun`;一旦进 terminal,立即停轮询。**前提**:页面可见才轮(`document.visibilityState === "visible"`),否则后台 tab 暂停。
+- Approval 区(Mini-ADR H-9):
+  - 默认 Monaco read-only(`proposed_args`)。
+  - "Edit arguments" toggle → 切 edit;Monaco language=json + 错误标。
+  - "Approve" / "Approve with edits"(根据 buffer 是否变过)/ "Reject"。
+  - 错误 JSON → Approve 禁用 + 显示 `JSON.parse` 错。
+- Trace 跳转(Mini-ADR H-8):
+  - 顶 toolbar 显示 `trace_id` 8-char + 复制按钮。
+  - 若 `VITE_LANGFUSE_BASE_URL` 配置 → 加按钮 "Open in Langfuse"(target=_blank);否则只显示 trace_id。
+- Approval pending badge:左侧主导航 Runs 项右侧加红点(`useQuery` 每 60s 拉 `GET /v1/runs?status=paused&limit=1` 看 `total`;0 时不显示)。
+
+### 6.5.5 已知不解决的耦合
+
+- **RunInfo 不含 `agent_name`**:`agent_run` 表只存 `(run_id, thread_id, tenant_id, user_id, status, ...)`;agent 信息住 `thread_meta`。M0 RunsList "Agent" 列要么(a) 每条 run 多查一次 `thread_meta`,要么(b) 在 `GET /v1/runs` 服务端做一次 JOIN 并把 `agent_name + agent_version` 加进响应。
+  - **决策**:走(b)。响应字段加 `agent_name: str | None` / `agent_version: str | None`(thread 可能已删 → null)。这不变更 `RunInfo` DTO 持久层 schema,仅在 API 层组合;`build_runs_list_router` 取数后对每个 thread 查一次 thread_meta(M0 量级 ≤ 50 行,N+1 可接受;M1 改成 SQL JOIN)。
+- **Trace ID 不直接挂在 `RunInfo`**:trace_id 来自 OTel,在 SSE `metadata` 事件里;不在 `agent_run` 行。M0 RunDetail 的 trace_id = 从 SSE metadata 接到的最新 trace(对 paused / running 有;对 terminal 没有 — 显示"trace 已结束,见 Langfuse 历史")。M1 把 trace_id 持久到 `agent_run` 表(expand-contract 加列)。
+- **`override_args` JSON Schema 校验**:M0 仅做 JSON.parse 客户端校验;后端 J.8 resume 接 `override_args: dict` 不做 schema 校验(已有 tool 模板内部校验)。
+
+### 6.5.6 PR 拆分
+
+| PR | 范围 | 估时 |
+|---|---|---|
+| **H.3 PR 1**(原 PR7 拆出)| Backend `GET /v1/runs` + RunStore `list_for_tenant` / `list_all_tenants` + SDK `listRuns` + RunsList 页(Mini-ADR H-6)| 2-3 天 |
+| **H.3 PR 2** | Approval override_args Monaco UX + 状态轮询(Mini-ADR H-7 / H-9) | 1.5 天 |
+| **H.3 PR 3** | Trace 链接外跳(Mini-ADR H-8)+ Approval pending badge + RunsList 体感打磨 | 1 天 |
+
+> 总估时 4.5-5.5 天(略大于原 PR7 的 3-4 天估时,因增加了 backend endpoint)。
+
+### 6.5.7 验收
+
+- **零债 6 条** 每 PR 各跑:无 TODO/FIXME/XXX、ruff/mypy 全过、新增方法测试覆盖、设计文档同步、可观测齐全(`/v1/runs` 加 audit + counter 与现有列表端点一致)、CI 全绿。
+- **跨租户冒烟**:`system_admin` 切 "All tenants" → `/runs` 表头 banner `cross-tenant view`;切回 home → banner 消失;两个动作都进 audit。
+- **审批端到端**:Playground 起一个 agent → 审批 gate → `/runs?status=paused` 列表见 → 点进 RunDetail → 编辑 override_args → Approve with edits → 状态变 running → 终态 success。
+- **a11y**:RunsList axe 0 critical;状态 Tag 颜色不是唯一信号(同时带文字)。
+
 ---
 
 ## 6. PR 链(预估)
@@ -234,7 +385,9 @@ apps/admin-ui/
 | PR4 ✅ | H.1b — CommandPalette + TenantSwitcher + 主题切换 + Lucide 接入 + OIDC + 6 SDK + Storybook/E2E #277 #278 #279 #280 #281 | 1-2 天 |
 | PR5 ✅ | H.2 — Agent 详情 Manifest tab Monaco YAML(view/edit/save)+ Create Agent drawer + POST/PUT /v1/agents #284 #285 | 3-4 天 |
 | PR6 ✅ | H.2 — Agent 详情 Playground tab(fetch+ReadableStream SSE + 色彩分类事件日志 + Stop)#286;**(a) 推迟**:改 manifest 重跑(需后端 ad-hoc spec override)/ 工具调用语义化时间线 / 审批 mid-run UX(H.3) | 3-4 天 |
-| PR7 | H.3 — Runs 列表 + 详情 + Trace + Approval 面板 | 3-4 天 |
+| PR7a | H.3 PR 1 — Backend `GET /v1/runs` 跨 thread 索引 + SDK + RunsList 页(Mini-ADR H-6)| 2-3 天 |
+| PR7b | H.3 PR 2 — Approval `override_args` Monaco UX + 状态轮询(Mini-ADR H-7 / H-9)| 1.5 天 |
+| PR7c | H.3 PR 3 — Trace 链接外跳(Mini-ADR H-8)+ Approval pending badge + 体感打磨 | 1 天 |
 | PR8 | H.4(Curation+Eval)— 候选评审 + eval dataset CRUD | 2 天 |
 | PR9 | H.4(Memory)— per-user memory 列表 + 编辑 + 删除 | 1.5 天 |
 | PR10 | H.4(Skills+Triggers)— 跨 agent skill / trigger 列表 + CRUD | 2 天 |
@@ -269,3 +422,4 @@ apps/admin-ui/
 |---|---|---|
 | 2026-05-25 | v1.0 | 初稿:设计基线 PR 链 + IA + 工程目录 + 5 个 Mini-ADR + 12 个 PR 估时;H.4 用户面取消,改为治理面;Playground 嵌 per-agent tab |
 | 2026-05-25 | v1.1 | H.1a / H.1b / H.2 全部完成(PR1–6,合并 #262–264 / #272 / #274 / #277–281 / #284–286);PR 链表加 ✅ 标记 + #PR 引用;H.2 PR 6 显式推迟项落到 PR 行尾 |
+| 2026-05-26 | v1.2 | 加 § 6.5 **H.3 详细设计** + Mini-ADR H-6 / H-7 / H-8 / H-9;原 PR7 拆为 PR7a/b/c 3 个;锁定:`GET /v1/runs` 跨 thread 索引兑现 Mini-ADR J-41 deferred / SSE 实时回放推 M1 / Trace = 外链跳 Langfuse / Approval `override_args` Monaco inline 编辑 |
