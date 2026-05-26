@@ -373,6 +373,245 @@ Authorization: Bearer <jwt>
 - **审批端到端**:Playground 起一个 agent → 审批 gate → `/runs?status=paused` 列表见 → 点进 RunDetail → 编辑 override_args → Approve with edits → 状态变 running → 终态 success。
 - **a11y**:RunsList axe 0 critical;状态 Tag 颜色不是唯一信号(同时带文字)。
 
+### 6.5.8 文件级影响图
+
+**PR7a — `GET /v1/runs` + RunsList 页**
+
+| 文件 | 变更 | 行数估 |
+|---|---|---|
+| `packages/helix-runtime/src/helix_agent/runtime/runs/store.py` | ABC + InMemory + SQL 加 `list_for_tenant` / `list_all_tenants` | +85 |
+| `packages/helix-runtime/tests/test_run_store.py` | +`test_list_for_tenant_filter_by_status` / `_pagination` / `_tenant_isolation` / `test_list_all_tenants_returns_all` / `_with_status_filter` | +60 |
+| `services/control-plane/src/control_plane/api/runs.py` | 加 `build_runs_list_router()`(新 APIRouter `prefix="/v1/runs"`)+ `_run_to_dict` helper + `_resolve_thread_meta` JOIN(N+1) | +120 |
+| `services/control-plane/src/control_plane/app.py` | `include_router(build_runs_list_router())` 一行 | +1 |
+| `services/control-plane/tests/test_runs_api.py` | `test_list_runs_home_tenant` / `_status_filter` / `_pagination` / `_cross_tenant_requires_system_admin` / `_cross_tenant_aggregate` / `_thread_meta_join` | +160 |
+| `apps/admin-ui/src/api/runs.ts` | 加 `listRuns({ tenantScope, status, limit, offset })` 返回 `{ items, total, cross_tenant }`;`RunInfo` 类型增 `agent_name?` / `agent_version?` / `is_resume` / `created_at` / `updated_at` / `finished_at` | +50 |
+| `apps/admin-ui/src/pages/RunsList.tsx` | **新文件** — 表格 + 筛选 + 分页 + cross-tenant banner | +220 |
+| `apps/admin-ui/src/pages/__tests__/RunsList.test.tsx` | 5 单测(loading / empty / rows / status filter / cross-tenant) | +150 |
+| `apps/admin-ui/src/router.tsx` | `<Route path="/runs">` 由 ComingSoon 换 RunsList | +/-2 |
+| `apps/admin-ui/src/i18n/locales/{en,zh-CN}.ts` | 加 `runs_page.*`(13 keys)| +60 |
+
+**PR7b — Approval override_args Monaco + 状态轮询**
+
+| 文件 | 变更 | 行数估 |
+|---|---|---|
+| `apps/admin-ui/src/pages/run_detail/ApprovalCard.tsx` | **新文件** — 抽出 RunDetail 里的 Approval Alert,加 Monaco 编辑 / "Edit arguments" toggle / Approve / Approve with edits / Reject 状态机 | +220 |
+| `apps/admin-ui/src/pages/RunDetail.tsx` | 替换 inline approval Alert 为 `<ApprovalCard>`;加状态轮询 hook | +/-30 |
+| `apps/admin-ui/src/hooks/useStatusPolling.ts` | **新文件** — 3s interval + visibilityState gate + terminal stop | +60 |
+| `apps/admin-ui/src/pages/__tests__/ApprovalCard.test.tsx` | 6 单测(view-mode default / toggle 切 edit / parse 错误禁用 Approve / Approve / Approve with edits / Reject) | +180 |
+| `apps/admin-ui/src/pages/__tests__/RunDetail.test.tsx` | **新文件** — polling 行为(running 时拉 / terminal 停 / hidden tab 暂停) | +120 |
+| `apps/admin-ui/src/i18n/locales/{en,zh-CN}.ts` | 加 `approval_card.*`(8 keys)| +35 |
+
+**PR7c — Trace 外链 + Approval pending badge + 体感打磨**
+
+| 文件 | 变更 | 行数估 |
+|---|---|---|
+| `apps/admin-ui/src/pages/run_detail/TraceToolbar.tsx` | **新文件** — trace_id 显示 + 复制按钮 + (有 `VITE_LANGFUSE_BASE_URL` 时)Open in Langfuse 按钮 | +90 |
+| `apps/admin-ui/src/config/env.ts` | 加 `LANGFUSE_BASE_URL` 读取 + 校验 | +15 |
+| `apps/admin-ui/src/components/AppShell.tsx` | 主导航 Runs 项右侧加 `<ApprovalPendingBadge>` | +/-10 |
+| `apps/admin-ui/src/components/ApprovalPendingBadge.tsx` | **新文件** — `listRuns({ status: "paused", limit: 1 })` 每 60s + 红点 + a11y label | +60 |
+| `apps/admin-ui/src/pages/__tests__/TraceToolbar.test.tsx` | 3 单测(无 env / 有 env 显示按钮 / 复制 trace_id)| +90 |
+| `apps/admin-ui/src/components/__tests__/ApprovalPendingBadge.test.tsx` | 3 单测(0 不显示 / N 显示 / 错误 swallow)| +80 |
+
+### 6.5.9 状态机
+
+#### RunsList 加载状态机
+
+```
+                ┌──────┐    apiTenantScope 变 / refresh 点击
+                │ idle ├─────┐
+                └──┬───┘     │
+            on mount│       refresh()
+                   v          │
+              ┌─────────┐     │
+              │ loading │<────┘
+              └──┬──┬───┘
+                 │  │
+       success / │  │ \ error
+                 v  │  v
+            ┌──────┐│┌───────┐
+            │ data ││ error │
+            └──────┘└───────┘
+```
+
+#### RunDetail 轮询状态机
+
+```
+                          tab visible AND status ∈ {paused, running, pending}
+                          ┌──────────────────────┐
+                          │                      │
+              ┌───────────v──────────┐           │
+              │       polling        ├───────────┤  every 3 s: getRun()
+              │   (interval active)  │
+              └──────────┬───────────┘
+                         │
+       status ∈ terminal │     OR document hidden  OR component unmount
+                         v
+                  ┌──────────────┐
+                  │     idle     │
+                  │  (no timer)  │
+                  └──────────────┘
+```
+
+#### Approval 编辑状态机
+
+```
+       ┌─────────┐  click "Edit"   ┌─────────────┐
+       │  view   ├────────────────>│   editing   │
+       │ (RO)    │                 │ (buffer ≠   │
+       └────┬────┘                 │  pristine)  │
+            │                      └──┬───┬──┬───┘
+            │ click "Approve"         │   │  │
+            │                         │   │  │ click "Cancel edit"
+            │                         │   │  └──────────────┐
+            │                         │   │                 │
+            │     click "Approve with edits"                │
+            │     OR "Reject"         │                     │
+            v                         v                     v
+       ┌─────────┐                ┌──────────┐         ┌──────┐
+       │submitting├─ ok ─────────>│   done   │         │ view │
+       └────┬─────┘                └──────────┘         └──────┘
+            │                       (page reloads)
+            │ error
+            v
+       ┌────────┐
+       │  error │  alert; stay in editing(buffer 保留)
+       └────────┘
+```
+
+JSON.parse 错误 = `editing` 子状态:Approve 按钮禁用 + 显示 syntax error 行号(Monaco 内置 marker)。
+
+### 6.5.10 错误 / 边界场景矩阵
+
+| 场景 | 后端响应 | 前端行为 |
+|---|---|---|
+| `?tenant_id=*` 但 caller 非 system_admin | 403 + audit `CROSS_TENANT_DENIED` | UI 不该让 caller 切到 "All tenants" — TenantScopeContext 已防;若手敲 URL,Alert 显示 "Forbidden — system admin required" |
+| `?tenant_id=<other-uuid>` 但 caller 无 `allowed_tenants` | 403 + audit | 同上 — UI 不显示该 tenant 选项 |
+| Thread 在 run 期间被删除 | `GET /v1/runs` 返回 `agent_name: null` | RunsList "Agent" 列显示 `—` 灰色;不阻断列表 |
+| Approval 已超时,用户仍按 Approve | `POST .../resume` 409 + envelope `APPROVAL_TIMEOUT` | Alert + 自动 refresh detail(terminal 状态后停轮询) |
+| Approval 在用户编辑 args 时被另一审批者处理 | `POST .../resume` 409 + envelope `APPROVAL_ALREADY_DECIDED` | Alert + refresh detail;buffer 不丢(显示出来供用户查看自己之前打算改成什么) |
+| 后端 `agent_run` 行不存在(直接访问 `/runs/x/y`) | 404 | 已有 RunDetail Alert 路径 |
+| `agent_name` JOIN 时 `thread_meta` 已删 | `agent_name: null` | RunsList "—";RunDetail 在 "Agent" 字段显示 "thread deleted" + 仍允许审批 |
+| `VITE_LANGFUSE_BASE_URL` 未配 | — | TraceToolbar 只显示 trace_id + 复制 |
+| `trace_id` 缺失(terminal run 之前未拿到 metadata) | — | 显示 "trace 已结束,见 Langfuse 历史(按 run_id 搜)" 提示 + 复制 run_id 按钮 |
+| `JSON.parse(buffer)` 失败 | — | Approve 禁用;Monaco 显示语法错;按 Cancel edit 可退出 |
+| `override_args` 含未知字段 | 后端 J.8 resume 不做 schema 校验;tool 模板内部校验失败 → 工具 step 返回 `ToolError` → 该 run 状态变 `error` | terminal 状态;事后查 trace |
+| 跨 tab 同时审批同一 run | 一个成功;另一个 409 | 错误流程同 "已被其他审批者处理" |
+| Pending 红点 60s 轮询 cross-tenant 数据(home admin 但 OIDC 含 system_admin 角色) | API 按 caller 当前 scope(`home` / `*`)返回 | badge 始终基于当前 `apiTenantScope`;切换 tenant 时立即 refetch |
+
+### 6.5.11 可观测 / 审计
+
+`GET /v1/runs` 新端点遵循已有 list 端点惯例:
+
+| 信号 | 何时 emit | 标签 / 维度 |
+|---|---|---|
+| audit `RUN_LIST_READ`(新 `AuditAction`)| 每次成功调用 | `actor_id`、`tenant_id`(home / `*` / target UUID)、`result=OK`、`details={"status": "...", "cross_tenant": true/false, "count": N}` |
+| audit `CROSS_TENANT_DENIED` | `ensure_tenant_scope` 拒绝 | 同 Stream N 既有(`endpoint="GET /v1/runs"`)|
+| Prometheus counter `helix_control_plane_run_list_total{tenant_scope}` | 每次调用 | `tenant_scope ∈ {home, cross, target}` |
+| Prometheus histogram `helix_control_plane_run_list_seconds` | 每次调用 | (无标签 — 与现有列表端点 latency 系列对齐)|
+| 不加新 OTel span(沿用 ASGI 自动注入)| | |
+
+前端无新增 telemetry。
+
+### 6.5.12 i18n keys 全量
+
+**`runs_page` (PR7a)**
+```
+page_title, subtitle, cross_tenant_banner, failed_to_load,
+empty_home, empty_cross, column_run_id, column_status,
+column_thread, column_agent, column_created, filter_status,
+filter_status_all
+```
+
+**`approval_card` (PR7b)**
+```
+title, awaiting_human, edit_arguments, cancel_edit,
+approve, approve_with_edits, reject, json_parse_error,
+already_decided, timeout
+```
+
+**`trace_toolbar` (PR7c)**
+```
+trace_id_label, copy_trace_id, open_in_langfuse, no_trace_yet
+```
+
+**`approval_pending_badge` (PR7c)**
+```
+aria_label
+```
+
+### 6.5.13 测试计划
+
+**PR7a — backend**
+- `tests/test_run_store.py`(单元,InMemory + SQL 各一遍):
+  - `list_for_tenant_empty`
+  - `list_for_tenant_returns_only_matching_tenant`(2 tenants × 3 runs,验证只返回 caller 自己的)
+  - `list_for_tenant_status_filter`(各 5 status,过滤一次只返该 status)
+  - `list_for_tenant_pagination`(创建 250 行,limit=100 取 3 页 + 最后 1 页有 50 行)
+  - `list_for_tenant_orders_newest_first`(created_at desc)
+  - `list_all_tenants_returns_all_without_bypass_session`(InMemory)/ `_requires_bypass_rls`(SQL,验证 RLS 拒绝裸调用)
+- `tests/test_runs_api.py`(集成):
+  - `test_list_runs_home_tenant`(200 + cross_tenant=false)
+  - `test_list_runs_status_filter`
+  - `test_list_runs_pagination_offset_limit`
+  - `test_list_runs_cross_tenant_requires_system_admin`(403 + audit)
+  - `test_list_runs_cross_tenant_aggregate`(system_admin 看到 2 tenants 的 run)
+  - `test_list_runs_includes_agent_name_via_thread_join`(thread_meta 已删时 agent_name=null)
+
+**PR7a — frontend**
+- `__tests__/RunsList.test.tsx`(5 单测):
+  - `renders_loading_skeleton_first`
+  - `renders_empty_state_when_no_runs`
+  - `renders_rows_with_agent_name`
+  - `status_filter_select_triggers_refetch`
+  - `cross_tenant_banner_when_response_flag_true`
+
+**PR7b — frontend**
+- `__tests__/ApprovalCard.test.tsx`(6 单测,延 H.2 PR 1 Monaco mock 模式)
+- `__tests__/RunDetail.test.tsx`(3 测 polling 行为,vi.useFakeTimers + `document.visibilityState` mock)
+- `__tests__/useStatusPolling.test.ts`(单元 hook)
+
+**PR7c — frontend**
+- `__tests__/TraceToolbar.test.tsx`(3 测,vi.stubEnv 切 LANGFUSE_BASE_URL)
+- `__tests__/ApprovalPendingBadge.test.tsx`(3 测;0 不显示 / N 显示 / SDK 报错 swallow)
+
+**E2E**(Playwright,PR7c 落地)
+- `e2e/runs.spec.ts`: paste-login → /runs → 至少 1 行 + axe 0 critical
+- `e2e/approval.spec.ts`(M0 后):start Playground run → 触发审批 gate → 跨 tab 切 /runs → 看到 paused 行 → 点进 detail → Approve → terminal
+
+### 6.5.14 Mockup 引用
+
+H.3 涉及的 3 张 mockup(已落地 H.1a PR 2,无需新增):
+- [`mockups/04-run-trace.html`](../design/mockups/04-run-trace.html) — RunDetail 主视图,本 PR 增量按此规格补 Approval 编辑 + Trace 工具条 + 状态轮询
+- **缺**:**RunsList 页 mockup**(`mockups/09-runs-list.html`)和 **ApprovalCard with override_args 编辑态 mockup**(可叠在 `04-run-trace.html` 同一文档加 § / 加新文件)。
+  - **决策**:**先实现,不另出 mockup**。理由:本 PR 已用 ASCII layout(§ 6.5.3)+ 状态机(§ 6.5.9)锁定结构;`tokens.css` + Antd 5 + helix override 三层映射在 H.1a 已锁,RunsList 与 AgentsList 视觉同型(都是 cross-tenant aware 表格 + 顶 toolbar),无新视觉元素。
+  - 但**这是债务**,要在 H.4 完工前补上 mockup 09(RunsList)和给 04 加 ApprovalCard 编辑态截图,作为基线引用;**已加入 H.4 收尾 PR 待办**。
+
+### 6.5.15 Migration / Schema 影响
+
+**无 DB schema 变化**。
+
+- 新方法 `list_for_tenant` / `list_all_tenants` 用既有 `agent_run` 表 + 既有 `(tenant_id, created_at DESC)` 索引;若发现慢,M1 再加 `idx_agent_run_tenant_status_created (tenant_id, status, created_at DESC)`。
+- `agent_run.trace_id` 暂不加列(Mini-ADR H-8 推 M1);frontend 用 SSE metadata 帧传递。
+
+### 6.5.16 Backwards Compat
+
+- 既有 `GET /v1/sessions/{thread_id}/runs/{run_id}` / `.../resume` 路径不动。
+- 既有 `RunStore.create` / `.set_status` / `.get` / `.list_by_thread` 签名不动。
+- 既有 `apps/admin-ui/src/api/runs.ts` 的 `getRun` / `resumeRun` 接口不动;新增 `listRuns` 是纯增量。
+- 既有 RunDetail 页用户路径不变;Approval 区从 Alert 包改 Card 组件是组件内重构,URL 不变。
+
+### 6.5.17 安全 / 鉴权
+
+| 端点 | authn | authz | 资源访问 |
+|---|---|---|---|
+| `GET /v1/runs?tenant_id=<UUID>` | Bearer JWT / API Key | caller 必须有 `allowed_tenants` 含 UUID | `list_for_tenant(tenant_id=UUID)` |
+| `GET /v1/runs?tenant_id=*` | 同上 | caller 必须 `is_system_admin` | `bypass_rls_session()` + `list_all_tenants()` |
+| `GET /v1/runs`(无 `tenant_id`)| 同上 | 自动用 caller 的 home tenant | `list_for_tenant(tenant_id=home)` |
+| 前端 `VITE_LANGFUSE_BASE_URL` | env-only,非 secret(URL)| 外链通过 Langfuse 自己鉴权 | n/a |
+| `override_args` 内嵌敏感数据 | — | 已在 audit `APPROVAL_DECIDED` 里有 `override_args_keys`(J.8 § 14.6);不记 values | 已有 |
+
+无新增 secret;无新增 CSRF surface(都是 GET);RLS 策略不变。
+
 ---
 
 ## 6. PR 链(预估)
@@ -423,3 +662,4 @@ Authorization: Bearer <jwt>
 | 2026-05-25 | v1.0 | 初稿:设计基线 PR 链 + IA + 工程目录 + 5 个 Mini-ADR + 12 个 PR 估时;H.4 用户面取消,改为治理面;Playground 嵌 per-agent tab |
 | 2026-05-25 | v1.1 | H.1a / H.1b / H.2 全部完成(PR1–6,合并 #262–264 / #272 / #274 / #277–281 / #284–286);PR 链表加 ✅ 标记 + #PR 引用;H.2 PR 6 显式推迟项落到 PR 行尾 |
 | 2026-05-26 | v1.2 | 加 § 6.5 **H.3 详细设计** + Mini-ADR H-6 / H-7 / H-8 / H-9;原 PR7 拆为 PR7a/b/c 3 个;锁定:`GET /v1/runs` 跨 thread 索引兑现 Mini-ADR J-41 deferred / SSE 实时回放推 M1 / Trace = 外链跳 Langfuse / Approval `override_args` Monaco inline 编辑 |
+| 2026-05-26 | v1.3 | § 6.5 补全实现期细节:§ 6.5.8 文件级影响图(每 PR 表)+ § 6.5.9 状态机(RunsList / RunDetail polling / Approval edit ASCII 图)+ § 6.5.10 错误/边界场景矩阵(12 条)+ § 6.5.11 audit + Prometheus 信号 + § 6.5.12 i18n keys 全量(4 namespace)+ § 6.5.13 测试计划(unit/integration/E2E)+ § 6.5.14 mockup 引用 + 缺 09-runs-list mockup 标作待办债务 + § 6.5.15 schema 影响(none)+ § 6.5.16 backwards compat + § 6.5.17 安全/鉴权矩阵 |
