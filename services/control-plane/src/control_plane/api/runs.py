@@ -33,7 +33,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from prometheus_client import Counter, Histogram
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from control_plane.api._quota_admission import check_admission
@@ -47,7 +46,11 @@ from control_plane.quota.base import QuotaService
 from control_plane.runtime import AgentRuntime
 from control_plane.settings import Settings
 from control_plane.tenant_scope import CrossTenant, applied_scope, ensure_tenant_scope
-from helix_agent.common.observability import current_trace_id_hex
+from helix_agent.common.observability import (
+    current_trace_id_hex,
+    helix_counter,
+    helix_histogram,
+)
 from helix_agent.persistence import ApprovalStore
 from helix_agent.persistence.agent_spec import AgentSpecStore
 from helix_agent.persistence.rls import current_user_id_var
@@ -661,12 +664,12 @@ def runtime_run_status(request: Request, run_id: UUID) -> str | None:
 
 # Prometheus signals — declared at module import (idempotent collector
 # registry handles double-import in tests).
-_RUN_LIST_TOTAL = Counter(
+_RUN_LIST_TOTAL = helix_counter(
     "helix_control_plane_run_list_total",
     "GET /v1/runs invocations by tenant scope.",
     ("tenant_scope",),
 )
-_RUN_LIST_SECONDS = Histogram(
+_RUN_LIST_SECONDS = helix_histogram(
     "helix_control_plane_run_list_seconds",
     "GET /v1/runs latency in seconds.",
 )
