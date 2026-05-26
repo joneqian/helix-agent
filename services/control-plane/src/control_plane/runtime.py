@@ -30,7 +30,7 @@ from helix_agent.protocol import AgentSpec, ModelSpec
 from helix_agent.runtime.audit import DefaultSecretRedactor
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
-from helix_agent.runtime.runs import RunManager, RunStore
+from helix_agent.runtime.runs import RunEventStore, RunManager, RunStore
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from helix_agent.runtime.storage import ObjectStore, ObjectStoreBackend, S3CompatibleConfig
 from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
@@ -81,6 +81,12 @@ class AgentRuntime:
     run_manager: RunManager
     stream_bridge: StreamBridge
     agent_builder: AgentBuilder
+    #: Stream H.3 PR 3 (Mini-ADR H-7) — durable mirror of every SSE
+    #: frame so RunDetail's Event stream panel can replay terminal runs
+    #: past the bridge's 60-second cleanup window. ``None`` keeps SSE
+    #: purely in-memory; production wiring passes an
+    #: :class:`InMemoryRunEventStore` (dev) or :class:`SqlRunEventStore`.
+    run_event_store: RunEventStore | None = None
     _cache: dict[tuple[UUID, str, str], BuiltAgent] = field(default_factory=dict, repr=False)
 
     async def get_agent(
@@ -403,7 +409,10 @@ def build_middleware_env(
 
 
 def make_agent_runtime(
-    secret_store: SecretStore, *, run_store: RunStore | None = None
+    secret_store: SecretStore,
+    *,
+    run_store: RunStore | None = None,
+    run_event_store: RunEventStore | None = None,
 ) -> AgentRuntime:
     """Build the production :class:`AgentRuntime` with an in-memory checkpointer.
 
@@ -416,9 +425,14 @@ def make_agent_runtime(
     ``run_store`` (Mini-ADR J-41) is the durable ``agent_run`` mirror
     the :class:`RunManager` writes every create / status transition to;
     ``None`` keeps the registry purely in-memory.
+
+    ``run_event_store`` (Stream H.3 PR 3 — Mini-ADR H-7) durable-mirrors
+    every SSE frame; ``None`` keeps SSE purely in-memory (replay endpoint
+    will fall through to live attach only).
     """
     return AgentRuntime(
         run_manager=RunManager(store=run_store),
         stream_bridge=InMemoryStreamBridge(),
         agent_builder=make_agent_builder(secret_store, InMemorySaver()),
+        run_event_store=run_event_store,
     )

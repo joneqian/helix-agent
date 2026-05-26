@@ -139,6 +139,8 @@ async def fire_trigger(
             config=config,
             audit_logger=audit_logger,
             approval_store=approval_store,
+            # Stream H.3 PR 3 — durable SSE mirror.
+            event_store=runtime.run_event_store,
         )
     )
     await runtime.run_manager.attach_task(run_id, worker)

@@ -44,7 +44,7 @@ from uuid import UUID, uuid4
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
-from helix_agent.common.observability import helix_histogram
+from helix_agent.common.observability import helix_counter, helix_histogram
 from helix_agent.persistence import ApprovalStore
 from helix_agent.protocol import (
     ApprovalRecord,
@@ -59,7 +59,13 @@ from helix_agent.runtime.cancellation import (
     CancellationToken,
     RunCancelledError,
 )
-from helix_agent.runtime.runs import RunManager, RunRecord, RunStatus
+from helix_agent.runtime.runs import (
+    RunEventStore,
+    RunManager,
+    RunRecord,
+    RunStatus,
+    make_event_record,
+)
 from helix_agent.runtime.stream_bridge import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
@@ -112,6 +118,21 @@ _session_duration_seconds = helix_histogram(
     buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
 )
 
+# Stream H.3 PR 3 (Mini-ADR H-7) — RunEventStore persistence telemetry.
+# A failure to mirror a frame is logged + counted; the SSE stream is
+# NOT blocked (graceful degradation — better miss-an-event than fail the
+# user-visible run).
+_run_event_persist_errors = helix_counter(
+    "helix_run_event_persist_errors_total",
+    "RunEventStore.append failures during run_agent dual-write.",
+    ("event_name",),
+)
+_run_event_persist_total = helix_counter(
+    "helix_run_event_persist_total",
+    "RunEventStore.append successes during run_agent dual-write.",
+    ("event_name",),
+)
+
 #: Default LangGraph stream mode. ``"updates"`` yields ``{node: writes}``
 #: per step — the natural granularity for a ReAct SSE stream (one event
 #: per agent / tools node completion).
@@ -156,6 +177,43 @@ class StreamableGraph(Protocol):
 # ---------------------------------------------------------------------------
 
 
+async def _persist_event(
+    event_store: RunEventStore | None,
+    *,
+    run_id: UUID,
+    seq: int,
+    event_name: str,
+    data: Any,
+) -> None:
+    """Mirror one SSE frame to the durable :class:`RunEventStore`.
+
+    Failure → log warning + counter ``helix_run_event_persist_errors_total``;
+    the caller's ``bridge.publish`` is not blocked (Mini-ADR H-7 — better
+    miss a frame in replay than fail the live SSE stream).
+    """
+    if event_store is None:
+        return
+    try:
+        await event_store.append(
+            make_event_record(
+                run_id=run_id,
+                seq=seq,
+                event_name=event_name,
+                data=data,
+            )
+        )
+        _run_event_persist_total.labels(event_name=event_name).inc()
+    except Exception as exc:
+        _run_event_persist_errors.labels(event_name=event_name).inc()
+        logger.warning(
+            "run_event.persist_failed run_id=%s seq=%s event=%s err=%s",
+            run_id,
+            seq,
+            event_name,
+            exc,
+        )
+
+
 async def run_agent(
     *,
     bridge: StreamBridge,
@@ -168,6 +226,7 @@ async def run_agent(
     stream_mode: str = DEFAULT_STREAM_MODE,
     trajectory_recorder: TrajectoryRecorder | None = None,
     approval_store: ApprovalStore | None = None,
+    event_store: RunEventStore | None = None,
 ) -> None:
     """Drive ``graph`` to completion, publishing events to ``bridge``.
 
@@ -211,13 +270,24 @@ async def run_agent(
     # the correct label even if a later step in that branch raises.
     session_started = time.monotonic()
     session_outcome = "error"
+    # Stream H.3 PR 3 — per-run sequence counter for RunEventStore mirror.
+    # Starts at 0; increments before each persist call so the seq in the
+    # durable row matches its insertion order. The bridge has its own
+    # internal counter; the two are independent (replay endpoint emits
+    # SSE id from the persisted ``created_at_ms`` + ``seq``).
+    event_seq = 0
     try:
         await run_manager.set_status(run_id, RunStatus.RUNNING)
-        await bridge.publish(
-            run_id,
-            "metadata",
-            {"run_id": str(run_id), "thread_id": str(record.thread_id)},
+        metadata_payload = {"run_id": str(run_id), "thread_id": str(record.thread_id)}
+        await bridge.publish(run_id, "metadata", metadata_payload)
+        await _persist_event(
+            event_store,
+            run_id=run_id,
+            seq=event_seq,
+            event_name="metadata",
+            data=metadata_payload,
         )
+        event_seq += 1
 
         # Stream K.K10 — start the TTFT / durable-resume timer at RUNNING.
         # The metadata frame above is server-synthesised, not LLM output,
@@ -234,7 +304,16 @@ async def run_agent(
                 if getattr(record, "is_resume", False):
                     _durable_resume_seconds.observe(ttft)
                 first_chunk_seen = True
-            await bridge.publish(run_id, stream_mode, _to_jsonable(chunk))
+            jsonable_chunk = _to_jsonable(chunk)
+            await bridge.publish(run_id, stream_mode, jsonable_chunk)
+            await _persist_event(
+                event_store,
+                run_id=run_id,
+                seq=event_seq,
+                event_name=stream_mode,
+                data=jsonable_chunk,
+            )
+            event_seq += 1
 
         # Stream J.8 (Mini-ADR J-24) — a run that streamed to its natural
         # end with ``pending_approval`` set did not finish: it paused at
@@ -341,11 +420,16 @@ async def run_agent(
             exc.step_count,
             exc.max_steps,
         )
-        await bridge.publish(
-            run_id,
-            "error",
-            {"message": str(exc), "name": type(exc).__name__},
+        error_payload = {"message": str(exc), "name": type(exc).__name__}
+        await bridge.publish(run_id, "error", error_payload)
+        await _persist_event(
+            event_store,
+            run_id=run_id,
+            seq=event_seq,
+            event_name="error",
+            data=error_payload,
         )
+        event_seq += 1
         await _emit_run_end_audit(
             audit_logger,
             record,
@@ -361,11 +445,16 @@ async def run_agent(
         session_outcome = "error"
         await run_manager.set_status(run_id, RunStatus.ERROR, error=str(exc))
         logger.exception("run_agent.failed run_id=%s", run_id)
-        await bridge.publish(
-            run_id,
-            "error",
-            {"message": str(exc), "name": type(exc).__name__},
+        error_payload = {"message": str(exc), "name": type(exc).__name__}
+        await bridge.publish(run_id, "error", error_payload)
+        await _persist_event(
+            event_store,
+            run_id=run_id,
+            seq=event_seq,
+            event_name="error",
+            data=error_payload,
         )
+        event_seq += 1
         await _emit_run_end_audit(
             audit_logger,
             record,
