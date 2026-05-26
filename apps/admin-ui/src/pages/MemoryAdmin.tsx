@@ -1,0 +1,327 @@
+/**
+ * Memory admin page — Stream H.4 PR 2.
+ *
+ * Per-user (or cross-tenant for system_admin) memory CRUD. The edit
+ * drawer reuses the ApprovalCard Monaco pattern from H.3 PR 5: pristine
+ * vs dirty buffer detection, with the Save button labelled
+ * differently when the buffer has been touched.
+ *
+ * Search is intentionally client-side — backend has no full-text index
+ * on memory.content (recall ranking is vector-based via the
+ * embedder). Reviewers loading <1k memories in a single tenant view
+ * filter locally; M1 may add server-side fuzzy search if list size
+ * grows.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  App,
+  Breadcrumb,
+  Button,
+  Drawer,
+  Empty,
+  Input,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import type { TableColumnsType } from "antd";
+import Editor from "@monaco-editor/react";
+import { Brain, ChevronRight, Globe2, RefreshCw, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import {
+  deleteMemory,
+  listMemories,
+  updateMemory,
+  type MemoryItem,
+  type MemoryKind,
+  type MemoryList,
+} from "../api/memory";
+import { ApiError } from "../api/client";
+import { useTenantScope } from "../tenant/TenantScopeContext";
+
+const { Text } = Typography;
+
+const KIND_OPTIONS: MemoryKind[] = ["fact", "episodic"];
+
+const KIND_COLOR: Record<MemoryKind, string> = {
+  fact: "blue",
+  episodic: "purple",
+};
+
+export function MemoryAdmin() {
+  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const { scope, apiTenantScope } = useTenantScope();
+
+  const [data, setData] = useState<MemoryList | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [kindFilter, setKindFilter] = useState<MemoryKind | undefined>(undefined);
+  const [searchText, setSearchText] = useState("");
+
+  const [editing, setEditing] = useState<MemoryItem | null>(null);
+  const [editBuf, setEditBuf] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await listMemories({ tenantScope: apiTenantScope, kind: kindFilter });
+      setData(result);
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? `${err.code}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "unknown error";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiTenantScope, kindFilter]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const openEdit = useCallback((item: MemoryItem) => {
+    setEditing(item);
+    setEditBuf(item.content);
+  }, []);
+
+  const isDirty = useMemo(
+    () => editing !== null && editBuf !== editing.content,
+    [editing, editBuf],
+  );
+
+  const onSave = useCallback(async () => {
+    if (editing === null) return;
+    if (editBuf.trim().length === 0) {
+      message.error(t("memory.empty_content"));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await updateMemory(editing.id, { content: editBuf });
+      message.success(t("memory.updated"));
+      setEditing(null);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof ApiError && err.code === "EMBEDDER_UNCONFIGURED"
+        ? t("memory.embedder_unconfigured")
+        : err instanceof Error ? err.message : "failed";
+      message.error(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [editing, editBuf, message, refresh, t]);
+
+  const onDelete = useCallback(async (id: string) => {
+    try {
+      await deleteMemory(id);
+      message.success(t("memory.deleted"));
+      refresh();
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "failed");
+    }
+  }, [message, refresh, t]);
+
+  const filteredItems = useMemo(() => {
+    const all = data?.items ?? [];
+    if (searchText.trim().length === 0) return all;
+    const needle = searchText.toLowerCase();
+    return all.filter((m) => m.content.toLowerCase().includes(needle));
+  }, [data, searchText]);
+
+  const columns: TableColumnsType<MemoryItem> = useMemo(() => [
+    {
+      title: t("memory.col_kind"),
+      dataIndex: "kind",
+      key: "kind",
+      width: 110,
+      render: (k: MemoryKind) => <Tag color={KIND_COLOR[k]}>{k}</Tag>,
+    },
+    {
+      title: t("memory.col_content"),
+      dataIndex: "content",
+      key: "content",
+      render: (text: string) => (
+        <Tooltip title={text} mouseEnterDelay={0.4}>
+          <Text style={{ fontSize: 13 }}>
+            {text.length > 120 ? `${text.slice(0, 120)}…` : text}
+          </Text>
+        </Tooltip>
+      ),
+    },
+    {
+      title: t("memory.col_user"),
+      dataIndex: "user_id",
+      key: "user_id",
+      width: 200,
+      render: (uid: string) => (
+        <Text code style={{ fontSize: 11 }}>{uid.slice(0, 8)}…</Text>
+      ),
+    },
+    {
+      title: t("memory.col_created"),
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 200,
+      render: (iso: string) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>{new Date(iso).toLocaleString()}</Text>
+      ),
+    },
+    {
+      title: t("memory.col_actions"),
+      key: "actions",
+      width: 180,
+      render: (_, record) => (
+        <Space size={4}>
+          <Button size="small" onClick={() => openEdit(record)} data-testid={`memory-edit-${record.id}`}>
+            {t("common.edit")}
+          </Button>
+          <Popconfirm
+            title={t("memory.delete_confirm_title")}
+            description={t("memory.delete_confirm_body")}
+            okType="danger"
+            okText={t("common.delete")}
+            cancelText={t("common.cancel")}
+            onConfirm={() => onDelete(record.id)}
+          >
+            <Button size="small" danger icon={<Trash2 size={12} strokeWidth={1.75} />} data-testid={`memory-delete-${record.id}`}>
+              {t("common.delete")}
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ], [t, openEdit, onDelete]);
+
+  const isCrossTenant = data?.cross_tenant ?? false;
+
+  return (
+    <div data-testid="memory-root">
+      <div className="hx-page-header">
+        <Breadcrumb
+          separator={<ChevronRight size={12} strokeWidth={1.5} />}
+          items={[{ title: t("common.home") }, { title: t("memory.page_title") }]}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
+          <Brain size={20} strokeWidth={1.5} />
+          <h1 style={{ margin: 0 }}>{t("memory.page_title")}</h1>
+          {isCrossTenant && (
+            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="memory-cross-banner">
+              {t("memory.cross_tenant_banner")}
+            </Tag>
+          )}
+          <span style={{ flex: 1 }} />
+          <Input.Search
+            placeholder={t("memory.search_placeholder")}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            style={{ width: 240 }}
+            data-testid="memory-search"
+            allowClear
+          />
+          <Select<MemoryKind | "all">
+            value={kindFilter ?? "all"}
+            onChange={(v) => setKindFilter(v === "all" ? undefined : v as MemoryKind)}
+            style={{ width: 140 }}
+            aria-label={t("memory.filter_kind")}
+            data-testid="memory-kind-filter"
+            options={[
+              { value: "all", label: t("memory.filter_kind_all") },
+              ...KIND_OPTIONS.map((k) => ({ value: k, label: k })),
+            ]}
+          />
+          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+            {t("common.refresh")}
+          </Button>
+        </div>
+        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
+          {t("memory.subtitle")}
+        </p>
+      </div>
+
+      {error !== null && (
+        <Alert type="error" showIcon message={t("memory.failed_to_load")} description={error} style={{ marginBottom: 12 }} data-testid="memory-error" />
+      )}
+
+      <Table<MemoryItem>
+        columns={columns}
+        dataSource={filteredItems}
+        rowKey={(r) => r.id}
+        loading={loading}
+        pagination={{ pageSize: 50, showSizeChanger: false, total: filteredItems.length }}
+        locale={{
+          emptyText: (
+            <Empty description={scope === "*" ? t("memory.empty_cross") : t("memory.empty_home")} />
+          ),
+        }}
+        data-testid="memory-table"
+      />
+
+      <Drawer
+        title={editing !== null ? t("memory.edit_title") : ""}
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        width={680}
+        data-testid="memory-edit-drawer"
+        extra={
+          <Space>
+            <Button onClick={() => setEditing(null)}>{t("common.cancel")}</Button>
+            <Button
+              type="primary"
+              onClick={onSave}
+              loading={submitting}
+              disabled={!isDirty}
+              data-testid="memory-save-btn"
+            >
+              {isDirty ? t("memory.save_dirty") : t("common.save")}
+            </Button>
+          </Space>
+        }
+      >
+        {editing !== null && (
+          <Space direction="vertical" style={{ width: "100%" }} size={12}>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>{t("memory.edit_meta_user")}</Text>
+              <div><Text code style={{ fontSize: 11 }}>{editing.user_id}</Text></div>
+            </div>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>{t("memory.edit_meta_kind")}</Text>
+              <div><Tag color={KIND_COLOR[editing.kind]}>{editing.kind}</Tag></div>
+            </div>
+            <div>
+              <Text type="secondary">{t("memory.edit_content_label")}</Text>
+              <div style={{ border: "1px solid var(--hx-border-default)", borderRadius: 4, marginTop: 4 }}>
+                <Editor
+                  height="320px"
+                  defaultLanguage="markdown"
+                  value={editBuf}
+                  onChange={(v) => setEditBuf(v ?? "")}
+                  options={{ minimap: { enabled: false }, fontSize: 13, wordWrap: "on" }}
+                  data-testid="memory-content-editor"
+                />
+              </div>
+            </div>
+            <Alert
+              type="info"
+              showIcon
+              message={t("memory.embedder_note")}
+              style={{ fontSize: 12 }}
+            />
+          </Space>
+        )}
+      </Drawer>
+    </div>
+  );
+}

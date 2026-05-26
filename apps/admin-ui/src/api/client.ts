@@ -138,3 +138,12 @@ export async function putJson<T>(
   const response = await apiClient.put<ApiEnvelope<T>>(path, body, config);
   return unwrap(response.data);
 }
+
+export async function patchJson<T>(
+  path: string,
+  body: unknown,
+  config?: AxiosRequestConfig,
+): Promise<T> {
+  const response = await apiClient.patch<ApiEnvelope<T>>(path, body, config);
+  return unwrap(response.data);
+}
