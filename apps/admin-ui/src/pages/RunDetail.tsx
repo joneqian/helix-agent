@@ -30,6 +30,7 @@ import {
 import { useStatusPolling } from "../hooks/useStatusPolling";
 import { ApprovalCard } from "./run_detail/ApprovalCard";
 import { EventStreamPanel } from "./run_detail/EventStreamPanel";
+import { TraceToolbar } from "./run_detail/TraceToolbar";
 
 const { Text } = Typography;
 
@@ -192,12 +193,9 @@ export function RunDetail() {
         </dl>
       </Card>
 
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginTop: 16 }}
-        message={t("run_detail.trace_in_observability")}
-      />
+      <div style={{ marginTop: 16 }}>
+        <TraceToolbar traceId={run.trace_id ?? null} />
+      </div>
 
       <EventStreamPanel threadId={threadId} runId={runId} />
     </div>

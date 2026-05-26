@@ -134,8 +134,20 @@ const zhCN: TranslationKeys = {
     run_id: "Run ID",
     thread_id: "Thread ID",
     status: "状态",
-    trace_in_observability:
-      "Trace + span 时间线在 OTLP / Grafana 可观测栈中;H.4 会把它们嵌进来。",
+  },
+  trace_toolbar: {
+    title: "Trace",
+    no_trace: "本次 Run 未记录 trace。",
+    copy_aria: "复制 trace ID",
+    copied: "Trace ID 已复制",
+    open_in_langfuse: "在 Langfuse 中打开",
+    langfuse_unconfigured_hint:
+      "设置 VITE_LANGFUSE_BASE_URL 即可开启外链跳转。",
+  },
+  approval_badge: {
+    aria_label: "待审批",
+    tooltip_one: "{{count}} 个 Run 等待审批",
+    tooltip_other: "{{count}} 个 Run 等待审批",
   },
   api_keys: {
     page_title: "API Keys",

@@ -12,17 +12,23 @@ import {
   Shield,
 } from "lucide-react";
 import { BrandGlyph } from "../icons/BrandGlyph";
+import { ApprovalPendingBadge } from "./ApprovalPendingBadge";
 
 interface NavItem {
   key: string;
-  label: string;
+  label: React.ReactNode;
   icon: React.ReactNode;
   path: string;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { key: "agents", label: "Agents", icon: <Bot size={16} strokeWidth={1.5} />, path: "/agents" },
-  { key: "runs", label: "Runs", icon: <Activity size={16} strokeWidth={1.5} />, path: "/runs" },
+  {
+    key: "runs",
+    label: <ApprovalPendingBadge>Runs</ApprovalPendingBadge>,
+    icon: <Activity size={16} strokeWidth={1.5} />,
+    path: "/runs",
+  },
   { key: "curation", label: "Curation+Eval", icon: <CheckSquare size={16} strokeWidth={1.5} />, path: "/curation" },
   { key: "memory", label: "Memory", icon: <Brain size={16} strokeWidth={1.5} />, path: "/memory" },
   { key: "skills", label: "Skills", icon: <FileText size={16} strokeWidth={1.5} />, path: "/skills" },

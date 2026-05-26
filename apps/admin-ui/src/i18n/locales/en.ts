@@ -132,7 +132,19 @@ export interface TranslationKeys {
     run_id: string;
     thread_id: string;
     status: string;
-    trace_in_observability: string;
+  };
+  trace_toolbar: {
+    title: string;
+    no_trace: string;
+    copy_aria: string;
+    copied: string;
+    open_in_langfuse: string;
+    langfuse_unconfigured_hint: string;
+  };
+  approval_badge: {
+    aria_label: string;
+    tooltip_one: string;
+    tooltip_other: string;
   };
   api_keys: {
     page_title: string;
@@ -369,8 +381,20 @@ const en: TranslationKeys = {
     run_id: "Run ID",
     thread_id: "Thread ID",
     status: "Status",
-    trace_in_observability:
-      "Trace + span timeline live in the OTLP / Grafana observability stack; H.4 will embed them here.",
+  },
+  trace_toolbar: {
+    title: "Trace",
+    no_trace: "No trace recorded for this run.",
+    copy_aria: "Copy trace ID",
+    copied: "Trace ID copied",
+    open_in_langfuse: "Open in Langfuse",
+    langfuse_unconfigured_hint:
+      "Set VITE_LANGFUSE_BASE_URL to enable the deep link.",
+  },
+  approval_badge: {
+    aria_label: "Pending approvals",
+    tooltip_one: "{{count}} run is awaiting approval",
+    tooltip_other: "{{count}} runs are awaiting approval",
   },
   api_keys: {
     page_title: "API Keys",
