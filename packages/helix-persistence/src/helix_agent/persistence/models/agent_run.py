@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,10 @@ class AgentRunRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Stream H.3 PR 2 — Mini-ADR H-9.5. ``current_trace_id_hex()`` is 32
+    # chars (16 bytes hex). NULL for legacy rows + auto-triggered runs
+    # (scheduler / trigger worker that explicitly pass ``trace_id=None``).
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     __table_args__ = (
         CheckConstraint(f"status IN {_STATUS_VALUES}", name="agent_run_status_valid"),

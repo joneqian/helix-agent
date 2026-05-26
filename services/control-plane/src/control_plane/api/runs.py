@@ -318,12 +318,16 @@ def build_runs_router() -> APIRouter:
         # a resume?").
         run_id = uuid4()
         prior_runs = await runtime.run_manager.list_by_thread(thread_id, tenant_id=tenant_id)
+        # Mini-ADR H-9.5 — capture the API-side OTel trace id at run start
+        # so RunDetail can deep-link to Langfuse / Tempo even after the
+        # in-memory RunManager TTL expires.
         run_record = await runtime.run_manager.create(
             run_id=run_id,
             thread_id=thread_id,
             tenant_id=tenant_id,
             user_id=caller_user_id,
             is_resume=bool(prior_runs),
+            trace_id=trace_id,
         )
         graph_input = {
             "messages": [
@@ -443,8 +447,12 @@ def build_runs_router() -> APIRouter:
         # The durable ``agent_run`` row is the fallback, so a finished
         # run stays queryable past the TTL instead of 404-ing.
         run_status = runtime_run_status(request, run_id)
+        # Mini-ADR H-9.5 — surface the persisted trace_id when the agent_run
+        # row exists. The in-memory record carries it for live runs; the
+        # durable row carries it past the TTL.
+        persisted = await runs.get(run_id=run_id, tenant_id=tenant_id)
+        trace_id: str | None = persisted.trace_id if persisted is not None else None
         if run_status is None:
-            persisted = await runs.get(run_id=run_id, tenant_id=tenant_id)
             if persisted is not None:
                 run_status = persisted.status.value
         if run_status is None and approval is None:
@@ -456,6 +464,7 @@ def build_runs_router() -> APIRouter:
                 "thread_id": str(thread_id),
                 "status": status,
                 "pending_approval": pending,
+                "trace_id": trace_id,
             }
         )
 
@@ -592,6 +601,7 @@ def build_runs_router() -> APIRouter:
             tenant_id=tenant_id,
             user_id=caller_user_id,
             is_resume=True,
+            trace_id=trace_id,  # Mini-ADR H-9.5
         )
         config: RunnableConfig = {
             "configurable": {
@@ -700,6 +710,8 @@ def _run_to_dict(
         "created_at": info.created_at.isoformat(),
         "updated_at": info.updated_at.isoformat(),
         "finished_at": info.finished_at.isoformat() if info.finished_at is not None else None,
+        # Mini-ADR H-9.5 — OTel trace id persisted on agent_run.
+        "trace_id": info.trace_id,
     }
 
 

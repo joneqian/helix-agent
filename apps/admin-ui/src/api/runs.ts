@@ -45,6 +45,11 @@ export interface RunDetail {
   thread_id: string;
   status: RunStatus;
   pending_approval: PendingApproval | null;
+  /** Mini-ADR H-9.5 — OTel trace_id captured at run start, persisted
+   *  on the ``agent_run`` row. ``null`` for legacy runs created before
+   *  the migration or for auto-triggered runs (scheduler / curation
+   *  worker that passes ``None``). */
+  trace_id?: string | null;
 }
 
 /** Raw (no envelope) fetch — runs.py historically returns the run
@@ -94,6 +99,8 @@ export interface RunListItem {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+  /** Mini-ADR H-9.5 — see :ref:`RunDetail.trace_id`. */
+  trace_id: string | null;
 }
 
 export interface RunList {

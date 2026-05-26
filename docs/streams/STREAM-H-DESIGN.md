@@ -237,7 +237,7 @@ apps/admin-ui/
 **Context**:H.3 要做"完整"的事件流回放,需要:(1) live re-attach 到 running/paused run(`StreamBridge` 已支持多消费者 + `last_event_id` 重连,见 `stream_bridge/memory.py:105`,免费);(2) **terminal run 的历史回放** — 现有 `StreamBridge` 在 `publish_end` 后 `_CLEANUP_DELAY_S = 60s` 清掉事件,长 run 看不到;Playground tab 仅覆盖"new run + 同时观察",不覆盖"事后回看"。J.13a trajectory 录的是 message 不是 SSE frame;A.4 event_log 是 audit 不是 SSE。所以需要**新增持久 SSE event 存储**。
 
 **Decision**:
-- **新表 `run_event`**(migration 0037):`(run_id, seq) PRIMARY KEY` + `event_name text NOT NULL` + `data jsonb NOT NULL` + `created_at timestamptz`。索引 `(run_id, seq)` 即覆盖 `WHERE run_id = ? ORDER BY seq ASC` 唯一查询模式。`seq` = 单调整数(per-run),与 SSE `id` 字段一致(`"<ms>-<seq>"` 格式截 `seq`)。
+- **新表 `run_event`**(migration 0038):`(run_id, seq) PRIMARY KEY` + `event_name text NOT NULL` + `data jsonb NOT NULL` + `created_at timestamptz`。索引 `(run_id, seq)` 即覆盖 `WHERE run_id = ? ORDER BY seq ASC` 唯一查询模式。`seq` = 单调整数(per-run),与 SSE `id` 字段一致(`"<ms>-<seq>"` 格式截 `seq`)。
 - **新 `RunEventStore` ABC** + InMemory + SQL:`append(run_id, tenant_id, event_name, data, seq, created_at)` / `list(run_id, tenant_id, since_seq=0, limit=…)`。tenant_id 走 `agent_run.tenant_id`,SQL 用 JOIN 校验 RLS;`list` 配合 `bypass_rls_session()` 支持 system_admin。
 - **producer 接入**:`run_agent` 工作循环 publish 到 bridge 同步**双写**到 `run_event`(在 `bridge.publish` wrapper 里加 hook,or `run_agent` 直接调用 store)。**失败策略**:store 写失败 → log warning + skip(SSE 不阻塞,事件流是首选);store 写失败计数器 `helix_run_event_persist_errors_total`。
 - **新 endpoint `GET /v1/sessions/{thread_id}/runs/{run_id}/events?since_seq=N`**:
@@ -264,7 +264,7 @@ apps/admin-ui/
 **Context**:H.1b PR 3 的 RunDetail 用一个 "trace in observability" 占位 Alert 表示"trace 看 Langfuse 自己搜"。要真支持 trace 跳转 / 历史回看,需要 `trace_id` 持久挂在 run 上。今日 trace_id 仅在 SSE `metadata` frame 里(运行中拿得到,terminal 之后失踪)。
 
 **Decision**:
-- **Migration 0038**:给 `agent_run` 加 `trace_id varchar(32) NULL`(`current_trace_id_hex()` 返回 16 字节 hex = 32 字符)+ 非唯一索引 `(trace_id) WHERE trace_id IS NOT NULL`(支持反查 "from Langfuse trace_id back to run")。
+- **Migration 0037**:给 `agent_run` 加 `trace_id varchar(32) NULL`(`current_trace_id_hex()` 返回 16 字节 hex = 32 字符)+ 非唯一索引 `(trace_id) WHERE trace_id IS NOT NULL`(支持反查 "from Langfuse trace_id back to run")。
 - **`RunInfo` DTO** + **`RunStore`**:加 `trace_id: str | None`。新方法 `set_trace_id(run_id, tenant_id, trace_id)`(idempotent overwrite)。
 - **`RunManager`**:`create(*, trace_id: str | None = None, …)` 加显式参数(决议 B);调用方:
   - API handler 路径(`trigger_run` / J.8 resume):传 `trace_id=current_trace_id_hex()`,获取 caller-bound user trace。
@@ -307,8 +307,8 @@ apps/admin-ui/
 | **Approval `override_args` Monaco 编辑** | ✓(Mini-ADR H-9) | — |
 | **Approval pending 总数 badge**(顶 nav / Runs 列表头) | ✓ | — |
 | **Trace 跳 Langfuse 外链** | ✓(Mini-ADR H-8) | iframe 嵌入推 M1 |
-| **`agent_run.trace_id` 持久化** | ✓(Mini-ADR H-9.5;migration 0038)| — |
-| **SSE 历史回放** | ✓(Mini-ADR H-7;新表 `run_event` migration 0037 + `RunEventStore` 三态 + `GET .../events` 端点 live/replay 双路径)| 保留期 sweep 推 M1 |
+| **`agent_run.trace_id` 持久化** | ✓(Mini-ADR H-9.5;migration 0037)| — |
+| **SSE 历史回放** | ✓(Mini-ADR H-7;新表 `run_event` migration 0038 + `RunEventStore` 三态 + `GET .../events` 端点 live/replay 双路径)| 保留期 sweep 推 M1 |
 | **审批 SLA 监控指标** | — | M1+(J.8 § 500 显式推迟项) |
 | **多审批人 / 升级链** | — | M1 高级 UI(J.8 § 500) |
 | **审计日志 inline 显示** | — | H.4 Audit 查询(同 stream H 后续 PR) |
@@ -393,15 +393,15 @@ Authorization: Bearer <jwt>
 - **RunInfo 不含 `agent_name`**:`agent_run` 表只存 `(run_id, thread_id, tenant_id, user_id, status, ...)`;agent 信息住 `thread_meta`。M0 RunsList "Agent" 列要么(a) 每条 run 多查一次 `thread_meta`,要么(b) 在 `GET /v1/runs` 服务端做一次 JOIN 并把 `agent_name + agent_version` 加进响应。
   - **决策**:走(b)。响应字段加 `agent_name: str | None` / `agent_version: str | None`(thread 可能已删 → null)。这不变更 `RunInfo` DTO 持久层 schema,仅在 API 层组合;`build_runs_list_router` 取数后对每个 thread 查一次 thread_meta(M0 量级 ≤ 50 行,N+1 可接受;M1 改成 SQL JOIN)。
 - **`override_args` JSON Schema 校验**:M0 仅做 JSON.parse 客户端校验;后端 J.8 resume 接 `override_args: dict` 不做 schema 校验(已有 tool 模板内部校验)。
-- ~~**Trace ID 不直接挂在 `RunInfo`**~~ — v1.4 起 promote 为 Mini-ADR H-9.5 解决(migration 0038)。
+- ~~**Trace ID 不直接挂在 `RunInfo`**~~ — v1.4 起 promote 为 Mini-ADR H-9.5 解决(migration 0037)。
 
 ### 6.5.6 PR 拆分
 
 | PR | 范围 | 估时 |
 |---|---|---|
 | **H.3 PR 1** | Backend `GET /v1/runs` + RunStore `list_for_tenant` / `list_all_tenants` + SDK `listRuns` + RunsList 页(Mini-ADR H-6)| 2-3 天 |
-| **H.3 PR 2** | `agent_run.trace_id` 持久化(migration 0038 + DTO + RunStore.set_trace_id + RunManager 接入 + GET /v1/runs / `/v1/sessions/.../runs/{id}` 序列化 + frontend 类型)(Mini-ADR H-9.5)| 1.5 天 |
-| **H.3 PR 3** | `run_event` 持久层(migration 0037 + `RunEventStore` ABC + Memory + SQL + `run_agent` 双写接入 + 错误计数器)(Mini-ADR H-7 backend 部分)| 2 天 |
+| **H.3 PR 2** | `agent_run.trace_id` 持久化(migration 0037 + DTO + RunStore.set_trace_id + RunManager 接入 + GET /v1/runs / `/v1/sessions/.../runs/{id}` 序列化 + frontend 类型)(Mini-ADR H-9.5)| 1.5 天 |
+| **H.3 PR 3** | `run_event` 持久层(migration 0038 + `RunEventStore` ABC + Memory + SQL + `run_agent` 双写接入 + 错误计数器)(Mini-ADR H-7 backend 部分)| 2 天 |
 | **H.3 PR 4** | `GET /v1/sessions/{thread_id}/runs/{run_id}/events` 端点(live attach via `bridge.subscribe` + replay via `RunEventStore`)+ RunDetail 加 Event stream panel(复用 `parseSseStream`)| 1.5-2 天 |
 | **H.3 PR 5** | Approval override_args Monaco UX + 状态轮询(Mini-ADR H-9) | 1.5 天 |
 | **H.3 PR 6** | Trace 链接外跳(Mini-ADR H-8)+ Approval pending badge + 体感打磨 | 1 天 |
@@ -442,7 +442,7 @@ Authorization: Bearer <jwt>
 
 | 文件 | 变更 | 行数估 |
 |---|---|---|
-| `packages/helix-persistence/migrations/versions/0038_agent_run_trace_id.py` | **新文件** — `ALTER TABLE agent_run ADD COLUMN trace_id varchar(32) NULL` + partial index `(trace_id) WHERE trace_id IS NOT NULL` | +35 |
+| `packages/helix-persistence/migrations/versions/0037_agent_run_trace_id.py` | **新文件** — `ALTER TABLE agent_run ADD COLUMN trace_id varchar(32) NULL` + partial index `(trace_id) WHERE trace_id IS NOT NULL` | +35 |
 | `packages/helix-persistence/src/helix_agent/persistence/models/agent_run.py` | 加 `trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=False)` | +2 |
 | `packages/helix-runtime/src/helix_agent/runtime/runs/schemas.py` | `RunInfo` dataclass 加 `trace_id: str \| None = None` | +2 |
 | `packages/helix-runtime/src/helix_agent/runtime/runs/store.py` | `RunStore.set_trace_id(*, run_id, tenant_id, trace_id)` 抽象 + 2 实现;`_row_to_dto` / `create` 透传 | +50 |
@@ -456,7 +456,7 @@ Authorization: Bearer <jwt>
 
 | 文件 | 变更 | 行数估 |
 |---|---|---|
-| `packages/helix-persistence/migrations/versions/0037_run_event.py` | **新文件** — 新建 `run_event` 表(`run_id uuid` + `seq bigint` + `event_name text` + `data jsonb` + `created_at timestamptz`)+ `PRIMARY KEY (run_id, seq)` | +50 |
+| `packages/helix-persistence/migrations/versions/0038_run_event.py` | **新文件** — 新建 `run_event` 表(`run_id uuid` + `seq bigint` + `event_name text` + `data jsonb` + `created_at_ms bigint` + `created_at timestamptz`)+ `PRIMARY KEY (run_id, seq)` | +55 |
 | `packages/helix-persistence/src/helix_agent/persistence/models/run_event.py` | **新文件** — SQLAlchemy `RunEventRow` model | +35 |
 | `packages/helix-runtime/src/helix_agent/runtime/runs/event_store.py` | **新文件** — `RunEventStore` ABC + `InMemoryRunEventStore` + `SqlRunEventStore`;方法:`append(run_id, tenant_id, event_name, data, seq, created_at)` / `list(run_id, tenant_id, since_seq=0, limit=1000)` | +180 |
 | `packages/helix-runtime/tests/test_run_event_store.py` | **新文件** — 8 测(append + list / pagination / tenant_isolation / since_seq / cross-tenant)| +150 |
@@ -695,7 +695,7 @@ H.3 涉及的 3 张 mockup(已落地 H.1a PR 2,无需新增):
 
 **2 个新 migration**(decision: 完整支持 SSE 回放 + trace_id 持久化):
 
-**Migration 0037 — `run_event` 表**(PR 3,Mini-ADR H-7)
+**Migration 0038 — `run_event` 表**(PR 3,Mini-ADR H-7;依赖 0037 trace_id 已落)
 ```sql
 CREATE TABLE run_event (
     run_id          uuid         NOT NULL REFERENCES agent_run(id) ON DELETE RESTRICT,
@@ -715,7 +715,7 @@ CREATE TABLE run_event (
 - 容量预算:1000 runs/day → 30 MB/day → 11 GB/年(M0 可接受;M1 retention sweep 30 天对齐 event_log)
 - 索引选择:主键 `(run_id, seq)` 即 list 查询的最优 prefix;不加 `(created_at)` 索引(retention sweep 走 `JOIN agent_run ON finished_at < ?` 走 `agent_run.finished_at` 已有索引)
 
-**Migration 0038 — `agent_run.trace_id`**(PR 2,Mini-ADR H-9.5)
+**Migration 0037 — `agent_run.trace_id`**(PR 2,Mini-ADR H-9.5;先于 0038 run_event)
 ```sql
 ALTER TABLE agent_run ADD COLUMN trace_id varchar(32) NULL;
 CREATE INDEX idx_agent_run_trace_id ON agent_run (trace_id) WHERE trace_id IS NOT NULL;
@@ -759,8 +759,8 @@ CREATE INDEX idx_agent_run_trace_id ON agent_run (trace_id) WHERE trace_id IS NO
 | PR5 ✅ | H.2 — Agent 详情 Manifest tab Monaco YAML(view/edit/save)+ Create Agent drawer + POST/PUT /v1/agents #284 #285 | 3-4 天 |
 | PR6 ✅ | H.2 — Agent 详情 Playground tab(fetch+ReadableStream SSE + 色彩分类事件日志 + Stop)#286;**(a) 推迟**:改 manifest 重跑(需后端 ad-hoc spec override)/ 工具调用语义化时间线 / 审批 mid-run UX(H.3) | 3-4 天 |
 | PR7a | H.3 PR 1 — Backend `GET /v1/runs` 跨 thread 索引 + SDK + RunsList 页(Mini-ADR H-6)| 2-3 天 |
-| PR7b | H.3 PR 2 — `agent_run.trace_id` 持久化(migration 0038 + DTO + RunStore.set_trace_id + 序列化 + frontend 类型)(Mini-ADR H-9.5)| 1.5 天 |
-| PR7c | H.3 PR 3 — `run_event` 持久层(migration 0037 + RunEventStore + run_agent 双写接入)(Mini-ADR H-7 backend)| 2 天 |
+| PR7b | H.3 PR 2 — `agent_run.trace_id` 持久化(migration 0037 + DTO + RunStore.set_trace_id + 序列化 + frontend 类型)(Mini-ADR H-9.5)| 1.5 天 |
+| PR7c | H.3 PR 3 — `run_event` 持久层(migration 0038 + RunEventStore + run_agent 双写接入)(Mini-ADR H-7 backend)| 2 天 |
 | PR7d | H.3 PR 4 — `GET .../events` endpoint (live + replay) + RunDetail Event stream panel(Mini-ADR H-7 frontend) | 1.5-2 天 |
 | PR7e | H.3 PR 5 — Approval `override_args` Monaco UX + 状态轮询(Mini-ADR H-9)| 1.5 天 |
 | PR7f | H.3 PR 6 — Trace 链接外跳(Mini-ADR H-8)+ Approval pending badge + 体感打磨 | 1 天 |
@@ -802,3 +802,4 @@ CREATE INDEX idx_agent_run_trace_id ON agent_run (trace_id) WHERE trace_id IS NO
 | 2026-05-26 | v1.3 | § 6.5 补全实现期细节:§ 6.5.8 文件级影响图(每 PR 表)+ § 6.5.9 状态机(RunsList / RunDetail polling / Approval edit ASCII 图)+ § 6.5.10 错误/边界场景矩阵(12 条)+ § 6.5.11 audit + Prometheus 信号 + § 6.5.12 i18n keys 全量(4 namespace)+ § 6.5.13 测试计划(unit/integration/E2E)+ § 6.5.14 mockup 引用 + 缺 09-runs-list mockup 标作待办债务 + § 6.5.15 schema 影响(none)+ § 6.5.16 backwards compat + § 6.5.17 安全/鉴权矩阵 |
 | 2026-05-26 | v1.4 | **用户决策"#2 SSE 实时回放 + #6 trace_id 持久化做完整,不推迟"**:Mini-ADR H-7 重写 — 新 `run_event` 表 + `RunEventStore` 三态 + producer 双写 + `GET .../events` 端点(live attach + replay 双路径);新 Mini-ADR H-9.5 — `agent_run.trace_id` 持久化(migration 0038)。PR 链拆 PR7a-c 为 PR7a-f(共 6 PR),总估时 9.5-11 天(原 4.5-5.5 天);§ 6.5.15 加 migration 0037 / 0038 详情;§ 6.5.8 加 PR 2/3/4 文件表;§ 6.5.11 加 3 个 Prometheus 信号;§ 6.5.12 加 `event_stream` 6 keys;§ 6.5.10 加 4 条新边界场景 |
 | 2026-05-26 | v1.5 | review 第二轮决议 A-F 落地:(A) SSE id wire format `"{created_at_ms}-{seq}"` 一致,`run_event` 加 `created_at_ms bigint` 列 — replay endpoint emit 与 live 同型,客户端 `parseSseStream` 不区分 / (B) `RunManager.create(trace_id=)` 显式参数 — handler 路径传 `current_trace_id_hex()`,scheduler 路径传 None / (C) `run_event` FK 改 `ON DELETE RESTRICT` — 锁定 M1 archive-then-delete 灵活性 / (D) `list_for_tenant` / `list_all_tenants` / `RunEventStore.list` 均强制 `max_limit=500` + `X-Limit-Capped` header / (E) EventStreamPanel 默认折叠,展开才连;localStorage 记 per-user 偏好 / (F) 5 个新组件全加 Storybook story(共 19 个 story);approval 完整 E2E 推 M0 dogfood |
+| 2026-05-26 | v1.6 | 实现期发现 PR 2 (trace_id) 必须先落、PR 3 (run_event) 后落,但原设计文档 migration 编号是反过来的 (PR 2=0038, PR 3=0037)。修正为 PR 2=0037, PR 3=0038 与 Alembic linear chain (down_revision 链)对齐。无功能变更。 |

@@ -633,3 +633,58 @@ async def test_list_runs_emits_audit(
     details = row.details or {}
     assert details.get("cross_tenant") is False
     assert details.get("count") >= 1
+
+
+# ---------------------------------------------------------------------------
+# Stream H.3 PR 2 — trace_id 持久化 (Mini-ADR H-9.5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_runs_includes_trace_id_field(runs_client: AsyncClient) -> None:
+    """Each row exposes a ``trace_id`` field (None when OTel inactive in
+    tests; the field's PRESENCE is what the plumbing test validates)."""
+    await _seed_completed_run(runs_client)
+    resp = await runs_client.get("/v1/runs")
+    assert resp.status_code == 200
+    items = resp.json()["data"]["items"]
+    assert items
+    assert "trace_id" in items[0]
+    # Round-trip via RunStore — write a synthetic trace_id and confirm
+    # it surfaces unchanged on the next list call.
+    from helix_agent.runtime.runs import RunStatus
+
+    run_store = runs_client._transport.app.state.run_store  # type: ignore[attr-defined]
+    persisted = await run_store.list_for_tenant(tenant_id=_DEFAULT_TENANT)
+    assert persisted, "expected at least one persisted run"
+    target = next(r for r in persisted if r.status is RunStatus.SUCCESS)
+    await run_store.set_trace_id(
+        run_id=target.run_id,
+        tenant_id=_DEFAULT_TENANT,
+        trace_id="cafef00d" * 4,
+    )
+
+    resp2 = await runs_client.get("/v1/runs")
+    items2 = resp2.json()["data"]["items"]
+    row = next(r for r in items2 if r["run_id"] == str(target.run_id))
+    assert row["trace_id"] == "cafef00d" * 4
+
+
+@pytest.mark.asyncio
+async def test_get_run_includes_trace_id_field(runs_client: AsyncClient) -> None:
+    """``GET /v1/sessions/{thread}/runs/{run}`` exposes the trace_id field."""
+    thread_id, run_id = await _seed_completed_run(runs_client)
+    # Stamp a known trace_id (in tests OTel is inactive so the
+    # handler-captured value is None — directly setting via the store
+    # tests the read path end-to-end).
+    run_store = runs_client._transport.app.state.run_store  # type: ignore[attr-defined]
+    await run_store.set_trace_id(
+        run_id=UUID(run_id),
+        tenant_id=_DEFAULT_TENANT,
+        trace_id="deadbeef" * 4,
+    )
+
+    resp = await runs_client.get(f"/v1/sessions/{thread_id}/runs/{run_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["trace_id"] == "deadbeef" * 4

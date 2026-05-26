@@ -334,3 +334,92 @@ async def test_list_all_tenants_status_filter_and_ordering() -> None:
 
     paused = await store.list_all_tenants(status=RunStatus.PAUSED)
     assert [r.run_id for r in paused] == [paused_b, paused_a]  # newest first
+
+
+# ---------------------------------------------------------------------------
+# Stream H.3 PR 2 — set_trace_id (Mini-ADR H-9.5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_writes_and_reads_back() -> None:
+    store = InMemoryRunStore()
+    run_id, tenant_id = uuid4(), uuid4()
+    await store.create(_info(run_id=run_id, tenant_id=tenant_id))
+
+    ok = await store.set_trace_id(run_id=run_id, tenant_id=tenant_id, trace_id="abcd" * 8)
+    assert ok is True
+
+    fetched = await store.get(run_id=run_id, tenant_id=tenant_id)
+    assert fetched is not None
+    assert fetched.trace_id == "abcd" * 8
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_idempotent_overwrite() -> None:
+    """A worker observing its own trace after the API handler captured one
+    overwrites the existing value — last write wins."""
+    store = InMemoryRunStore()
+    run_id, tenant_id = uuid4(), uuid4()
+    await store.create(_info(run_id=run_id, tenant_id=tenant_id))
+
+    await store.set_trace_id(run_id=run_id, tenant_id=tenant_id, trace_id="1" * 32)
+    await store.set_trace_id(run_id=run_id, tenant_id=tenant_id, trace_id="2" * 32)
+
+    fetched = await store.get(run_id=run_id, tenant_id=tenant_id)
+    assert fetched is not None
+    assert fetched.trace_id == "2" * 32
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_unknown_run_returns_false() -> None:
+    store = InMemoryRunStore()
+    ok = await store.set_trace_id(run_id=uuid4(), tenant_id=uuid4(), trace_id="aa" * 16)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_set_trace_id_cross_tenant_returns_false() -> None:
+    """A wrong tenant_id must not let an attacker stamp another tenant's
+    run trace_id."""
+    store = InMemoryRunStore()
+    run_id, tenant_a, tenant_b = uuid4(), uuid4(), uuid4()
+    await store.create(_info(run_id=run_id, tenant_id=tenant_a))
+
+    ok = await store.set_trace_id(run_id=run_id, tenant_id=tenant_b, trace_id="x" * 32)
+    assert ok is False
+
+    fetched = await store.get(run_id=run_id, tenant_id=tenant_a)
+    assert fetched is not None
+    assert fetched.trace_id is None  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_create_with_trace_id_round_trips() -> None:
+    """The trace_id passed through ``RunInfo.create`` reaches ``get`` /
+    ``list_for_tenant`` / ``list_all_tenants`` unchanged."""
+    store = InMemoryRunStore()
+    run_id, tenant_id = uuid4(), uuid4()
+    await store.create(
+        RunInfo(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            thread_id=uuid4(),
+            user_id=None,
+            status=RunStatus.PENDING,
+            on_disconnect=DisconnectMode.CANCEL,
+            is_resume=False,
+            error=None,
+            created_at=_BASE,
+            updated_at=_BASE,
+            finished_at=None,
+            trace_id="cafef00d" * 4,
+        )
+    )
+
+    fetched = await store.get(run_id=run_id, tenant_id=tenant_id)
+    assert fetched is not None
+    assert fetched.trace_id == "cafef00d" * 4
+
+    listed = await store.list_for_tenant(tenant_id=tenant_id)
+    assert listed[0].trace_id == "cafef00d" * 4

@@ -77,3 +77,7 @@ class RunInfo:
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
+    #: OTel trace id (32-char hex). Set by the API handler at run start
+    #: via ``current_trace_id_hex()``; ``None`` for auto-triggered runs
+    #: that don't propagate a caller-bound trace (Mini-ADR H-9.5).
+    trace_id: str | None = None
