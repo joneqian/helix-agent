@@ -1,0 +1,39 @@
+/**
+ * Build-time env config — Stream H.3 PR 6.
+ *
+ * Centralises ``import.meta.env`` reads outside auth/oidc.ts. The
+ * indirection exists so:
+ *
+ *   - Vite's constant-folding still applies (bracket access on the
+ *     ``Record<string, string|undefined>`` view of ``import.meta.env``
+ *     keeps the substitution working).
+ *   - Tests can stub values via ``vi.stubEnv`` and re-read fresh.
+ *   - Trailing-slash normalisation lives in one place so every UI
+ *     surface that links into Langfuse builds the same URL shape.
+ */
+function readEnv(key: string): string | undefined {
+  const env = import.meta.env as Record<string, string | undefined>;
+  const value = env[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Langfuse base URL — e.g. ``https://langfuse.internal``. When unset,
+ *  the TraceToolbar shows the trace_id chip + copy button but hides
+ *  the external "Open in Langfuse" link. */
+export function readLangfuseBaseUrl(): string | undefined {
+  const raw = readEnv("VITE_LANGFUSE_BASE_URL");
+  if (raw === undefined) return undefined;
+  return raw.replace(/\/+$/, "");
+}
+
+/** Build a Langfuse trace URL. Returns ``null`` when the base URL
+ *  isn't configured or the trace_id is missing — callers should
+ *  hide the link in that case rather than rendering a dead anchor. */
+export function buildLangfuseTraceUrl(traceId: string | null | undefined): string | null {
+  if (traceId === null || traceId === undefined || traceId.length === 0) {
+    return null;
+  }
+  const base = readLangfuseBaseUrl();
+  if (base === undefined) return null;
+  return `${base}/trace/${encodeURIComponent(traceId)}`;
+}
