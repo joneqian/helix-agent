@@ -47,3 +47,12 @@ class MemoryItem(BaseModel):
         "When set the item is hidden from retrieve / list but kept "
         "until the retention sweep hard-deletes it.",
     )
+    drift: bool = Field(
+        default=False,
+        description="Capability Uplift Sprint #2 (Mini-ADR U-4) — "
+        "transient flag set by ``MemoryStore.retrieve()`` when "
+        "``sha256(lower(trim(content)))`` does not match the stored "
+        "``content_hash`` (DB-drift signal). Not persisted; defaults "
+        "to ``False`` on all other paths so legacy callers are "
+        "unaffected.",
+    )

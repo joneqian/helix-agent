@@ -1,9 +1,9 @@
-# Capability Uplift Sprint #1 — threat scanner recording rules + alerts.
+# Capability Uplift Sprint #1 + #2 — threat scanner + memory poisoning
+# recording rules and alerts.
 #
-# See docs/streams/STREAM-UPLIFT-DESIGN.md § 2.6.
+# See docs/streams/STREAM-UPLIFT-DESIGN.md § 2.6 + § 3.7.
 #
-# Two SecOps-facing signals:
-#
+# Sprint #1 SecOps signals:
 #   * helix:uplift:threat_block_rate:5m — total blocked-rate; sustained
 #     spikes mean either a pattern-set update needs tuning or someone is
 #     actively probing the API.
@@ -12,6 +12,15 @@
 #     pattern-set update is matching historically-accepted triggers OR a
 #     DB drift / internal-actor mutation slipped past the create-time
 #     strict scan. Either way, SecOps needs eyes on it.
+#
+# Sprint #2 SecOps signals:
+#   * helix:uplift:memory_drift_rate:1h — sustained > 0 is a P0 attack
+#     signal (DB drift means someone bypassed the API + create-time
+#     strict scan, e.g. SQL injection or an internal actor).
+#   * helix:uplift:memory_redact_rate:1h — recall-time matches; usually
+#     means a pattern-set update is catching historical poisoned memories.
+#   * helix:uplift:memory_block_rate:5m{source=…} — write-time blocks
+#     partitioned by source (api / writeback / dlq).
 
 groups:
   - name: helix_uplift_threat_scan
@@ -30,6 +39,22 @@ groups:
           sum(rate(helix_uplift_triggers_blocked_total{phase="fire"}[1h]))
           +
           sum(rate(helix_uplift_threat_scan_total{scope="context",result="warned"}[1h]))
+
+  - name: helix_uplift_memory
+    interval: 30s
+    rules:
+      # Capability Uplift Sprint #2 — memory poisoning / drift signals.
+      - record: helix:uplift:memory_drift_rate:1h
+        expr: |
+          sum(rate(helix_uplift_memory_drift_total[1h]))
+
+      - record: helix:uplift:memory_redact_rate:1h
+        expr: |
+          sum(rate(helix_uplift_memory_recalls_redacted_total[1h]))
+
+      - record: helix:uplift:memory_block_rate:5m
+        expr: |
+          sum(rate(helix_uplift_memory_writes_blocked_total[5m])) by (source)
 
   - name: helix_uplift_alerts
     rules:
@@ -55,4 +80,33 @@ groups:
         annotations:
           summary: "Trigger fire-time prompt scan warned"
           description: "Fire-time warn rate is {{ $value }} / hr — possible DB drift or new pattern matching historical triggers."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/threat-scanner-tuning.md"
+
+      # Capability Uplift Sprint #2 (Mini-ADR U-4) — drift on memory
+      # rows means the DB row has been mutated past the strict-scan
+      # gate. Almost certainly an attack (SQL injection / internal
+      # actor); legitimate writes always update content_hash atomically.
+      - alert: HelixUpliftMemoryDriftDetected
+        expr: helix:uplift:memory_drift_rate:1h > 0
+        for: 15m
+        labels:
+          severity: P0
+        annotations:
+          summary: "Memory content drift detected"
+          description: "Memory drift rate is {{ $value }} / hr — DB rows mutated past the strict-scan gate. See runbook § 8 for SQL-injection / internal-actor triage."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/threat-scanner-tuning.md"
+
+      # P1 — sustained recall-time redactions usually indicate either
+      # (a) a recent pattern-set update is catching memories that landed
+      # before the new pattern shipped, or (b) writeback / DLQ leaked
+      # poisoned content past the write-time strict scan (would be a
+      # bug — investigate).
+      - alert: HelixUpliftMemoryRedactSpike
+        expr: helix:uplift:memory_redact_rate:1h > 1
+        for: 30m
+        labels:
+          severity: P1
+        annotations:
+          summary: "Memory recall redaction rate elevated"
+          description: "Recall redact rate is {{ $value }} / hr sustained 30m — either a noisy pattern update or a write-time scan miss."
           runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/threat-scanner-tuning.md"

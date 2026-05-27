@@ -354,9 +354,9 @@ async def fire_trigger(...) -> UUID | None:
 **Layer A — Write(strict + 全量 block)**:
 
 - **位置**:`MemoryStore.write()`(`packages/helix-persistence/src/.../memory/sql.py` + `memory.py`)→ 内置 strict 扫
-- **行为**:遇到任一 finding → 该 batch 整体拒绝 + raise `MemoryInjectionBlocked` + 一并 emit `MEMORY_INJECTION_BLOCKED` 每条 item;**不进行部分写入**(batch atomicity)
+- **行为**:遇到任一 finding → 该 batch 整体拒绝 + raise `MemoryInjectionBlockedError` + 一并 emit `MEMORY_INJECTION_BLOCKED` 每条 item;**不进行部分写入**(batch atomicity)
 - **同时**:`api/memory.py` PATCH 预扫一次(给用户 422 oracle-safe 通用文案),失败前不调 embedder(省 OpenAI 调用)
-- **同时**:`orchestrator/graph_builder/memory.py::memory_writeback_node` 捕 `MemoryInjectionBlocked` → DLQ 跳过(不 retry,不丢已学的合法 items — 进 DLQ dead-letter 让 SecOps review)
+- **同时**:`orchestrator/graph_builder/memory.py::memory_writeback_node` 捕 `MemoryInjectionBlockedError` → DLQ 跳过(不 retry,不丢已学的合法 items — 进 DLQ dead-letter 让 SecOps review)
 - **理由**:写入是创作期,用户有完整 intervene 通道;LLM 写入也应严格,否则 promptware 永久落地
 
 **Layer B — Recall(strict + redact,**不**block**)**:
@@ -401,12 +401,12 @@ async def fire_trigger(...) -> UUID | None:
 
 | 文件 | 改动 |
 |------|------|
-| `packages/helix-persistence/src/.../memory/base.py` | 加 `MemoryInjectionBlocked` 异常 + 拓展 `MemoryStore.retrieve()` 返回类型(从 `list[MemoryItem]` → `list[ScannedMemoryItem]` 或加 `redacted: bool` 字段?见 § 3.6 决策) |
+| `packages/helix-persistence/src/.../memory/base.py` | 加 `MemoryInjectionBlockedError` 异常 + 拓展 `MemoryStore.retrieve()` 返回类型(从 `list[MemoryItem]` → `list[ScannedMemoryItem]` 或加 `redacted: bool` 字段?见 § 3.6 决策) |
 | `packages/helix-persistence/src/.../memory/sql.py` | `SqlMemoryStore.write()` + `.retrieve()` 接入扫描 |
 | `packages/helix-persistence/src/.../memory/memory.py` | `InMemoryMemoryStore.write()` + `.retrieve()` 同上 |
 | `packages/helix-persistence/tests/test_*_memory_store.py` | unit 测试矩阵(§ 3.5) |
 | `services/control-plane/src/control_plane/api/memory.py` | PATCH 预扫,接 422 + audit,oracle-safe 文案 |
-| `services/control-plane/src/control_plane/memory/dlq_worker.py` | 捕 `MemoryInjectionBlocked` → dead-letter 不重试 |
+| `services/control-plane/src/control_plane/memory/dlq_worker.py` | 捕 `MemoryInjectionBlockedError` → dead-letter 不重试 |
 | `services/orchestrator/src/orchestrator/graph_builder/memory.py` | `memory_recall_node` 后处理:redact + audit;`memory_writeback_node` 捕 block 异常 |
 | `services/control-plane/src/control_plane/uplift/threat_metrics.py` | 加 3 个 memory counter |
 | `packages/helix-protocol/src/helix_agent/protocol/audit.py` | 加 3 个 AuditAction(已在 § 1.2 预声明) |
@@ -417,7 +417,7 @@ async def fire_trigger(...) -> UUID | None:
 
 ```python
 # packages/helix-persistence/.../memory/sql.py 内
-class MemoryInjectionBlocked(ValueError):
+class MemoryInjectionBlockedError(ValueError):
     """raised by MemoryStore.write() when any item's content fails strict scan."""
 
 async def write(self, items: Sequence[MemoryItem]) -> None:
@@ -430,7 +430,7 @@ async def write(self, items: Sequence[MemoryItem]) -> None:
         # 一次性 emit 全部命中的 audit(不依赖外部 audit logger,放 _audit_emitter callback)
         for item, findings in blocked:
             await self._emit_audit(item, AuditAction.MEMORY_INJECTION_BLOCKED, findings)
-        raise MemoryInjectionBlocked(
+        raise MemoryInjectionBlockedError(
             f"{len(blocked)}/{len(items)} memory items blocked by strict scan"
         )
     # ... 原有 batch insert(每行附带 content_hash)
@@ -536,11 +536,11 @@ async def retrieve(self, ...) -> list[MemoryItem]:
 
 ### 3.8 Sprint #2 验收清单
 
-- [ ] `MemoryInjectionBlocked` 异常 + `MemoryStore.write()` strict 扫拦截在 sql/memory 双实现一致
+- [ ] `MemoryInjectionBlockedError` 异常 + `MemoryStore.write()` strict 扫拦截在 sql/memory 双实现一致
 - [ ] `MemoryStore.retrieve()` content_hash 重算 drift 检测在 sql 实现(InMemory 跳过 drift,因为不会被外部改)
 - [ ] `PATCH /v1/memory/{id}` 接入预扫 + oracle-safe 422
 - [ ] `memory_recall_node` 接入 redact 逻辑 + audit emit
-- [ ] `memory_writeback_node` 捕 `MemoryInjectionBlocked` → DLQ enqueue 走 dead-letter 路径(不重试)
+- [ ] `memory_writeback_node` 捕 `MemoryInjectionBlockedError` → DLQ enqueue 走 dead-letter 路径(不重试)
 - [ ] 3 个新 AuditAction(`MEMORY_INJECTION_BLOCKED` / `MEMORY_INJECTION_REDACTED` / `MEMORY_DRIFT_DETECTED`)在 protocol Enum 上线
 - [ ] 3 个 Prometheus counter + 2 个 recording rule + 2 个 alert 上线
 - [ ] `docs/runbooks/threat-scanner-tuning.md` 新增 § 8(memory drift 响应步骤)

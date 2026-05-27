@@ -8,9 +8,23 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from helix_agent.persistence.memory.base import MemoryStore
+from helix_agent.common.threat_patterns import ThreatFinding, scan_for_threats
+from helix_agent.persistence.memory.base import MemoryInjectionBlockedError, MemoryStore
 from helix_agent.persistence.memory.hash import hash_content
 from helix_agent.protocol import MemoryItem
+
+
+def _with_drift_flag(item: MemoryItem) -> MemoryItem:
+    """Capability Uplift Sprint #2 (Mini-ADR U-4) — recompute the
+    K.K7 content hash and stamp ``drift=True`` when it diverges from
+    the stored ``content_hash``. The original content is preserved;
+    the recall node redacts based on the flag."""
+    stored = item.content_hash
+    if stored is None:
+        return item
+    if hash_content(item.content) == stored:
+        return item
+    return item.model_copy(update={"drift": True})
 
 
 def _cosine_distance(a: Sequence[float], b: Sequence[float]) -> float:
@@ -28,6 +42,14 @@ class InMemoryMemoryStore(MemoryStore):
         self._rows: list[MemoryItem] = []
 
     async def write(self, items: Sequence[MemoryItem]) -> None:
+        # Capability Uplift Sprint #2 (Mini-ADR U-3) — atomic strict scan.
+        blocked: list[tuple[object, list[ThreatFinding]]] = []
+        for item in items:
+            findings = scan_for_threats(item.content, scope="strict")
+            if findings:
+                blocked.append((item.id, findings))
+        if blocked:
+            raise MemoryInjectionBlockedError(blocked)  # type: ignore[arg-type]
         for item in items:
             # Stream K.K7 — fill content_hash if the caller didn't, and
             # skip the row when an identical live entry already exists
@@ -62,7 +84,7 @@ class InMemoryMemoryStore(MemoryStore):
             and (kind is None or row.kind == kind)
         ]
         candidates.sort(key=lambda row: _cosine_distance(query_embedding, row.embedding))
-        return candidates[:limit]
+        return [_with_drift_flag(row) for row in candidates[:limit]]
 
     async def list_for_user(
         self,

@@ -113,6 +113,10 @@ class AuditAction(StrEnum):
     # memory (Stream K.K6)
     MEMORY_UPDATE = "memory:update"
     MEMORY_FORGET = "memory:forget"
+    # memory — Capability Uplift Sprint #2 (Mini-ADR U-3 / U-4)
+    MEMORY_INJECTION_BLOCKED = "memory:injection_blocked"
+    MEMORY_INJECTION_REDACTED = "memory:injection_redacted"
+    MEMORY_DRIFT_DETECTED = "memory:drift_detected"
     # service_account
     SERVICE_ACCOUNT_CREATE = "service_account:create"
     SERVICE_ACCOUNT_DELETE = "service_account:delete"
