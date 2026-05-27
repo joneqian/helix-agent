@@ -30,8 +30,14 @@ from uuid import uuid4
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from helix_agent.common.threat_patterns import scan_for_threats
+from helix_agent.common.uplift_metrics import (
+    record_memory_drift,
+    record_memory_redacted,
+)
 from helix_agent.persistence import MemoryStore
 from helix_agent.persistence.memory import MemoryWritebackDLQ
+from helix_agent.persistence.memory.base import MemoryInjectionBlockedError
 from helix_agent.protocol import MemoryItem
 from helix_agent.runtime.cancellation import RunCancelledError
 from orchestrator.graph_builder._config import cancellation_token, configurable_uuid
@@ -116,6 +122,29 @@ def parse_extracted_memories(text: str) -> list[tuple[Literal["fact", "episodic"
     return out
 
 
+def _redact_memory(item: MemoryItem) -> MemoryItem:
+    """Capability Uplift Sprint #2 (Mini-ADR U-3 Layer B) — replace
+    poisoned / drifted content with a ``[BLOCKED:<category>]`` placeholder.
+
+    ``drift=True`` wins over pattern matches: drifted content is no
+    longer trusted regardless of what it now contains, so the agent
+    is told the row was tampered with rather than which pattern fired.
+    Pattern matches return the matched category (``injection`` / ``c2``
+    / ``exfil`` / etc) so the agent has minimal signal to potentially
+    re-ask the user; the ``pattern_id`` itself stays in the audit row
+    (oracle defense — see ``docs/runbooks/threat-scanner-tuning.md`` § 4).
+    """
+    if item.drift:
+        record_memory_drift()
+        record_memory_redacted()
+        return item.model_copy(update={"content": "[BLOCKED:drift_tampered]"})
+    findings = scan_for_threats(item.content, scope="strict")
+    if findings:
+        record_memory_redacted()
+        return item.model_copy(update={"content": f"[BLOCKED:{findings[0].category}]"})
+    return item
+
+
 def make_memory_recall_node(
     *, memory_store: MemoryStore, embedder: Embedder, top_k: int
 ) -> MemoryNode:
@@ -145,8 +174,9 @@ def make_memory_recall_node(
         except Exception:
             logger.warning("memory.recall_failed — continuing without memories", exc_info=True)
             return {}
-        logger.info("memory.recall count=%d", len(memories))
-        return {"recalled_memories": memories}
+        redacted = [_redact_memory(m) for m in memories]
+        logger.info("memory.recall count=%d", len(redacted))
+        return {"recalled_memories": redacted}
 
     return memory_recall_node
 
@@ -205,6 +235,17 @@ def make_memory_writeback_node(
             await memory_store.write(items)
         except RunCancelledError:
             raise
+        except MemoryInjectionBlockedError as exc:
+            # Capability Uplift Sprint #2 — LLM extracted something the
+            # strict scanner caught. The content is deterministic, so
+            # retrying will fail identically; drop the batch + log. The
+            # store has emitted MEMORY_INJECTION_BLOCKED audit(s) by the
+            # time we land here. Run is not affected.
+            logger.warning(
+                "memory.writeback_blocked count=%d — content rejected by strict scanner",
+                len(exc.blocked),
+            )
+            return {}
         except Exception as exc:
             # Stream K.K7 — don't lose the work the LLM already did. If
             # the extraction produced pairs, hand them to the DLQ for a

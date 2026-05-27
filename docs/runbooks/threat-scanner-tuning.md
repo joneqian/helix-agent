@@ -202,3 +202,104 @@ Patterns are adapted from `hermes-agent/tools/threat_patterns.py`
 (commit hash captured in the module docstring). When a Hermes update
 adds new attack signatures, we don't auto-sync; SecOps reviews the
 upstream diff and ports relevant patterns through § 1's PR flow.
+
+## 8 — Memory drift response (Capability Uplift Sprint #2)
+
+Memory drift means a `memory_item.content` row was mutated past both
+the API + writeback + DLQ strict scans, and the stored `content_hash`
+no longer matches `sha256(lower(trim(content)))`. Legitimate writes
+always update both atomically via `MemoryStore.write()` /
+`update_content()`, so drift detection is a near-certain attack
+signal — SQL injection, an internal actor with DB access, or a
+restored-from-backup row that wasn't re-hashed.
+
+### `HelixUpliftMemoryDriftDetected` alert (P0)
+
+Fires when `helix:uplift:memory_drift_rate:1h > 0` sustained 15 min.
+
+1. **Pull the audit history for drifted rows** (drift detection itself
+   does not emit audit yet — see the M1 follow-up below; rely on the
+   redact audit instead):
+
+   ```sh
+   curl -s "/v1/audit?action=memory:injection_redacted&from=now-1h" \
+     | jq '.entries[] | {memory_id: .resource_id, ts: .occurred_at, details: .details}'
+   ```
+
+2. **Identify the affected rows and their owners** — every drift event
+   ships with `resource_id` (memory row UUID), and the row is
+   tenant-scoped. For each memory_id, pull who created it:
+
+   ```sh
+   curl -s "/v1/audit?action=memory:update&resource_id=<id>&from=-90d"
+   ```
+
+3. **Decide attack-vs-benign**:
+   - If `memory_drift_rate:1h` matches a recent backup restore (check
+     ops calendar): benign; trigger a re-hash sweep (see § 8.1) and
+     close.
+   - Otherwise treat as breach: lock the affected tenant's user API
+     keys, capture the current `memory_item.content` for forensics,
+     `SELECT * FROM audit_log WHERE resource_id=...` for the
+     before/after content trail.
+   - Drift on rows whose `created_by` is `agent:writeback` and which
+     no admin user has touched is the worst case (suggests a
+     write-time bypass, not just post-write drift) — escalate to
+     security lead immediately.
+
+4. **Contain**: while investigating, every `recall` of a drifted row
+   already returns `[BLOCKED:drift_tampered]` to the agent — no further
+   action needed to stop the poisoned content from reaching prompts.
+   The user can `DELETE /v1/memory/{id}` once they're satisfied.
+
+### 8.1 Re-hash sweep (for benign drift)
+
+When ops have restored from backup or otherwise re-rolled content
+through a path that left `content_hash` stale:
+
+```sh
+# Recompute and persist for the affected rows. The script is in
+# tools/maintenance/rehash_memory_content.py (M1 follow-up — until
+# then, run the SQL by hand against staging and have ops review).
+psql -c "UPDATE memory_item
+         SET content_hash = encode(digest(lower(trim(content)), 'sha256'), 'hex')
+         WHERE id = ANY('{<id1>,<id2>,...}'::uuid[])"
+```
+
+### 8.2 `HelixUpliftMemoryRedactSpike` alert (P1)
+
+Fires when `helix:uplift:memory_redact_rate:1h > 1` sustained 30 min.
+
+Two possible causes:
+
+- **Pattern-set update is catching pre-existing memories.** Check
+  `git log` on `packages/helix-common/src/helix_agent/common/threat_patterns.py`
+  for the past 24 h. If a new pattern landed: pull a sample of the
+  matched memories' audit details (`category` field), validate they're
+  genuinely suspicious or genuinely false-positives. If false-positive:
+  open a `security`-labelled PR to narrow the pattern (per § 2).
+- **Write-time strict scan miss.** If no recent pattern update and
+  redact rate is elevated: dig into the affected `memory_id`s — the
+  content reached the DB despite the write-time scan, which means
+  either a bug in the scanner wiring or a code path that bypasses
+  `MemoryStore.write()` entirely. File a P1 incident and re-audit
+  every write call site against `MemoryStore.write()`.
+
+### 8.3 Per-tenant `memory_recall_redact_mode` (M1 escape hatch)
+
+Sprint #2 does **not** ship a tenant-configurable redaction mode —
+every recall match is redacted. A future M1 escape hatch could add
+`tenant_config.memory_recall_redact_mode: "redact" | "remove"` if a
+high-compliance tenant decides they'd rather the agent never see
+that a redacted memory exists. Not in scope today; reach out before
+adding it because the trade-off is real (agent loses signal to
+re-prompt the user).
+
+### 8.4 M1 follow-up: audit row for the drift detection itself
+
+`MemoryStore.retrieve()` currently sets `MemoryItem.drift=True` but
+the audit emit happens at the redact site (recall node), not at
+detection time. For M1 we should plumb an `AuditEmitter` Protocol into
+the store so drift gets a dedicated `memory:drift_detected` audit row
+the moment the hash mismatch is observed — useful for tenants who
+only `list_for_user` without going through the recall node.

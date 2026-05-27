@@ -16,7 +16,29 @@ from collections.abc import Sequence
 from typing import Literal
 from uuid import UUID
 
+from helix_agent.common.threat_patterns import ThreatFinding
 from helix_agent.protocol import MemoryItem
+
+
+class MemoryInjectionBlockedError(Exception):
+    """Capability Uplift Sprint #2 (Mini-ADR U-3) — write rejected.
+
+    Raised by :meth:`MemoryStore.write` when any item's ``content``
+    matches the ``strict`` threat-pattern set. The batch is rejected
+    atomically (no partial writes) — see
+    ``docs/streams/STREAM-UPLIFT-DESIGN.md`` § 3.2.
+
+    Carries the per-item finding set so callers can emit one audit row
+    per blocked item with the right caller-side context (API actor_id,
+    writeback thread_id, DLQ row id).
+    """
+
+    def __init__(
+        self,
+        blocked: list[tuple[UUID, list[ThreatFinding]]],
+    ) -> None:
+        super().__init__(f"{len(blocked)} memory item(s) blocked by strict threat scan")
+        self.blocked = blocked
 
 
 class MemoryStore(abc.ABC):

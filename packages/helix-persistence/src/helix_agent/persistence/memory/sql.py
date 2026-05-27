@@ -11,14 +11,15 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from helix_agent.persistence.memory.base import MemoryStore
+from helix_agent.common.threat_patterns import ThreatFinding, scan_for_threats
+from helix_agent.persistence.memory.base import MemoryInjectionBlockedError, MemoryStore
 from helix_agent.persistence.memory.hash import hash_content
 from helix_agent.persistence.models import MemoryItemRow
 from helix_agent.protocol import MemoryItem
 
 
 def _row_to_item(row: MemoryItemRow) -> MemoryItem:
-    return MemoryItem(
+    item = MemoryItem(
         id=row.id,
         tenant_id=row.tenant_id,
         user_id=row.user_id,
@@ -31,6 +32,10 @@ def _row_to_item(row: MemoryItemRow) -> MemoryItem:
         last_used_at=row.last_used_at,
         deleted_at=row.deleted_at,
     )
+    # Capability Uplift Sprint #2 (Mini-ADR U-4) — drift detection.
+    if row.content_hash and hash_content(row.content) != row.content_hash:
+        return item.model_copy(update={"drift": True})
+    return item
 
 
 class SqlMemoryStore(MemoryStore):
@@ -42,6 +47,14 @@ class SqlMemoryStore(MemoryStore):
     async def write(self, items: Sequence[MemoryItem]) -> None:
         if not items:
             return
+        # Capability Uplift Sprint #2 (Mini-ADR U-3) — atomic strict scan.
+        blocked: list[tuple[UUID, list[ThreatFinding]]] = []
+        for item in items:
+            findings = scan_for_threats(item.content, scope="strict")
+            if findings:
+                blocked.append((item.id, findings))
+        if blocked:
+            raise MemoryInjectionBlockedError(blocked)
         # Stream K.K7 — fill content_hash here so callers do not need
         # to import the hash helper, and use ON CONFLICT DO NOTHING
         # against the (tenant_id, user_id, content_hash) partial unique

@@ -27,8 +27,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from control_plane.uplift.threat_metrics import record_memory_blocked
 from helix_agent.common.observability import helix_counter
 from helix_agent.persistence.memory import MemoryStore, MemoryWritebackDLQ
+from helix_agent.persistence.memory.base import MemoryInjectionBlockedError
 from helix_agent.protocol import MemoryItem
 from orchestrator.llm import Embedder
 
@@ -175,6 +177,25 @@ class MemoryDLQWorker:
             vectors = await self._embedder.embed([content for _, content in row.extracted])
             items = _build_memory_items(row, vectors)
             await self._store.write(items)
+        except MemoryInjectionBlockedError as exc:
+            # Capability Uplift Sprint #2 — content can't pass strict
+            # scan; retrying won't change the content, so skip the
+            # backoff loop and dead-letter immediately. The audit row
+            # already lands inside MemoryStore.write() callers as the
+            # exception bubbles up here.
+            logger.error(
+                "memory.dlq_worker.dead_letter_injection row_id=%s blocked=%d",
+                row.id,
+                len(exc.blocked),
+            )
+            record_memory_blocked(source="dlq")
+            await self._dlq.record_failure(
+                row_id=row.id,
+                error=f"MemoryInjectionBlockedError: {len(exc.blocked)} item(s)",
+                when=now,
+                next_retry_at=now + timedelta(days=365),
+            )
+            return "dead"
         except Exception as exc:
             next_attempt_number = row.attempts + 1
             if next_attempt_number >= self._max_attempts:
