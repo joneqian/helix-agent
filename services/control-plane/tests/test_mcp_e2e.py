@@ -65,14 +65,14 @@ async def _run_uvicorn(app: object, port: int) -> AsyncIterator[None]:
         await asyncio.sleep(0.05)
     else:
         server.should_exit = True
-        await task
+        _ = await task
         msg = "uvicorn did not start within 5 seconds"
         raise RuntimeError(msg)
     try:
         yield
     finally:
         server.should_exit = True
-        await task
+        _ = await task
 
 
 @pytest.mark.asyncio
