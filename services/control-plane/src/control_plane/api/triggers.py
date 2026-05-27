@@ -149,6 +149,10 @@ async def _scan_trigger_strict(
     record_threat_scan(scope="strict", result="blocked")
     record_threat_pattern_hits(findings, scope="strict")
     record_trigger_blocked(phase="create")
+    # The audit row carries tenant_id / field / pattern_count / findings —
+    # a parallel ``logger.warning`` would inject user-controlled values
+    # into structured log fields (CodeQL py/log-injection).  Skip it; the
+    # audit middleware is the system of record for security events.
     await emit(
         audit,
         tenant_id=tenant_id,
@@ -161,14 +165,6 @@ async def _scan_trigger_strict(
             "field": field_path,
             "pattern_count": len(findings),
             "findings": [_finding_to_dict(f) for f in findings],
-        },
-    )
-    logger.warning(
-        "trigger.scan_blocked",
-        extra={
-            "tenant_id": str(tenant_id),
-            "field": field_path,
-            "pattern_count": len(findings),
         },
     )
     raise HTTPException(status_code=422, detail=_INJECTION_BLOCK_DETAIL)
