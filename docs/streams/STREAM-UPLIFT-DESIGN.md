@@ -27,7 +27,7 @@ helix M0 在 [helix-vs-hermes-tldr.md](../research/helix-vs-hermes-tldr.md) 的 
 |------|------|--------|---------|------------|
 | #1 | Cron / Webhook Prompt 注入扫描(含隐形 Unicode) | ~3 天 | 无 | § 2 |
 | #2 | Memory 投毒防御 + drift backup | ~1.5 周 | 复用 #1 威胁模式库 | § 3 |
-| #3 | Skill 附属文件(references/templates/scripts) | ~2 周 | 无 | § 4 |
+| #3 | Skill 附属文件 + Claude Code 标准 SKILL.md + Progressive Disclosure | ~2.5 周 | 无 | § 4 |
 | #4 | Curator 自动状态机(active/stale/archived) | ~1 周 | 基础设施可提前；启用调参 M1-K J.7b-1 | § 5 |
 | #5 | **MCP Client HTTP/SSE transport**(agent 沙箱接入外部 MCP 生态;原"MCP Server"已 2026-05-27 复审推翻,见 § 6) | ~1.5 周 | 无 | § 6 |
 | #6 | Memory hybrid retrieval(向量 + 全文 RRF) | ~1.5 周 | 无(port J.5) | § 7 |
@@ -564,17 +564,528 @@ async def retrieve(self, ...) -> list[MemoryItem]:
 
 ---
 
-## 4. Sprint #3 — Skill 附属文件(references/templates/scripts)
+## 4. Sprint #3 — Skill 附属文件 + Claude Code 标准对齐 + Progressive Disclosure
 
-> **本章节 stub** — Sprint #3 开工前补完。预计 Week 7-10。
+> **本 Sprint 把 3 件事捆一起做**:
+> 1. 加 supporting files(reference / scripts / 任意子目录文件)— 补 Hermes 维度 14 高价值 gap;
+> 2. ZIP 格式重设计为 Claude Code 标准 `SKILL.md` 形态 — 跟 agentskills.io / `~/.claude/skills/` 互操作,M3 marketplace 上线时跨平台天然;
+> 3. **Progressive disclosure**(M1-K J.7b-3 backlog 提前)— 系统 prompt 只注 skill 简介,body + supporting files 通过 `skill_view` 按需 load。
+>
+> **预计 2.5 周**(包含完整 Admin UI;比原 stub 估计的 2 周略长,因为接受了 [memory:complete-not-minimal] + [memory:zero-tech-debt] 反馈,UI 做全)。
 
-主要设计要点(占位)：
-- `skill_version` schema 加 `supporting_files: JSONB`(单 skill ≤ 5MB) + ObjectStore 兜底
-- `skill_manager_tool` 加 `write_file` / `remove_file` action
-- `agent_factory` 按需暴露 `skill_view(name, "references/xxx.md")` 工具
-- 直接抄 Hermes 的目录约定(references=session 细节 / templates=可复用 / scripts=可执行)
-- ZIP import/export 扩展子目录支持
-- Admin UI Skills page 加附属文件浏览(per [memory:admin-ui-design-baseline](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_admin_ui_design_baseline.md))
+### 4.1 背景
+
+当前 Skill 子系统(`packages/helix-persistence/.../models/skill.py:69-109` + `services/orchestrator/.../agent_factory.py:521-549`):
+
+- `SkillVersionRow` 只有 `prompt_fragment: Text` 单字段装内容
+- 系统 prompt 渲染:`<skill name="X" version="N">{prompt_fragment}</skill>`,**所有 skill body 在 build 时全部塞进 system prompt**(eager loading)
+- ZIP import 是 flat 三件套:`skill.yaml` + `prompt.md` + `tools.txt`(M0 临时格式,不是任何公开标准)
+
+**三个问题同时存在**:
+
+1. **supporting files 完全没有** — 复杂 skill 把所有 references / templates / 代码片段塞 prompt body,prompt 撑不下时只能拆 skill,人为分裂概念
+2. **ZIP 不标准** — 用户从 `~/.claude/skills/` 复制本地 skill 上传 helix 无法工作;M3 marketplace 跨平台互通要重写
+3. **Token 浪费** — agent 通常用 1-2 个 skill,但所有 skill prompt body 都在 system prompt;5 个 skill 各 3KB = 15KB 永远在 LLM context
+
+**Claude Code skill 实际标准**(从 `~/.claude/skills/` 实测):
+
+```
+~/.claude/skills/mcp-builder/
+├── SKILL.md              # 必需:YAML frontmatter(name + description)+ Markdown body
+├── LICENSE.txt           # optional
+├── reference/            # ← 子目录命名完全自由(reference 单数,或 references 复数)
+└── scripts/
+
+~/.claude/skills/gstack/
+├── SKILL.md
+├── pair-agent/           # ← 任意命名
+├── benchmark/
+├── design-html/
+└── design-shotgun/
+```
+
+**标准 frontmatter 最小集**:
+
+```yaml
+---
+name: mcp-builder
+description: Guide for creating high-quality MCP servers ...
+license: Complete terms in LICENSE.txt   # optional
+---
+```
+
+只有 `name` + `description`(可选 `license`)。没有 `version` / `category` / `tool_names` / `required_models`。
+
+**helix 必须多出来的字段**(多租户治理要求):
+- `version`(int,DRAFT→ACTIVE→ARCHIVED 多版本共存)
+- `category`、`required_models`、`tool_names`、`status`、`authored_by`
+- `lazy`(per-skill progressive disclosure 开关)
+
+**方案**:扩展 frontmatter,helix 字段放 `helix:` 命名空间(其他 Claude 客户端读 SKILL.md 自然忽略;Hermes 也是这种扩展模式,如它的 `platforms:` 字段)。详见 § 4.3.1。
+
+### 4.2 范围 & 边界
+
+#### 4.2.1 In-scope
+
+- `SkillVersionRow.supporting_files` 列(JSONB,5MB cap;Mini-ADR U-16)
+- SKILL.md 格式 + helix: frontmatter 扩展(U-14)
+- ZIP import 重做:支持 SKILL.md + 任意子目录 + 字符/扩展名校验 + backward compat 读老格式(U-18, U-19)
+- ZIP export:输出新格式
+- `skill_view(skill_name, path)` 工具(U-17)
+- Progressive disclosure 默认 + per-skill `lazy: false` 默认保留现有 eager 行为(U-15)
+- agent_factory 改造:lazy=true 的 skill 只注 summary,lazy=false 的 skill 仍 eager 注 body
+- Audit actions: `SKILL_SUPPORTING_FILE_UPLOADED` / `SKILL_SUPPORTING_FILE_REMOVED`
+- Admin UI 完整:file tree + Markdown/code preview + edit/upload/delete/rename/diff(U-20)
+- 可观测:`helix_uplift_skill_view_total{skill, path, result}` + `helix_uplift_skill_zip_reject_total{reason}`
+- runbook:`docs/runbooks/skill-packaging.md`
+
+#### 4.2.2 Out-of-scope(明确推迟,不掩盖)
+
+| 项 | 推迟到 | 理由 |
+|---|------|------|
+| agent self-edit(`author_skill` / `refine_skill`)| M1-K J.7b-1 | Sprint #3 只做"管理员管 supporting files",agent 自创建是独立 sprint |
+| `lazy: true` 改成默认 | M1 后期 | 等 dogfood 数据看是否真的 token 省得多到值得改默认 |
+| 在 Admin UI 里 ZIP export 单文件 | M2+ | 现在 export 整 skill ZIP 够用;单文件下载是 nice-to-have |
+| 跨 skill 共享 supporting file(symlink 风格)| M3 marketplace | 跟 marketplace 一起设计 |
+| 二进制资源(.png / .jpg 大文件)用 ObjectStore | 看需求 | JSONB 5MB cap 够用;真有需求再加 ObjectStore overflow path |
+| Hermes `${HERMES_SKILL_DIR}` 模板变量 | 永久不做 | helix 用绝对 path + skill_view tool,无变量替换需求 |
+| Hermes inline shell `!`cmd`` | 永久不做 | RCE 风险 |
+| Hermes `platforms:` 过滤 | 永久不做 | sandbox 抽象宿主 OS |
+
+#### 4.2.3 验收(Sprint Exit)
+
+参考 [memory:zero-tech-debt] 6 条 + 本 Sprint 专属:
+
+1. **ZIP roundtrip e2e**:本地写 `~/.claude/skills/my-skill/SKILL.md` 结构 → `zip -r my-skill.zip my-skill/` → 上传 helix → Admin UI 显示 file tree → `skill_view` agent 工具读到内容 → export ZIP → 解压跟原始结构对齐(允许 helix: frontmatter 写回)
+2. **Backward compat 测试**:老 ZIP(`skill.yaml`+`prompt.md`+`tools.txt`)能 import + warn
+3. **Progressive disclosure 测试**:同一 agent 含 lazy=true + lazy=false 两个 skill;system prompt 只含 lazy=true 的 summary,不含其 body;agent 调 `skill_view` 能拿到 body
+4. **Admin UI 5 mutation 路径**:Playwright e2e 验 view / edit / upload / rename / delete 每个都生成新 SkillVersion
+5. 单元测试 ≥ 80% 覆盖(frontmatter parser / path validator / skill_view tool / lazy 注入逻辑 / JSONB 操作)
+6. STREAM-UPLIFT-DESIGN § 4 完整 + Mini-ADRs U-14 ~ U-20 锁定
+7. runbook 完整
+8. CI 全绿 + 无 TODO 遗留
+
+### 4.3 架构
+
+#### 4.3.1 SKILL.md 格式(标准 frontmatter + `helix:` 命名空间扩展)
+
+**标准基础**(其他 Claude 客户端只读这些):
+
+```markdown
+---
+name: api-debug
+description: HTTP/gRPC API 调试 + 错误码查询。Use when troubleshooting API failures, decoding error codes, or generating curl reproductions.
+license: Apache-2.0
+---
+
+# API Debug Assistant
+
+你是 API 调试助手。处理用户报的 API 问题时:
+
+1. 先看 `reference/error_codes.md` 找错误码语义
+2. 用 `templates/curl_template.txt` 生成可复现 curl
+3. 需要主动诊断时跑 `scripts/diagnose.py`
+...
+```
+
+**helix 扩展**(`helix:` 命名空间下,其他客户端忽略):
+
+```yaml
+---
+name: api-debug
+description: HTTP/gRPC API 调试 + 错误码查询 ...
+license: Apache-2.0
+helix:
+  version: 2                                # 必需 — helix 多版本治理
+  category: ops                             # optional
+  required_models: [anthropic/claude-sonnet-4]
+  tool_names: [http, exec_python]           # ← 替代老 tools.txt
+  authored_by: human                        # human | agent
+  lazy: false                               # optional,default false(eager)
+---
+```
+
+#### 4.3.2 Mini-ADR U-14 — `SKILL.md` 为 canonical 格式,helix: frontmatter 扩展
+
+**决策**:helix Sprint #3 后 canonical skill 格式 = Claude Code 标准 `SKILL.md`(单文件,YAML frontmatter + Markdown body)+ 任意子目录。helix-specific 字段全部放 `helix:` 命名空间。老格式(`skill.yaml` + `prompt.md` + `tools.txt`)只读不写。
+
+**理由**:
+- 标准对齐 = 用户从 `~/.claude/skills/` 直接 `zip -r` 上传可工作
+- M3 marketplace 跨平台天然(Claude / Hermes / 未来 hub 通用)
+- `helix:` 命名空间是开放 YAML 模式公认的扩展惯例,Hermes 自己用了相同模式(`platforms:`)
+- 单文件自包含 — `cat SKILL.md` 看到全部 metadata + body
+
+**Risk**:标准未规定命名空间扩展机制 → 未来上游可能引入冲突 key。**缓解**:用 helix-only 前缀 `helix:`,且文档明确;真冲突时改 prefix 走 migration。
+
+#### 4.3.3 Mini-ADR U-15 — Progressive Disclosure + per-skill `lazy` 字段
+
+**决策**:架构默认 progressive disclosure;agent 不直接拿到 skill body,通过 `skill_view` 工具按需 load。但**当前 agent 行为不能 break** → 加 `helix.lazy: bool` 字段,**default `false`(eager)** 保持现有"build 时 body 进 system prompt"行为;`true` = lazy(body 不进 system prompt,agent 必须 skill_view)。
+
+**System prompt 注入逻辑**(改 `agent_factory.py:521-549`):
+
+```python
+# 所有 skill 都有 summary 块(注 name + description + 文件清单)
+<available-skills>
+  <skill name="api-debug" version="2"
+         description="HTTP/gRPC API 调试 + 错误码查询"
+         files="SKILL.md, reference/error_codes.md, templates/curl_template.txt, scripts/diagnose.py" />
+  <skill name="rag-tuning" version="3"
+         description="RAG 召回率调优 / chunking 策略"
+         files="SKILL.md, reference/chunking_guide.md" />
+</available-skills>
+
+# 额外:lazy=false 的 skill 还有 body 块(当前 eager 行为)
+<skill name="api-debug" version="2">
+{SKILL.md 的 Markdown body 部分,去掉 frontmatter}
+</skill>
+# lazy=true 的 skill 没有 body 块
+```
+
+**理由**:
+- 用户明确要求(本对话):"全量加载所有可用的 skill 的简介,至于 skill 下的文件,应该用到这个 skill 的时候才加载"
+- 默认 `lazy: false` 保留现有 agent 行为 → 零 breaking change
+- 新 skill 作者可显式 `lazy: true`(适合大 skill / 不常用 skill)
+- M1 dogfood 后看 token 节省效果再考虑改默认值
+
+**Cache 影响**:Sprint #8 prompt cache anchor 仍工作 — `skill_view` 返回作为 message 进对话历史,在 cache anchor 后照常缓存。lazy skill 的"首次 skill_view"是 cold path,后续 turn 走缓存。
+
+#### 4.3.4 Mini-ADR U-16 — JSONB 单列 5MB cap
+
+**决策**:`SkillVersionRow` 加 `supporting_files: JSONB DEFAULT '{}'::jsonb`。shape:
+
+```python
+{
+    "reference/error_codes.md": {
+        "content": "...",                # base64 编码原始字节
+        "size": 1234,                    # 原始字节数(校验用)
+        "mime": "text/markdown"
+    },
+    "scripts/diagnose.py": {
+        "content": "...",
+        "size": 567,
+        "mime": "text/x-python"
+    }
+}
+```
+
+**Note**:`SKILL.md` 不在 `supporting_files` 里 — 它的 frontmatter 已经被 unpack 进 SkillVersionRow 现有的 `description` / `category` / `required_models` / `tool_names` / `authored_by` 字段;body 仍在 `prompt_fragment` 列(继续 Text 不动)。`skill_view("X", "SKILL.md")` 时 runtime 把这些字段 re-pack 成 SKILL.md 文本返回。
+
+**DB constraint**:`CHECK (octet_length(supporting_files::text) <= 5_242_880)`。单文件 1MB / 总 5MB / entries ≤ 64 在 API 层校验,DB 只兜底总大小。
+
+**理由**:
+- references / scripts 99% 是文本小文件,JSONB 5MB cap 实测够用
+- 单列查询性能足够(skill_view 不是热路径)
+- atomic 跟 SkillVersion 行 commit
+- 5MB 超过 = 用户应该拆 skill,而不是无限堆
+
+#### 4.3.5 Mini-ADR U-17 — 单 `skill_view(skill_name, path)` 工具
+
+**决策**:agent_factory 装配工具时,**只要 agent spec 含任何 skill**,就注册一个 `skill_view(skill_name, path)` 工具。无 skill 的 agent 不注册(零工具槽浪费)。
+
+**API**:
+
+```python
+async def skill_view(skill_name: str, path: str) -> str:
+    """
+    返回 skill 包内某个文件的内容。
+
+    Args:
+        skill_name: skill 的 name(从 <available-skills> 列出的)
+        path: 文件路径。
+              - "SKILL.md" 返回 frontmatter + body 完整 markdown
+              - "reference/foo.md" / "scripts/bar.py" / ... 返回 supporting file 原始内容
+
+    Returns:
+        文件文本内容(超 20KB 中间截断,跟 mcp tool 同 trim 策略)
+    """
+```
+
+返回值统一 string(二进制文件 base64 标注 + 头尾各 1KB,跟 MCP truncation 同模式)。
+
+**Path 解析**:
+- `SKILL.md`:从 SkillVersionRow 字段 re-pack 成 SKILL.md 文本返回
+- 其他 path:查 `supporting_files->>path` JSONB 字段,base64 解码 + 类型检测
+
+**理由**:对称的 mental model — `SKILL.md` 跟 supporting files 都通过同一工具访问。
+
+#### 4.3.6 Mini-ADR U-18 — Path 校验:字符 + 扩展名 + 大小,**不** allowlist 子目录命名
+
+**决策**:子目录命名完全自由(对齐 Claude Code 标准 — `reference` / `references` / `pair-agent` / `design-html` 都合法),但每段文件名字符 + 文件扩展名 + 大小有 allowlist。
+
+| 校验 | 规则 | 违规处理 |
+|------|------|---------|
+| `SKILL.md` 必须在根目录 | Claude Code 标准 | reject 整 ZIP |
+| 路径分隔 | POSIX `/`,不允许 `\` | reject |
+| 相对路径 | 任何 `..` 段 | reject |
+| 绝对路径 | 前导 `/` 或 `X:\` | reject |
+| Symlink | ZIP entry 类型 = symlink | reject |
+| 每段文件名字符 | regex `^[a-zA-Z0-9_.\-]+$` | reject |
+| 子目录嵌套深度 | ≤ 3 层 | reject |
+| 文件扩展名 allowlist | `.md / .txt / .yaml / .yml / .json / .py / .js / .ts / .sh / .toml / .html / .css / .png / .jpg / .svg`(防 `.exe` `.so` `.dylib` 等可执行) | reject |
+| 单文件大小 | < 1MB | reject |
+| 总大小 | < 5MB | reject(配合 DB CHECK 双重防御) |
+| Entries 数 | < 64 | reject |
+| 路径长度 | < 256 chars | reject |
+
+**Oracle defense**:整 ZIP reject 时只返回 generic 错误 `"invalid skill package; see docs/runbooks/skill-packaging.md"`,**不暴露具体 path / 具体规则**(防 attacker probing)。详细 reason 写 audit row 内部供 SecOps 查。
+
+#### 4.3.7 Mini-ADR U-19 — ZIP 双读 backward compat
+
+**决策**:`_skill_zip.py` 加 layout 检测,读时:
+
+```python
+if "SKILL.md" in entries and "skill.yaml" not in entries:
+    # 新格式
+    parse_skill_md(entries["SKILL.md"])
+elif "skill.yaml" in entries and "prompt.md" in entries:
+    # 老格式,合成等价 SKILL.md
+    synthesize_skill_md_from_legacy(entries)
+    warn("legacy skill package layout; please re-export to SKILL.md format")
+else:
+    reject("invalid skill package")
+```
+
+写时(export)始终输出新 SKILL.md 格式。老格式 export 路径删除。
+
+**理由**:Sprint #5 同模式(MCPServerConfig 兼容老 stdio 形态)。给用户从 M0 升 M1 一个无痛升级路径。
+
+#### 4.3.8 Mini-ADR U-20 — Admin UI 完整 mutation(CodeMirror 6 + 5 路径)
+
+**决策**:`apps/admin-ui/src/pages/SkillDetail.tsx` 重做为 file tree + editor 双栏布局,5 个 mutation 路径全实施。
+
+**新增 dep**:
+- `@uiw/react-codemirror` + `@codemirror/lang-python` + `@codemirror/lang-yaml` + `@codemirror/lang-markdown` + `@codemirror/lang-javascript`(共 ~250KB,可接受;不用 Monaco 因为 Monaco 1MB+ 且 helix admin-ui bundle 已经够大)
+- `react-diff-viewer-continued`(~80KB,diff 视图)
+
+**5 mutation 路径**(每个都创建新 SkillVersion,跟 D3 immutability 一致):
+
+| 操作 | 触发 | 行为 |
+|------|------|------|
+| Edit | 文件 hover → "Edit" 按钮 | CodeMirror 修改 → "Save" 触发 `POST /v1/skills/{id}/versions/{v}/supporting-files/{path}` → 新 SkillVersion(v+1) |
+| Upload 单文件 | "+ Add file" 按钮 + 文件选择器 + 目标子目录输入 | 同上 API,新 SkillVersion |
+| Delete | 文件 hover → "Delete" + 确认对话框("will create new version") | 新 SkillVersion(supporting_files 字典移除该 key) |
+| Rename | 文件 hover → "Rename" + 输入新 path | 新 SkillVersion(老 key 删 + 新 key 加) |
+| ZIP 整包上传 | 顶栏 "Import ZIP" | 沿用现有 ZIP roundtrip → 新 SkillVersion |
+
+每次 mutation 后 UI navigate 到新 version detail + toast "v{n+1} created"。
+
+#### 4.3.9 数据流(综合)
+
+**Build 时**(agent_factory `_load_skills` + `_assemble_system_prompt`):
+
+```
+agent spec ─→ skill refs ─→ SkillVersionRow rows
+                                  │
+                                  ├─ 取 name / description / file 列表 → 注 <available-skills>
+                                  │   (列表派生自:supporting_files JSONB keys + "SKILL.md" 始终在前)
+                                  │
+                                  └─ 若 helix.lazy == false:
+                                        将 SkillVersionRow.prompt_fragment 注入 <skill name="X">{body}</skill>
+                                     若 helix.lazy == true:
+                                        body 不注入(等 skill_view)
+```
+
+**Runtime 时**(agent 调 skill_view):
+
+```
+agent: skill_view("api-debug", "reference/error_codes.md")
+         │
+         ▼
+   skill_view 工具实现:
+         │
+         ├─ 查活跃版本(tenant_id, skill_name="api-debug", status="active") → SkillVersionRow
+         │
+         ├─ if path == "SKILL.md":
+         │       re-pack frontmatter + prompt_fragment body → 返回 markdown 文本
+         │
+         └─ else:
+                 查 supporting_files->>path → base64 decode → 返回(超 20KB 中间截断)
+```
+
+### 4.4 实施细节
+
+#### 4.4.1 文件修改清单
+
+```
+packages/helix-persistence/
+├── migrations/versions/0042_skill_supporting_files.py  (新)
+│   - skill_version.supporting_files JSONB DEFAULT '{}'
+│   - skill_version.lazy_load BOOL DEFAULT false  ← per U-15
+│   - CHECK (octet_length(supporting_files::text) <= 5_242_880)
+└── src/helix_agent/persistence/models/skill.py
+    - SkillVersionRow 加 supporting_files / lazy_load 字段
+
+packages/helix-protocol/src/helix_agent/protocol/skill.py
+    - SkillVersion pydantic 模型加字段
+    - SKILL.md frontmatter parser(helix: 命名空间提取 + 校验)
+    - SKILL.md serializer(re-pack)
+    - SkillPackageLayoutError 异常(整 ZIP reject oracle defense)
+
+services/control-plane/src/control_plane/api/_skill_zip.py
+    - 重写:加 SKILL.md detect + layout 分发
+    - U-19 backward-compat 双读
+    - U-18 path validator(整 ZIP reject oracle defense)
+    - 加 supporting_files JSONB 装配
+
+services/control-plane/src/control_plane/api/skills.py
+    - 加 POST /v1/skills/{id}/versions/{v}/supporting-files/{path}(create/update/delete)
+    - 沿用现有 audit 路径,加 SKILL_SUPPORTING_FILE_UPLOADED / SKILL_SUPPORTING_FILE_REMOVED
+
+packages/helix-protocol/src/helix_agent/protocol/audit.py
+    - AuditAction Literal 加 SKILL_SUPPORTING_FILE_UPLOADED / SKILL_SUPPORTING_FILE_REMOVED
+      (per [memory:audit-literal-drift] — 同时改 control-plane 端)
+services/control-plane/src/control_plane/audit/...
+    - 镜像 Literal 跟进
+
+services/orchestrator/src/orchestrator/tools/skill_view.py  (新)
+    - skill_view tool 实现:tenant-scoped SkillStore.fetch_supporting_file
+    - 注册逻辑:agent_factory 装配 ToolRegistry 时,if agent 有 skill → register
+
+services/orchestrator/src/orchestrator/agent_factory.py
+    - _load_skills:lazy=false skill 仍取 prompt_fragment,lazy=true 只取 metadata
+    - _assemble_system_prompt:加 <available-skills> summary block + 条件 <skill name> body block
+    - skill_view 工具条件注册
+
+packages/helix-common/src/helix_agent/common/uplift_metrics.py
+    - record_skill_view(skill, result)
+    - record_skill_zip_reject(reason)
+    - 注:reason label 必须 allowlist(oracle defense — 不暴露具体 path,但聚合统计是合法 SecOps 信号)
+
+apps/admin-ui/
+├── package.json:加 @uiw/react-codemirror + @codemirror/lang-* + react-diff-viewer-continued
+├── src/pages/SkillDetail.tsx:重做为 file tree + editor 布局
+├── src/components/SkillFileTree.tsx (新)
+├── src/components/SkillFileEditor.tsx (新,CodeMirror wrapper)
+├── src/components/SkillFilePreview.tsx (新,Markdown/code preview)
+└── src/api/skills.ts:加 supporting-files API client
+
+services/control-plane/tests/test_skill_zip_v2.py (新)
+services/control-plane/tests/test_skill_supporting_files_api.py (新)
+services/orchestrator/tests/test_skill_view_tool.py (新)
+services/orchestrator/tests/test_agent_factory_lazy_skill.py (新)
+apps/admin-ui/e2e/skill-mutations.spec.ts (新 Playwright)
+
+tools/observability/rules/uplift.yml
+    - helix:uplift:skill_view_rate:5m / :1h
+    - helix:uplift:skill_zip_reject_rate:1h
+    - alert HelixUpliftSkillZipRejectSpike(P2)
+
+docs/runbooks/skill-packaging.md (新)
+    - § 1 SKILL.md frontmatter 完整 schema(标准 + helix:)
+    - § 2 子目录约定(任意,但 reference/scripts/templates 是常见)
+    - § 3 路径校验失败排查
+    - § 4 backward compat(老 ZIP 升新格式)
+    - § 5 progressive disclosure(lazy: true 的 skill 调试)
+    - § 6 Admin UI mutation 操作流
+```
+
+#### 4.4.2 PR 拆分
+
+按 design-first 原则 + scope 大小,Sprint #3 拆 3 个 PR:
+
+1. **PR A** — `uplift/3-skill-supporting-files-design`(本 PR):仅本 § 4 + memory(如需)
+2. **PR B** — `uplift/3-skill-supporting-files-backend`:schema migration + protocol + ZIP v2 + skills API + skill_view tool + agent_factory lazy 改造 + 单测 + 集成测 + 可观测 + runbook
+3. **PR C** — `uplift/3-skill-supporting-files-admin-ui`:CodeMirror + 5 mutation UI + Playwright e2e
+
+PR C 依赖 PR B merge(API 必须先到位)。
+
+### 4.5 关键决策点(开发期可能踩)
+
+| # | 问题 | 默认 | 何时复审 |
+|---|------|------|---------|
+| 1 | helix: 命名空间 vs 顶层 helix-* 前缀 | 命名空间 | 未来 SKILL.md 标准如有命名空间规定再迁移 |
+| 2 | `lazy: false` 还是 `true` 作默认 | false(eager,backward compat) | M1 dogfood 看 token 节省后决定 |
+| 3 | binary file allowlist(`.png` / `.jpg`)是否启用 | 启用(支持 Hermes-style assets) | 5MB cap 不够时考虑 ObjectStore overflow |
+| 4 | `skill_view` 返回二进制文件如何展示 | base64 + "binary file (N bytes, mime=X)" 头 | M2 多模态加 image content block |
+| 5 | CodeMirror 6 兼容性 | React 19 兼容 | bundle size > 500KB 时考虑动态 import |
+| 6 | Audit action 是 `skill_supporting_file:uploaded` 还是 `skill:supporting_file_uploaded` | 前者(resource:verb 跟现有一致) | per [memory:audit-literal-drift] 两处 Literal 必须同步 |
+
+### 4.6 测试矩阵
+
+| 层 | 用 | 覆盖 |
+|---|----|-----|
+| Unit(frontmatter parser)| pytest parametrize | 标准最小集 / helix: 完整集 / 缺字段 / 类型错误 |
+| Unit(path validator)| pytest parametrize | 各种合法 + 各种攻击向量(`..` / 符号链接 / 绝对 / Windows / 超长 / 非法字符 / 非白名单扩展)|
+| Unit(skill_view tool)| RecordingSkillStore | SKILL.md re-pack / supporting file lookup / not found / over-size truncation |
+| Unit(agent_factory lazy)| 假 SkillStore | lazy=true 只注 summary,lazy=false 注 body,混合 |
+| Integration(ZIP roundtrip)| TestContainer Postgres + 真 ZIP | 新格式 round trip + 老格式 backward compat + 拒绝 12 种坏 ZIP |
+| Integration(supporting-files API)| FastAPI TestClient | upload / update / delete / rename,每个验新 SkillVersion 行 |
+| Integration(audit)| TestContainer | 每个 mutation 写 SKILL_SUPPORTING_FILE_* audit row |
+| E2E(Playwright)| 真 browser | 5 mutation 路径每个走通 + 文件 preview Markdown 正确 + diff 视图正确 |
+
+### 4.7 可观测
+
+```python
+# uplift_metrics.py
+def record_skill_view(*, skill: str, result: Literal["ok", "not_found", "truncated"]) -> None: ...
+def record_skill_zip_reject(*, reason: Literal[
+    "missing_skill_md",
+    "invalid_frontmatter",
+    "path_traversal",
+    "symlink",
+    "absolute_path",
+    "invalid_chars",
+    "depth_exceeded",
+    "extension_not_allowed",
+    "file_too_large",
+    "total_too_large",
+    "too_many_entries",
+    "legacy_format",  # 这条是 warn,不 reject;计数用
+]) -> None: ...
+```
+
+reason label allowlist(有限枚举,不暴露用户路径)— 跟 Sprint #1 oracle defense 同模式。
+
+**recording rules + alerts**:
+
+```yaml
+- record: helix:uplift:skill_view_rate:5m
+  expr: sum by (result) (rate(helix_uplift_skill_view_total[5m]))
+
+- record: helix:uplift:skill_zip_reject_rate:1h
+  expr: sum by (reason) (rate(helix_uplift_skill_zip_reject_total[1h]))
+
+- alert: HelixUpliftSkillZipRejectSpike
+  expr: sum(rate(helix_uplift_skill_zip_reject_total{reason!="legacy_format"}[15m])) > 0.1
+  for: 30m
+  labels:
+    severity: P2
+  annotations:
+    summary: "Skill ZIP reject rate elevated"
+    description: "User upload ZIPs are being rejected ≥ 6 / hr — check audit log for attack pattern or doc gap."
+    runbook_url: ".../skill-packaging.md"
+```
+
+### 4.8 复用矩阵
+
+| 复用面 | 来自 | 本 Sprint 用法 |
+|------|-----|----------------|
+| Oracle defense(整体 reject 不暴露细节)| Sprint #1 § 2.4 / Sprint #2 § 3.2 | ZIP reject + audit 内部记 reason,API 返 generic |
+| Audit Literal 双份漂移 | [memory:audit-literal-drift] | SKILL_SUPPORTING_FILE_* 两处 Literal 必须同步 |
+| log-injection 规避 | [memory:codeql-log-injection-request-taint] | reason / path 不进 `logger.warning(extra=)` |
+| ruff/mypy lint trap | [memory:ruff-strict-lint-traps] | pytest match=r"..." raw / pre-commit format check |
+| Admin UI 设计基线 10 条 | [memory:admin-ui-design-baseline] | CodeMirror 风格融入 dark-first / Inter+JBMono / cyan+violet brand |
+| Stream J.5 PDF 上传 path safety | Stream J.5 design | ZIP path validator 复用同套 sanitization 思路 |
+| Stream L L1 + Sprint #8 prompt cache | Stream L + Sprint #8 | lazy skill 的 skill_view 返回作为 message 走 cache anchor 后照常缓存 |
+| zero-tech-debt 6 条 | [memory:zero-tech-debt] | Sprint Exit 验收 |
+| design-first | [memory:design-first-iteration] | 本 PR(设计)先于实施 PR |
+
+### 4.9 Sprint #3 验收清单
+
+实施 PR(PR B + PR C)merge 前 hard check:
+
+- [ ] ZIP roundtrip e2e:`zip -r helix.zip ~/.claude/skills/mcp-builder/ ; upload ; skill_view ; export ; diff` 全过
+- [ ] 老 ZIP backward compat 测试:M0 三件套 ZIP 能 import + warn
+- [ ] Progressive disclosure 测试:混合 lazy=true + lazy=false skill,system prompt 内容正确,skill_view 工作
+- [ ] Admin UI 5 mutation 路径 Playwright 全过
+- [ ] 单元测试覆盖 ≥ 80%
+- [ ] CI 全绿(ruff / mypy / pre-commit / CodeQL / pytest / integration / playwright)
+- [ ] runbook 6 节齐
+- [ ] uplift.yml 新 recording rules + alert 加入
+- [ ] [memory:audit-literal-drift] 两处 Literal 同步检查通过
+- [ ] [memory:ruff-strict-lint-traps] preflight 跑过
+
+---
 
 ---
 
@@ -1458,8 +1969,8 @@ Week 4                  Week 5                  Week 6
 
 Week 7                  Week 8                  Week 9-10
 ─────────────────────────────────────────────────────
-#3 Skill 附属文件          ████████████████
-                          (含 ZIP 扩展)
+#3 Skill 附属文件          ████████████████████
+                          (SKILL.md + 子目录 + lazy + 完整 UI)
 
 Week 11                 Week 12                 Week 13
 ─────────────────────────────────────────────────────
@@ -1503,7 +2014,7 @@ Week 11                 Week 12                 Week 13
 |------------|---------------------|---------|
 | #1 | § M0→M1 Gate § Capability Uplift Sprint | — |
 | #2 | § M0→M1 Gate § Capability Uplift Sprint | — |
-| #3 | § M0→M1 Gate § Capability Uplift Sprint | M1-K J.7b-6(标"已并入") |
+| #3 | § M0→M1 Gate § Capability Uplift Sprint(含 SKILL.md 标准 + progressive disclosure 提前)| M1-K J.7b-6(supporting files,已并入)+ M1-K J.7b-3(progressive disclosure,已并入) |
 | #4 | § M0→M1 Gate § Capability Uplift Sprint(基础设施) | M1-K J.7b-1(启用调参) |
 | #5 | § M0→M1 Gate § Capability Uplift Sprint(MCP Client HTTP/SSE transport) | Mini-ADR E-5(2026-05-27 提前)+ Mini-ADR L.L8-MCP(OAuth flow 后续) |
 | #6 | § M0→M1 Gate § Capability Uplift Sprint | — |
