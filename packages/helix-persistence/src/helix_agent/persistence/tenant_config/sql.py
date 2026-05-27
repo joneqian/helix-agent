@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -11,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from helix_agent.persistence.models import TenantConfigRow
 from helix_agent.persistence.tenant_config.base import TenantConfigStore
 from helix_agent.persistence.tenant_config.memory import FirstUpsertRequiresDisplayNameError
-from helix_agent.protocol import TenantConfigPatch, TenantConfigRecord, TenantPlan
+from helix_agent.protocol import (
+    TenantConfigPatch,
+    TenantConfigRecord,
+    TenantPlan,
+    TriggerFireScanMode,
+)
 
 
 def _utc_now() -> datetime:
@@ -31,6 +37,7 @@ def _row_to_record(row: TenantConfigRow) -> TenantConfigRecord:
         mcp_servers=[dict(x) for x in row.mcp_servers],
         audit_retention_days=row.audit_retention_days,
         event_log_retention_days=row.event_log_retention_days,
+        trigger_fire_scan_mode=cast(TriggerFireScanMode, row.trigger_fire_scan_mode),
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -86,6 +93,8 @@ class SqlTenantConfigStore(TenantConfigStore):
                     values["audit_retention_days"] = patch.audit_retention_days
                 if patch.event_log_retention_days is not None:
                     values["event_log_retention_days"] = patch.event_log_retention_days
+                if patch.trigger_fire_scan_mode is not None:
+                    values["trigger_fire_scan_mode"] = patch.trigger_fire_scan_mode
                 stmt = (
                     pg_insert(TenantConfigRow)
                     .values(**values)
@@ -125,6 +134,8 @@ class SqlTenantConfigStore(TenantConfigStore):
                 existing.audit_retention_days = patch.audit_retention_days
             if patch.event_log_retention_days is not None:
                 existing.event_log_retention_days = patch.event_log_retention_days
+            if patch.trigger_fire_scan_mode is not None:
+                existing.trigger_fire_scan_mode = patch.trigger_fire_scan_mode
             existing.updated_at = _utc_now()
             existing.updated_by = actor_id
             await session.commit()

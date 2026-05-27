@@ -51,6 +51,12 @@ class TenantConfigRow(Base):
     event_log_retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("30"), default=30
     )
+    # Capability Uplift Sprint #1 — Mini-ADR U-2.
+    # ``warn`` is platform-wide default; ``block`` is opt-in for
+    # high-compliance tenants. CHECK constraint in migration 0039.
+    trigger_fire_scan_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'warn'"), default="warn"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

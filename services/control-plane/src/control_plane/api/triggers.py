@@ -33,7 +33,14 @@ from control_plane.runtime import AgentRuntime
 from control_plane.settings import Settings
 from control_plane.tenant_scope import CrossTenant, applied_scope, ensure_tenant_scope
 from control_plane.trigger_firing import fire_trigger
+from control_plane.uplift.threat_metrics import (
+    record_threat_pattern_hits,
+    record_threat_scan,
+    record_trigger_blocked,
+)
+from control_plane.uplift.threat_scan import FieldTooLargeError, scan_payload_strict
 from helix_agent.common.observability import current_trace_id_hex
+from helix_agent.common.threat_patterns import ThreatFinding
 from helix_agent.persistence import (
     ApprovalStore,
     ThreadMetaStore,
@@ -46,6 +53,7 @@ from helix_agent.persistence.rls import (
     current_tenant_id_var,
     current_user_id_var,
 )
+from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import (
     AuditAction,
@@ -103,6 +111,80 @@ def _validate_config(kind: TriggerKind, name: str, config: dict[str, Any]) -> No
         raise HTTPException(status_code=422, detail="config['expr'] is not a valid cron expression")
 
 
+# Capability Uplift Sprint #1 (Mini-ADR U-2 Layer A) — strict scan.
+# Module-private generic 422 message: oracle-safe; the matched
+# ``pattern_id`` lives in the audit row, never in the response body.
+_INJECTION_BLOCK_DETAIL = (
+    "prompt blocked by injection scanner; see audit log for details"
+)
+
+
+async def _scan_trigger_strict(
+    *,
+    name: str,
+    config: dict[str, Any],
+    tenant_id: UUID,
+    actor_id: str,
+    audit: AuditLogger,
+) -> None:
+    """Strict-scope scan; raise ``HTTPException(422)`` on hit.
+
+    Emits ``TRIGGER_PROMPT_INJECTION_BLOCKED`` audit + bumps Prometheus
+    counters before raising. Log lines deliberately omit the matched
+    pattern_id to avoid log poisoning.
+    """
+    try:
+        result = scan_payload_strict(name=name, config=config)
+    except FieldTooLargeError as exc:
+        # Generic message; no field content in the response body.
+        record_threat_scan(scope="strict", result="blocked")
+        record_trigger_blocked(phase="create")
+        raise HTTPException(
+            status_code=422,
+            detail=f"trigger field too large for security scan (path={exc.path}, "
+            f"limit={exc.length} bytes)",
+        ) from exc
+    if result is None:
+        record_threat_scan(scope="strict", result="clean")
+        return
+    field_path, findings = result
+    record_threat_scan(scope="strict", result="blocked")
+    record_threat_pattern_hits(findings, scope="strict")
+    record_trigger_blocked(phase="create")
+    await emit(
+        audit,
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        action=AuditAction.TRIGGER_PROMPT_INJECTION_BLOCKED,
+        resource_type="trigger",
+        trace_id=current_trace_id_hex(),
+        details={
+            "scope": "strict",
+            "field": field_path,
+            "pattern_count": len(findings),
+            "findings": [_finding_to_dict(f) for f in findings],
+        },
+    )
+    logger.warning(
+        "trigger.scan_blocked",
+        extra={
+            "tenant_id": str(tenant_id),
+            "field": field_path,
+            "pattern_count": len(findings),
+        },
+    )
+    raise HTTPException(status_code=422, detail=_INJECTION_BLOCK_DETAIL)
+
+
+def _finding_to_dict(f: ThreatFinding) -> dict[str, Any]:
+    return {
+        "pattern_id": f.pattern_id,
+        "category": f.category,
+        "severity": f.severity,
+        "excerpt": f.excerpt,
+    }
+
+
 class _CreateTriggerBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -154,6 +236,10 @@ def _get_settings(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
+def _get_tenant_config_store(request: Request) -> TenantConfigStore:
+    return request.app.state.tenant_config_repo  # type: ignore[no-any-return]
+
+
 def build_triggers_router() -> APIRouter:
     """Stream J.10 — authenticated trigger CRUD."""
     router = APIRouter(prefix="/v1/triggers", tags=["triggers"])
@@ -170,6 +256,13 @@ def build_triggers_router() -> APIRouter:
         tenant_id: UUID = request.state.tenant_id
         actor_id: str = request.state.actor_id
         _validate_config(body.kind, body.name, body.config)
+        await _scan_trigger_strict(
+            name=body.name,
+            config=body.config,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            audit=audit,
+        )
 
         # Scheduler quota (Mini-ADR J-26 (2)) — cap a tenant's cron
         # triggers so a runaway client cannot flood the scheduler.
@@ -286,6 +379,13 @@ def build_triggers_router() -> APIRouter:
         new_config = body.config if body.config is not None else record.config
         if body.config is not None:
             _validate_config(record.kind, record.name, new_config)
+            await _scan_trigger_strict(
+                name=record.name,
+                config=new_config,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                audit=audit,
+            )
         updated = record.model_copy(
             update={
                 "enabled": body.enabled if body.enabled is not None else record.enabled,
@@ -347,6 +447,7 @@ def build_webhooks_router() -> APIRouter:
         runtime: Annotated[AgentRuntime, Depends(_get_runtime)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         approvals: Annotated[ApprovalStore, Depends(_get_approval_store)],
+        tenant_configs: Annotated[TenantConfigStore, Depends(_get_tenant_config_store)],
         secret: Annotated[str | None, Header(alias=_WEBHOOK_HEADER_NAME)] = None,
     ) -> JSONResponse:
         """Fire a webhook trigger. Auth = the per-trigger secret token."""
@@ -387,6 +488,7 @@ def build_webhooks_router() -> APIRouter:
                 audit_logger=audit,
                 approval_store=approvals,
                 trigger_store=triggers,
+                tenant_config_store=tenant_configs,
             )
             if run_id is None:
                 raise HTTPException(status_code=503, detail="trigger agent unavailable")

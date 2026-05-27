@@ -454,6 +454,9 @@ def create_app(
             approval_store=resolved_approval_store,
             interval_s=resolved_settings.trigger_scheduler_interval_s,
             batch_size=resolved_settings.trigger_scheduler_batch_size,
+            # Capability Uplift Sprint #1 — fire-time scan reads
+            # tenant_config.trigger_fire_scan_mode (Mini-ADR U-2 Layer B).
+            tenant_config_store=resolved_tenant_config_repo,
         )
         if enable_scheduler
         else None
