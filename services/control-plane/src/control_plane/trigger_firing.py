@@ -29,9 +29,16 @@ from langchain_core.runnables import RunnableConfig
 
 from control_plane.audit import emit
 from control_plane.runtime import AgentRuntime
+from control_plane.uplift.threat_metrics import (
+    record_threat_pattern_hits,
+    record_threat_scan,
+    record_trigger_blocked,
+)
 from helix_agent.common.observability import current_trace_id_hex, helix_counter
+from helix_agent.common.threat_patterns import ThreatFinding, scan_for_threats
 from helix_agent.persistence import ApprovalStore, ThreadMetaStore, TriggerStore
 from helix_agent.persistence.agent_spec import AgentSpecStore
+from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.protocol import AgentSpecStatus, AuditAction, TriggerRecord
 from helix_agent.runtime.audit.logger import AuditLogger
 from orchestrator import AgentFactoryError, run_agent
@@ -45,6 +52,94 @@ _triggers_fired = helix_counter(
 )
 
 
+async def _resolve_fire_scan_mode(
+    *,
+    tenant_id: UUID,
+    tenant_config_store: TenantConfigStore | None,
+) -> str:
+    """Read ``tenant_config.trigger_fire_scan_mode``; default ``warn``.
+
+    No tenant_config row or no store → ``warn`` (platform-wide default).
+    """
+    if tenant_config_store is None:
+        return "warn"
+    record = await tenant_config_store.get(tenant_id=tenant_id)
+    if record is None:
+        return "warn"
+    return record.trigger_fire_scan_mode
+
+
+def _finding_to_dict(f: ThreatFinding) -> dict[str, Any]:
+    return {
+        "pattern_id": f.pattern_id,
+        "category": f.category,
+        "severity": f.severity,
+        "excerpt": f.excerpt,
+    }
+
+
+async def _scan_fire_time(
+    *,
+    seed_text: str,
+    trigger: TriggerRecord,
+    audit_logger: AuditLogger,
+    tenant_config_store: TenantConfigStore | None,
+) -> bool:
+    """Context-scope scan; return True if firing should be aborted (block).
+
+    Emits one of:
+
+    - ``trigger:prompt_injection_warn`` + return False (continue firing) when
+      ``tenant_config.trigger_fire_scan_mode == "warn"`` (default).
+    - ``trigger:prompt_injection_blocked`` + return True (abort) when mode is
+      ``"block"``.
+
+    Clean payload → no audit row, returns False. Per Mini-ADR U-2 Layer B.
+    """
+    findings = scan_for_threats(seed_text, scope="context")
+    if not findings:
+        record_threat_scan(scope="context", result="clean")
+        return False
+
+    mode = await _resolve_fire_scan_mode(
+        tenant_id=trigger.tenant_id, tenant_config_store=tenant_config_store
+    )
+    record_threat_pattern_hits(findings, scope="context")
+    record_threat_scan(scope="context", result="blocked" if mode == "block" else "warned")
+    action = (
+        AuditAction.TRIGGER_PROMPT_INJECTION_BLOCKED
+        if mode == "block"
+        else AuditAction.TRIGGER_PROMPT_INJECTION_WARN
+    )
+    await emit(
+        audit_logger,
+        tenant_id=trigger.tenant_id,
+        actor_id=f"trigger:{trigger.id}",
+        action=action,
+        resource_type="trigger",
+        resource_id=str(trigger.id),
+        trace_id=current_trace_id_hex(),
+        details={
+            "scope": "context",
+            "mode": mode,
+            "pattern_count": len(findings),
+            "findings": [_finding_to_dict(f) for f in findings],
+        },
+    )
+    if mode == "block":
+        record_trigger_blocked(phase="fire")
+        logger.error(
+            "trigger_firing.scan_blocked",
+            extra={"trigger_id": str(trigger.id), "pattern_count": len(findings)},
+        )
+        return True
+    logger.warning(
+        "trigger_firing.scan_warned",
+        extra={"trigger_id": str(trigger.id), "pattern_count": len(findings)},
+    )
+    return False
+
+
 async def fire_trigger(
     trigger: TriggerRecord,
     *,
@@ -55,6 +150,7 @@ async def fire_trigger(
     audit_logger: AuditLogger,
     approval_store: ApprovalStore,
     trigger_store: TriggerStore,
+    tenant_config_store: TenantConfigStore | None = None,
 ) -> UUID | None:
     """Start a run for ``trigger``; return the new ``run_id``, or ``None``.
 
@@ -110,6 +206,17 @@ async def fire_trigger(
         if isinstance(seed, str) and seed.strip()
         else f"Scheduled run of trigger '{trigger.name}'."
     )
+
+    # Capability Uplift Sprint #1 (Mini-ADR U-2 Layer B) — fire-time scan.
+    blocked = await _scan_fire_time(
+        seed_text=seed_text,
+        trigger=trigger,
+        audit_logger=audit_logger,
+        tenant_config_store=tenant_config_store,
+    )
+    if blocked:
+        return None
+
     graph_input = {
         "messages": [
             SystemMessage(content=built.system_prompt),

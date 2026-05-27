@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,7 +30,15 @@ __all__ = [
     "TenantConfigPatch",
     "TenantConfigRecord",
     "TenantPlan",
+    "TriggerFireScanMode",
 ]
+
+# Capability Uplift Sprint #1 — Mini-ADR U-2.
+# ``warn`` is the platform-wide default: a fire-time injection match
+# emits ``TRIGGER_PROMPT_INJECTION_WARN`` and the run still starts.
+# High-compliance tenants opt in to ``block``: a match emits
+# ``TRIGGER_PROMPT_INJECTION_BLOCKED`` and the run does not start.
+TriggerFireScanMode = Literal["warn", "block"]
 
 
 class TenantPlan(StrEnum):
@@ -75,6 +83,8 @@ class TenantConfigRecord(BaseModel):
     event_log_retention_days: int = Field(
         default=30, ge=_RETENTION_MIN_DAYS, le=_RETENTION_MAX_DAYS
     )
+    # Capability Uplift Sprint #1 — Mini-ADR U-2.
+    trigger_fire_scan_mode: TriggerFireScanMode = "warn"
     created_at: datetime
     updated_at: datetime
     updated_by: str
@@ -104,3 +114,5 @@ class TenantConfigPatch(BaseModel):
     event_log_retention_days: int | None = Field(
         default=None, ge=_RETENTION_MIN_DAYS, le=_RETENTION_MAX_DAYS
     )
+    # Capability Uplift Sprint #1 — Mini-ADR U-2.
+    trigger_fire_scan_mode: TriggerFireScanMode | None = None

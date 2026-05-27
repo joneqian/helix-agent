@@ -46,6 +46,7 @@ from helix_agent.persistence.rls import (
     current_tenant_id_var,
     current_user_id_var,
 )
+from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.protocol import TriggerRecord, TriggerRunRecord, TriggerRunStatus
 from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.runs import RunStatus, RunStore
@@ -141,6 +142,8 @@ class TriggerScheduler:
         approval_store: ApprovalStore,
         interval_s: int,
         batch_size: int = 100,
+        # Capability Uplift Sprint #1 — Mini-ADR U-2 Layer B.
+        tenant_config_store: TenantConfigStore | None = None,
     ) -> None:
         if interval_s <= 0:
             msg = "interval_s must be positive"
@@ -155,6 +158,7 @@ class TriggerScheduler:
         self._approvals = approval_store
         self._interval_s = interval_s
         self._batch_size = batch_size
+        self._tenant_config_store = tenant_config_store
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
 
@@ -235,6 +239,7 @@ class TriggerScheduler:
             audit_logger=self._audit,
             approval_store=self._approvals,
             trigger_store=self._triggers,
+            tenant_config_store=self._tenant_config_store,
         )
 
     # -- pass 2: reconcile fired firings against their run outcome -------

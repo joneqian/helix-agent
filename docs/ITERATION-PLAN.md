@@ -26,11 +26,11 @@
 | **M0 — Product-grade MVP** | 8-10 周 | **5-7 个月** | 1 个 dogfood 业务 E2E + 全 24 P0 |
 | **Stream K — Capability Hardening Sprint** | — | **7-10 周** | 13 条 (c) 类弱版补到生产级；先于 Stream J 剩余子项 |
 | **Stream L — Hermes-derived 单 turn 能力强化 sprint** | — | **4-6 周** | 8 条 Hermes 单 turn 成熟能力补到生产级；与 Stream J 剩余子项并行 |
-| **M0→M1 Gate** | — | 2-4 周 | dogfood 平行运行 30 天，参数对比 |
-| **M1 — 生产化** | 10-12 周 | **6-8 个月** | 多租户、Sub-Agent、Python 插槽、Envoy/Vault dynamic、可观测、Admin UI 全功能 |
-| **M2 — Durable + Multi-agent** | 8-10 周 | **5-6 个月** | 长会话恢复、Plan-Execute、HITL、Memory 三层、Eval gate |
+| **M0→M1 Gate**（含 Capability Uplift Sprint） | — | **12-13 周** | 30 天稳定性观察 + 安全演练 + **Capability Uplift Sprint 8 项 gap 提前**（gap report 5 + Memory 深化 3，详见 [§ Capability Uplift Sprint](#capability-uplift-sprint12-13-周与-30-天稳定性观察期并行)） |
+| **M1 — 生产化**（减除已提前 4 项） | 10-12 周 | **5-7 个月** | 多租户、Sub-Agent、Python 插槽、Envoy/Vault dynamic、可观测；含 J.7b 7 项 + #4/#5/#7/#8 启用调参 |
+| **M2 — Durable + Multi-agent** | 8-10 周 | **5-6 个月** | 长会话恢复、Plan-Execute、HITL、Memory 三层（含 #7 凝结引擎已提前）、Eval gate |
 | **M3 — K8s + 生态** | 持续 | 持续 | Helm、K8s 沙盒、A2A、内部 marketplace |
-| **总计到 M2 product-ready** | ~6-8 个月 | **~16-20 个月** | |
+| **总计到 M2 product-ready** | ~6-8 个月 | **~17-21 个月** | 含 Capability Uplift Sprint 12-13 周；M1 因 4 项提前而缩短 |
 
 > **现实校验**：单人做"全 24 P0 + M0→M3"是 1.5-2 年量级的项目。若进入实施后发现耗时偏离严重，建议在 M0→M1 Gate 节点重新评估，砍掉 P2 / 推迟部分 P1 / 引入第二个人。
 
@@ -611,6 +611,54 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] K14 WORM 恢复 staging 1 次
 - [ ] K13 KMS 轮换 staging 1 次
 
+### Capability Uplift Sprint（~12-13 周；与 30 天稳定性观察期并行）
+
+参考：[../research/capability-uplift-plan.md](../research/capability-uplift-plan.md)（详细排期 + 依赖图）；[../research/helix-vs-hermes-gap.md](../research/helix-vs-hermes-gap.md)（gap 评估 + 优先级判定）
+
+> **2026-05-27 新增** —— 基于 [`helix-vs-hermes-gap.md`](../research/helix-vs-hermes-gap.md) 5 条 gap + Memory 系统深化讨论 3 条 = **8 项能力提升**。按"能提前的尽量提前 ── 不挑成本"原则，**8 项全部启动**：6 项 Gate 期内完整完成，2 项基础设施完成（启用 / 调参按 M1 节奏）。**不打破 M0 阶段标签**，作为 Gate 期附加 sprint，与 30 天稳定性观察、eval baseline、安全演练并行。
+
+**P0 — 安全 / 合规盲点（必须 Gate 内完成）**
+
+- [ ] **#1 Cron prompt 注入扫描（含隐形 Unicode）** —— `helix-common` 抽威胁模式库 + `services/control-plane/api/triggers.py` create/update 严扫 + `trigger_firing.py` 拼完 skill 后宽扫 + 新 audit action `TRIGGER_PROMPT_INJECTION_BLOCKED`。借鉴 Hermes `tools/cronjob_tools.py:68-200` 的双层扫描思路。**Week 1，~3 天**。
+- [ ] **#2 Memory 投毒防御 + drift backup** —— `MemoryStore.write/recall` 复用 #1 威胁模式库；写时扫拒入（可选 strict mode）+ 读时扫中毒条目替换为 `[BLOCKED:...]` 占位符（live 保留原文给用户审）+ drift detection 检测外部直改 DB；新 audit action `MEMORY_INJECTION_BLOCKED` / `MEMORY_DRIFT_DETECTED`。**Week 2-3，~1.5 周**。前置：#1 威胁模式库已抽到 `helix-common`。
+
+**P1 — Operator / IDE experience**
+
+- [ ] **#5 MCP Server** —— `FastMCP` lib 包装现有 control-plane API；M0 仅暴露 6 个**读权限**工具（conversations_list / conversation_get / messages_read / events_poll / events_wait / channels_list），写权限（messages_send / permissions_respond）留 M1 后期；auth 复用现有 OIDC + 可选 MCP-specific token；RLS 复用 tenant_scope。**Week 4-6，~2 周**。
+
+**P1 — Memory 系统深化**
+
+- [ ] **#6 Memory hybrid retrieval（向量 + 全文 RRF）** —— `memory_item` 加 tsvector 列（迁移 0039）+ 自动 trigger 维护；`MemoryStore.recall()` 直接 port `J.5 KnowledgeRetriever`（hybrid + RRF rerank）；K.K12 eval baseline 重跑 + 锁新 baseline；per-tenant manifest 可关闭 hybrid 回退纯向量。**Week 4-5，~1.5 周**（与 #5 并行）。
+- [ ] **#8 Memory frozen snapshot / 前缀缓存优化** —— `memory_recall_node` 加 `per_session` 召回模式（vs 默认 `per_turn`）；L.L1 prompt caching middleware 适配 cache_control 加在 memory block 末尾；manifest `policies.memory_recall_mode` 字段。**Week 5-6，~1.5 周**（与 #5 / #6 并行）。
+
+**P2 — Skill 库进化基础**
+
+- [ ] **#3 Skill 附属文件（references / templates / scripts）** —— `skill_version.supporting_files` JSONB 列（迁移 0040）+ `skill_manager_tool` 加 `write_file` / `remove_file` action + agent_factory 加载 skill 时按需暴露 `skill_view(name, "references/...")` 三层 API + ZIP import/export 支持子目录 + Admin UI Skills page 文件浏览。**直接抄 Hermes 目录约定 + 用途分工**（references=session 细节 / templates=可复用 / scripts=可执行），省 1-2 轮 ADR。**Week 7-10，~2 周**。
+- [ ] **#4 Curator 自动状态机（基础设施）** —— `SkillRow` 加 `pinned: bool` + `last_activity_at: timestamptz`（迁移 0041）+ 新建 `services/control-plane/skill_curator.py` 周期 worker 纯启发式三态转移（默认 30 天 → stale / 90 天 → archived，per-tenant 可配）+ Admin UI Skills page pin 操作 + 状态显示。**基础设施 Gate 期内完成**；启用阈值调参等 J.7b-1 上线后看真实膨胀率（M1-K 期间）。**Week 11-12，~1 周**。
+- [ ] **#7 Memory 短期 → 长期凝结引擎（基础设施）** —— 新建 `services/control-plane/memory_consolidator.py` 凝结引擎本体（识别反复事实 trigger + 用 Haiku 等辅助模型总结 N 轮对话窗口 → 写 long-term memory）+ 防误学约束（参考 Hermes Skill review prompt "什么坚决别写"4 条分类：环境性失败 / 负面工具断言 / session-specific transient errors / one-off task narratives）+ M2-C archive 流水线接口预留。**基础设施 Gate 期内完成**；触发策略 + 阈值调优等 M1 dogfood 数据反过来调。**Week 11-13，~3 周**。
+
+**Sprint Verification**：
+
+- 8 项按零债 6 条核验（无 TODO / 测试达标 / 文档同步 / 可观测齐全 / CI 全绿 / bug 不遗留）
+- 每项 PR merge 前 K.K12 + J.13a baseline 回放无退化（≥ 5% 退化卡 PR）
+- 30 天稳定性观察期不被搅动（SLO 实时采集，破任一立刻 retro）
+- schema 变更（#3 迁移 0040 / #4 迁移 0041）**串行上 main**（先 #3 跑 1 周再上 #4），不并行降风险
+
+**M1 期间需要做的事项**（仅启用 + 调参，非新能力开发）：
+
+- **#4 Curator 阈值调参**：J.7b-1 agent 自创建 skill 上线后跑 2-4 周看真实膨胀率，按需把默认 30/90 阈值改 7/30
+- **#5 MCP Server 写权限暴露**：M1 后期把 messages_send / permissions_respond 暴露给 IDE 用户，RLS 跨租户审计验证后
+- **#7 凝结触发策略调优**：M1 dogfood 数据反过来调"什么时候凝结" + "凝结多深" + 防误学约束的真实失败模式
+- **#8 frozen snapshot 默认启用条件**：客户成本报告里 memory recall cache miss > 15% 时让 `per_session` 成为 manifest 默认
+
+**Risk 缓解**（详见 capability-uplift-plan.md § Risk）：
+
+- 12-13 周单人扛不住 → 拆 "前 6 周（#1 #2 #5 #6 #8）+ 后 6-7 周（#3 #4 #7）" 两个 mini-sprint，中间留 1-2 周 dogfood observation
+- #2 写时扫影响 J.3 deploy 性能 → 默认仅 read 扫，write 扫为可选 strict mode
+- #5 写权限副作用 → 本期不出写权限工具，留 M1
+- #6 hybrid 某 query 退化 → per-tenant 可关回退纯向量
+- #4 / #7 基础设施重做风险 → 模块化 + manifest 可关，接受 10-20% 重做换 6-12 个月提前价值
+
 **决策点**：全部勾完 → 进 M1；否则选项 A 再走一轮 30 天 / B 暂停修复 / C 回退架构
 
 ---
@@ -689,12 +737,12 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 > **2026-05-21 补加**（J.7a 启动前 deer-flow 对比调研后用户复审）：M0 J.7a 锁 8 项进 M0 scope；以下 8 项 (c) 红线推迟到 M1，必须显式落 backlog 不丢失（按 [memory:no-design-choice-disguise] + [memory:zero-tech-debt]）。参考：STREAM-J-DESIGN § 15 + Mini-ADR J-23（2026-05-21 修订）。
 
-- [ ] **J.7b-1 agent 进化工具**（`author_skill` / `refine_skill`）—— agent 在 run 期沉淀新 skill 进 draft；用户审批后切 active；带 audit + 速率限制
+- [ ] **J.7b-1 agent 进化工具**（`author_skill` / `refine_skill`）—— agent 在 run 期沉淀新 skill 进 draft；用户审批后切 active；带 audit + 速率限制。**[2026-05-27 关联]** 上线后启动 **Capability Uplift Sprint #4 Curator 自动状态机调参**（基础设施已在 Gate 期完成，跑 2-4 周看真实 skill 库膨胀率，按需把默认 30/90 阈值改 7/30）；**防误学约束**优先参考 Hermes Skill review prompt "什么坚决别写" 4 条分类（已在 Sprint #7 沉淀进 memory consolidator，可同源复用）
 - [ ] **J.7b-2 `code` 字段执行边界** —— `SkillVersion.code: str | None` 解禁；依赖 M1-F2 Python 插槽 + sandbox（gVisor 7/7 用例通过）+ AST 静态校验
 - [ ] **J.7b-3 Progressive / lazy skill loading** —— agent 引用时才注入 skill prompt（非 build-time 静态拼）；与 M0 静态拼共存模式可配
 - [ ] **J.7b-4 LLM-based admin content moderation** —— 升级 M0 的正则 deny-list 到 LLM 审核（用 Haiku judge 模式）；依赖 stable LLM router + budget cap
 - [ ] **J.7b-5 Public / system skill 内置库** —— `system` 占位 tenant + 20+ 内置模板（参考 deer-flow `/skills/public`）；可被任意 tenant 引用 + override；fork 模式
-- [ ] **J.7b-6 Supporting files / 附件** —— skill 含 `scripts/templates/references/` 子目录；agent 按需读 / 不主动执行；`.skill` ZIP 扩展到带子目录
+- [ ] **J.7b-6 Supporting files / 附件** —— skill 含 `scripts/templates/references/` 子目录；agent 按需读 / 不主动执行；`.skill` ZIP 扩展到带子目录。**[2026-05-27 提前]** 已并入 **Capability Uplift Sprint #3**，在 Gate 期 Week 7-10 完成（vs 原计划 M1-K 期）；M1-K 仅做 J.7b 其他 7 项
 - [ ] **J.7b-7 Per-agent skill 启停细化** —— 按 agent role / context 临时启停某 skill；当前 M0 仅按 manifest 静态控制
 - [ ] **J.7b-8 Skill UI 元数据** —— `icon` / `color` / `display_name` 字段；M1-I Admin UI 升级一并接入
 
@@ -711,9 +759,13 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] Falco 运行时安全监控（落实 P1 Falco）
 
 #### M1-I CLI + Admin UI 升级（~3 周）
+
+> **[2026-05-27 关联]** MCP Server（让 Claude Code / Cursor 反向访问 helix sessions / runs / approvals）作为同主题 operator experience 升级在 **Capability Uplift Sprint #5** 已提前到 Gate 期：基础设施 + 6 个读权限工具（conversations_list / messages_read / events_poll 等）M0 完成；M1-I 期仅补写权限工具暴露（RLS 审计验证后）。
+
 - [ ] `helix lint` + `helix run`（本地跑 manifest）
 - [ ] Admin UI：版本对比、灰度面板、Vault secret 管理
 - [ ] JSON Schema 发布（VS Code/IntelliJ 自动补全）
+- [ ] **MCP Server 写权限暴露**（messages_send / permissions_respond）—— Capability Uplift Sprint #5 的 Gate 期产出基础上 + 写权限 RLS 跨租户审计验证
 
 #### M1-J 第二个 dogfood 业务（~4 周）
 参考：[architecture/04-ROADMAP](./architecture/04-ROADMAP.md) §"Dogfood 计划"
@@ -768,13 +820,15 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 #### M2-C Memory archive 层（~2 周；范围明确化）
 
 > **2026-05-20 范围明确化**：J.3 long-term memory + K6/K7 CRUD/DLQ + L2 summarization 已覆盖 working + summarization；M2-C 真正新的只是 archive 层（冷热分层 + 自动晋升 / 召回）。
+>
+> **[2026-05-27 关联]** Memory 短期 → 长期自动凝结引擎已作为 **Capability Uplift Sprint #7** 在 Gate 期完成基础设施（凝结引擎本体 + 防误学约束）；M2-C 直接对接凝结引擎输出的 long-term entries（archive 流水线接口已在 Sprint #7 预留）；M1 期间用 dogfood 数据调凝结触发策略，M2-C 启动时 archive 路径直接挂凝结后的 long-term 数据。
 
 参考：[research/04-deerflow-source-analysis.md](./research/04-deerflow-source-analysis.md) §"Memory"
 - [ ] **memory archive 表 + 冷热分层**（working hot in pgvector / archive cold in S3）
 - [ ] **自动晋升策略**（按访问频次 / 时间衰减 → archive）
 - [ ] **archive 召回路径**（按需 promote 回 working）
 
-历史项（已覆盖）：~~working layer~~ → 已在 **J.3 + K6/K7**；~~summarization layer~~ → 已在 **L2 ContextCompressor**
+历史项（已覆盖）：~~working layer~~ → 已在 **J.3 + K6/K7**；~~summarization layer~~ → 已在 **L2 ContextCompressor**；~~consolidation engine~~ → 已在 **Capability Uplift Sprint #7（Gate 期）**
 
 #### M2-D Eval Gate + 持续改进 pipeline（~3 周；合并 J.12 + J.13b/c）
 

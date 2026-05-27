@@ -129,6 +129,7 @@ from helix_agent.protocol.tenant_config import (
     TenantConfigPatch,
     TenantConfigRecord,
     TenantPlan,
+    TriggerFireScanMode,
 )
 from helix_agent.protocol.tenant_user import TenantUser
 from helix_agent.protocol.thread_meta import ThreadMeta, ThreadStatus
@@ -253,6 +254,7 @@ __all__ = [
     "TokenReservationRecord",
     "ToolSpecEntry",
     "TrajectoryOutcome",
+    "TriggerFireScanMode",
     "TriggerKind",
     "TriggerRecord",
     "TriggerRunRecord",

@@ -90,6 +90,9 @@ class AuditAction(StrEnum):
     TRIGGER_UPDATE = "trigger:update"
     TRIGGER_DELETE = "trigger:delete"
     TRIGGER_FIRE = "trigger:fire"
+    # triggers — Capability Uplift Sprint #1 (Mini-ADR U-2)
+    TRIGGER_PROMPT_INJECTION_BLOCKED = "trigger:prompt_injection_blocked"
+    TRIGGER_PROMPT_INJECTION_WARN = "trigger:prompt_injection_warn"
     # curation / eval-dataset (Stream J.12 — Mini-ADR J-43)
     EVAL_DATASET_CREATE = "eval_dataset:create"
     EVAL_DATASET_UPDATE = "eval_dataset:update"
