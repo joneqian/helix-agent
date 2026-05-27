@@ -39,12 +39,12 @@ from typing import Final, Literal
 ScanScope = Literal["all", "context", "strict"]
 
 ThreatCategory = Literal[
-    "injection",          # classic prompt-injection ("ignore previous instructions")
-    "exfil",              # exfil via curl/wget/cat secrets
-    "role_hijack",        # "you are now X" / "pretend you are X"
-    "c2",                 # C2 framework vocabulary / behaviors
-    "persistence",        # SSH backdoor / config file overwrite
-    "secrets",            # hardcoded credentials
+    "injection",  # classic prompt-injection ("ignore previous instructions")
+    "exfil",  # exfil via curl/wget/cat secrets
+    "role_hijack",  # "you are now X" / "pretend you are X"
+    "c2",  # C2 framework vocabulary / behaviors
+    "persistence",  # SSH backdoor / config file overwrite
+    "secrets",  # hardcoded credentials
     "invisible_unicode",  # zero-width / bidi / invisible math
 ]
 

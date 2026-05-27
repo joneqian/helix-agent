@@ -140,9 +140,9 @@ def _injection_seed() -> str:
 async def test_fire_clean_prompt_succeeds_without_warn_audit() -> None:
     ctx = await _build_ctx()
     trigger = _trigger(seed_input="Summarise last week's open PRs.")
-    run_id = await fire_trigger(trigger, now=_NOW, **{
-        k: v for k, v in ctx.items() if k != "audit_store"
-    })
+    run_id = await fire_trigger(
+        trigger, now=_NOW, **{k: v for k, v in ctx.items() if k != "audit_store"}
+    )
     assert run_id is not None
     await _drain(ctx, run_id)
     actions = await _audit_actions(ctx)
@@ -160,9 +160,9 @@ async def test_fire_drift_with_default_warn_emits_audit_and_fires() -> None:
     """No tenant_config row → default mode = ``warn``."""
     ctx = await _build_ctx()
     trigger = _trigger(seed_input=_injection_seed())
-    run_id = await fire_trigger(trigger, now=_NOW, **{
-        k: v for k, v in ctx.items() if k != "audit_store"
-    })
+    run_id = await fire_trigger(
+        trigger, now=_NOW, **{k: v for k, v in ctx.items() if k != "audit_store"}
+    )
     assert run_id is not None, "warn mode must still fire"
     await _drain(ctx, run_id)
     actions = await _audit_actions(ctx)
@@ -174,9 +174,9 @@ async def test_fire_drift_with_default_warn_emits_audit_and_fires() -> None:
 async def test_fire_drift_with_explicit_warn_emits_audit_and_fires() -> None:
     ctx = await _build_ctx(fire_scan_mode="warn")
     trigger = _trigger(seed_input=_injection_seed())
-    run_id = await fire_trigger(trigger, now=_NOW, **{
-        k: v for k, v in ctx.items() if k != "audit_store"
-    })
+    run_id = await fire_trigger(
+        trigger, now=_NOW, **{k: v for k, v in ctx.items() if k != "audit_store"}
+    )
     assert run_id is not None
     await _drain(ctx, run_id)
     actions = await _audit_actions(ctx)
@@ -187,9 +187,9 @@ async def test_fire_drift_with_explicit_warn_emits_audit_and_fires() -> None:
 async def test_fire_drift_with_block_returns_none_and_emits_audit() -> None:
     ctx = await _build_ctx(fire_scan_mode="block")
     trigger = _trigger(seed_input=_injection_seed())
-    run_id = await fire_trigger(trigger, now=_NOW, **{
-        k: v for k, v in ctx.items() if k != "audit_store"
-    })
+    run_id = await fire_trigger(
+        trigger, now=_NOW, **{k: v for k, v in ctx.items() if k != "audit_store"}
+    )
     assert run_id is None, "block mode must refuse to fire"
     actions = await _audit_actions(ctx)
     assert "trigger:prompt_injection_blocked" in actions
@@ -202,9 +202,9 @@ async def test_fire_block_does_not_advance_last_fired_at() -> None:
     ctx = await _build_ctx(fire_scan_mode="block")
     trigger = _trigger(seed_input=_injection_seed())
     await ctx["trigger_store"].create(trigger)
-    run_id = await fire_trigger(trigger, now=_NOW, **{
-        k: v for k, v in ctx.items() if k != "audit_store"
-    })
+    run_id = await fire_trigger(
+        trigger, now=_NOW, **{k: v for k, v in ctx.items() if k != "audit_store"}
+    )
     assert run_id is None
     refreshed = await ctx["trigger_store"].get(trigger_id=trigger.id, tenant_id=_TENANT)
     assert refreshed is not None

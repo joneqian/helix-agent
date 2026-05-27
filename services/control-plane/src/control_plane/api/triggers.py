@@ -114,9 +114,7 @@ def _validate_config(kind: TriggerKind, name: str, config: dict[str, Any]) -> No
 # Capability Uplift Sprint #1 (Mini-ADR U-2 Layer A) — strict scan.
 # Module-private generic 422 message: oracle-safe; the matched
 # ``pattern_id`` lives in the audit row, never in the response body.
-_INJECTION_BLOCK_DETAIL = (
-    "prompt blocked by injection scanner; see audit log for details"
-)
+_INJECTION_BLOCK_DETAIL = "prompt blocked by injection scanner; see audit log for details"
 
 
 async def _scan_trigger_strict(
