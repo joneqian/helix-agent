@@ -1,6 +1,6 @@
 """Stream O Mini-ADR O-3 — CredentialsResolver contract.
 
-Covers the 4 mode × role paths + 4 failure paths:
+Covers the 4 mode x role paths + 4 failure paths:
 
 * platform / provider OK
 * platform / tool OK
@@ -32,8 +32,8 @@ _TENANT = UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")
 def _record(
     *,
     mode: str,
-    model_creds: dict | None = None,
-    tool_creds: dict | None = None,
+    model_creds: dict[str, str] | None = None,
+    tool_creds: dict[str, str] | None = None,
 ) -> TenantConfigRecord:
     return TenantConfigRecord(
         tenant_id=_TENANT,
@@ -59,8 +59,8 @@ class _FakeTenantConfigGetter:
 def _resolver(
     *,
     tenant_record: TenantConfigRecord,
-    platform_provs: dict | None = None,
-    platform_tools: dict | None = None,
+    platform_provs: dict[str, str] | None = None,
+    platform_tools: dict[str, str] | None = None,
 ) -> CredentialsResolver:
     return CredentialsResolver(
         platform_provider_credentials=platform_provs or {},

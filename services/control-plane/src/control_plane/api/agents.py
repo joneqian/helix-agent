@@ -233,10 +233,16 @@ def build_agents_router() -> APIRouter:
         # uses these providers), but the manifest-time gate gives a
         # clean 403 with the offending provider list rather than a
         # late agent-build error.
+        #
+        # Empty ``supported_providers`` = deployment hasn't opted into
+        # Stream O yet (legacy / dev mode); the gate is a no-op so
+        # existing manifests keep working. Operators opt in by setting
+        # ``HELIX_AGENT_SUPPORTED_PROVIDERS`` env, which activates the
+        # whitelist enforcement.
         settings = request.app.state.settings
         supported = set(settings.supported_providers)
         referenced = _collect_manifest_providers(spec)
-        invalid = sorted(referenced - supported)
+        invalid = sorted(referenced - supported) if supported else []
         if invalid:
             for provider in invalid:
                 record_manifest_provider_rejected(provider=provider)
