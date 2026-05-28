@@ -39,6 +39,8 @@ import {
   ChevronRight,
   Download,
   FileCode2,
+  Pin,
+  PinOff,
   ShieldAlert,
   Sparkles,
   Zap,
@@ -68,11 +70,12 @@ import {
 
 const { Text } = Typography;
 
-const STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "archived"];
+const STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "stale", "archived"];
 
 const STATUS_COLOR: Record<SkillStatus, string> = {
   draft: "default",
   active: "success",
+  stale: "default",
   archived: "warning",
 };
 
@@ -176,6 +179,35 @@ export function SkillDetail() {
     },
     [skill, message, t],
   );
+
+  // Sprint #4 (Mini-ADR U-30) — pin / unpin. Same admin gate as
+  // status active for high-risk rows: the backend returns 403 if a
+  // non-admin tries to pin a high-risk skill, so the button is
+  // disabled client-side for the same condition (avoids the failure
+  // round-trip). Low-risk pins are open to any caller who can already
+  // see the page.
+  const onTogglePin = useCallback(async () => {
+    if (skill === null) return;
+    const next = !skill.pinned;
+    setStatusSubmitting(true);
+    try {
+      const updated = await patchSkillStatus(skill.id, { pinned: next });
+      setSkill(updated);
+      message.success(
+        next ? t("skills.pinned_toast") : t("skills.unpinned_toast"),
+      );
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? `${err.code}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : "failed";
+      message.error(msg);
+    } finally {
+      setStatusSubmitting(false);
+    }
+  }, [skill, message, t]);
 
   const onExport = useCallback(async () => {
     if (skill === null || selectedVersion === null) return;
@@ -290,6 +322,42 @@ export function SkillDetail() {
           )}
           <span style={{ flex: 1 }} />
           <Space size={6}>
+            {/* Sprint #4 (Mini-ADR U-30) — pin button. Disabled for
+                non-admin callers on high-risk skills (mirrors the
+                backend role check, avoids the 403 round-trip).
+                Pinned state shows the filled icon + brand color so
+                the visual gate is obvious. */}
+            <Tooltip
+              title={
+                skill.pinned
+                  ? t("skills.pin_tooltip_on")
+                  : isLatestHighRisk && !isAdmin
+                    ? t("skills.detail_admin_required_tooltip")
+                    : t("skills.pin_tooltip_off")
+              }
+            >
+              <Button
+                size="small"
+                icon={
+                  skill.pinned ? (
+                    <Pin
+                      size={13}
+                      strokeWidth={2}
+                      style={{ color: "var(--hx-color-brand-500)" }}
+                    />
+                  ) : (
+                    <PinOff size={13} strokeWidth={1.75} />
+                  )
+                }
+                onClick={onTogglePin}
+                disabled={
+                  statusSubmitting || (!skill.pinned && isLatestHighRisk && !isAdmin)
+                }
+                data-testid="skill-pin-button"
+              >
+                {skill.pinned ? t("skills.unpin") : t("skills.pin")}
+              </Button>
+            </Tooltip>
             <Text type="secondary" style={{ fontSize: 12 }}>
               {t("skills.change_status")}
             </Text>

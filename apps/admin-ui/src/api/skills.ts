@@ -16,7 +16,7 @@
  */
 import { apiClient, withTenantScope, type TenantScope } from "./client";
 
-export type SkillStatus = "draft" | "active" | "archived";
+export type SkillStatus = "draft" | "active" | "stale" | "archived";
 
 export interface SkillRecord {
   id: string;
@@ -25,6 +25,17 @@ export interface SkillRecord {
   latest_version: number | null;
   description: string;
   category: string;
+  /** Capability Uplift Sprint #4 (Mini-ADR U-25). The Curator's
+   *  escape-hatch flag — pinned skills are skipped at every state
+   *  transition. Surfaced on every skill_dict response. */
+  pinned: boolean;
+  /** ISO timestamp of the most recent bind or skill_view activity,
+   *  throttled to once per skill per hour per replica. ``null`` when
+   *  the skill was created but never touched (newly-created drafts). */
+  last_used_at: string | null;
+  /** ISO timestamp of the most recent status transition (manual or
+   *  Curator). Powers the "X days until stale" hint. */
+  state_changed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -119,7 +130,10 @@ export async function createSkill(body: CreateSkillBody): Promise<SkillRecord> {
 }
 
 export interface PatchSkillStatusBody {
-  status: SkillStatus;
+  status?: SkillStatus;
+  /** Sprint #4 (Mini-ADR U-30) — admin pin / unpin. Pinning a
+   *  high-risk skill requires admin role server-side (403 otherwise). */
+  pinned?: boolean;
 }
 
 export async function patchSkillStatus(

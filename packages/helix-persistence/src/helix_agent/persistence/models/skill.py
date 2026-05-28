@@ -48,15 +48,25 @@ class SkillRow(Base):
     latest_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     category: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("now()")
-    )
-    updated_at: Mapped[datetime] = mapped_column(
+    # Capability Uplift Sprint #4 — migration 0043.
+    # ``pinned`` is the operator's "do not Curator-touch" escape hatch.
+    # ``last_used_at`` is the throttled activity timestamp; backfilled to
+    # ``updated_at`` so existing rows look "recently used" and don't get
+    # immediately stale-flagged on first Curator sweep.
+    # ``state_changed_at`` advances on every Curator transition + every
+    # manual PATCH status; powers "when did this skill go stale?" without
+    # joining the audit log.
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    state_changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
 
     __table_args__ = (
-        CheckConstraint("status IN ('draft', 'active', 'archived')", name="skill_status_check"),
+        CheckConstraint(
+            "status IN ('draft', 'active', 'stale', 'archived')",
+            name="skill_status_check",
+        ),
         CheckConstraint("latest_version >= 0", name="skill_latest_version_nonneg"),
         UniqueConstraint("tenant_id", "name", name="skill_tenant_name_uq"),
         Index("ix_skill_tenant_id", "tenant_id"),
@@ -65,6 +75,16 @@ class SkillRow(Base):
             "tenant_id",
             "name",
             postgresql_where=text("status = 'active'"),
+        ),
+        # Curator sweep path: per tenant, scan only rows that *could*
+        # transition. Stale + active rows that aren't pinned. Archived
+        # + draft + pinned rows are inert from Curator's perspective.
+        Index(
+            "ix_skill_curator_scan",
+            "tenant_id",
+            "status",
+            "last_used_at",
+            postgresql_where=text("status IN ('active', 'stale') AND pinned = false"),
         ),
     )
 

@@ -141,6 +141,36 @@ groups:
         expr: |
           sum by (event) (rate(helix_uplift_skill_high_risk_event_total[1h]))
 
+  - name: helix_uplift_skill_curator
+    interval: 60s
+    rules:
+      # Capability Uplift Sprint #4 — Curator state machine.
+      #   * curator_active_to_stale_rate:1d — daily count of skills
+      #     auto-stale'd; normal background is a slow trickle (a few
+      #     per tenant per week).
+      #   * curator_stale_to_archived_rate:1d — same for archive.
+      #   * curator_stale_to_active_rate:1d — auto-revives (Mini-ADR
+      #     U-29); spikes mean a previously-stale skill came back into
+      #     use, usually fine.
+      #   * skill_view_archived_blocked_rate:1h — cold path; > 0 means
+      #     an agent's manifest references an archived skill that
+      #     should be unarchived or replaced.
+      - record: helix:uplift:curator_active_to_stale_rate:1d
+        expr: |
+          sum(increase(helix_uplift_curator_transition_total{from_state="active",to_state="stale"}[1d]))
+
+      - record: helix:uplift:curator_stale_to_archived_rate:1d
+        expr: |
+          sum(increase(helix_uplift_curator_transition_total{from_state="stale",to_state="archived"}[1d]))
+
+      - record: helix:uplift:curator_stale_to_active_rate:1d
+        expr: |
+          sum(increase(helix_uplift_curator_transition_total{from_state="stale",to_state="active"}[1d]))
+
+      - record: helix:uplift:skill_view_archived_blocked_rate:1h
+        expr: |
+          sum(rate(helix_uplift_skill_view_archived_blocked_total[1h]))
+
   - name: helix_uplift_mcp_client
     interval: 30s
     rules:
@@ -331,3 +361,31 @@ groups:
           summary: "High-risk skill activation attempts elevated"
           description: "Non-admin actors trying to activate high-risk skills {{ $value }} / sec sustained 30m (~30/hr) — investigate skill author + intent. See runbook § 11."
           runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/skill-packaging.md#section-11"
+
+      # Sprint #4 (Mini-ADR U-31) — Curator alerts.
+      # P2 — > 50 active→stale transitions in one day is unusually high
+      # and probably means activity tracking broke (or a tenant
+      # mis-configured an aggressive stale_days). Background should be
+      # a slow trickle.
+      - alert: HelixUpliftCuratorStaleSurge
+        expr: helix:uplift:curator_active_to_stale_rate:1d > 50
+        for: 1d
+        labels:
+          severity: P2
+        annotations:
+          summary: "Curator marked > 50 skills stale in last day"
+          description: "{{ $value }} active→stale transitions in 24h — verify activity tracking is firing and tenant_config.skill_stale_days isn't mis-set. See runbook § 3."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/skill-curator.md#section-3"
+
+      # P2 — any non-trivial rate of agents trying to read archived
+      # skills means an active manifest references a skill the Curator
+      # archived. Operator should unarchive or update the manifest.
+      - alert: HelixUpliftSkillArchivedAccessAttempts
+        expr: helix:uplift:skill_view_archived_blocked_rate:1h > 0.1
+        for: 30m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Agents trying to read archived skills > 6/hr"
+          description: "{{ $value }} archived-skill read attempts/sec sustained 30m — an agent's manifest probably references an auto-archived skill. See runbook § 4."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/skill-curator.md#section-4"

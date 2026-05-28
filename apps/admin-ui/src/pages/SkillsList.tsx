@@ -30,6 +30,7 @@ import {
   ChevronRight,
   FileCode2,
   Globe2,
+  Pin,
   Plus,
   RefreshCw,
   Upload,
@@ -50,13 +51,34 @@ import { useTenantScope } from "../tenant/TenantScopeContext";
 
 const { Text } = Typography;
 
-const STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "archived"];
+const STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "stale", "archived"];
 
 const STATUS_COLOR: Record<SkillStatus, string> = {
   draft: "default",
   active: "success",
+  // Sprint #4 — Curator auto-stale ≠ archived; render as default
+  // (asleep) so the warm-orange archive semantic stays distinct.
+  stale: "default",
   archived: "warning",
 };
+
+// Sprint #4 — Curator default stale threshold (mirrors backend
+// _DEFAULT_STALE_DAYS in skill_curator.py). The list view doesn't have
+// the per-tenant override, so this hint is best-effort under the
+// platform default; pinned / non-active rows skip the hint entirely.
+const STALE_DAYS_DEFAULT = 30;
+
+function staleEtaLabel(
+  lastUsedAt: string,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const lastMs = new Date(lastUsedAt).getTime();
+  if (Number.isNaN(lastMs)) return "";
+  const ageDays = Math.floor((Date.now() - lastMs) / (1000 * 60 * 60 * 24));
+  const remaining = STALE_DAYS_DEFAULT - ageDays;
+  if (remaining <= 0) return t("skills.eta_due_soon");
+  return t("skills.eta_days_to_stale", { days: remaining });
+}
 
 export function SkillsList() {
   const { t } = useTranslation();
@@ -174,6 +196,16 @@ export function SkillsList() {
       key: "name",
       render: (v: string, record) => (
         <Space size={6}>
+          {record.pinned && (
+            <Tooltip title={t("skills.pin_tooltip_on")}>
+              <Pin
+                size={12}
+                strokeWidth={2}
+                style={{ color: "var(--hx-color-brand-500)" }}
+                data-testid={`skill-pin-icon-${record.id}`}
+              />
+            </Tooltip>
+          )}
           <Text strong>{v}</Text>
           {record.latest_version !== null && (
             <Tag bordered={false}>v{record.latest_version}</Tag>
@@ -185,8 +217,20 @@ export function SkillsList() {
       title: t("skills.col_status"),
       dataIndex: "status",
       key: "status",
-      width: 120,
-      render: (s: SkillStatus) => <Tag color={STATUS_COLOR[s]}>{s}</Tag>,
+      width: 180,
+      render: (s: SkillStatus, record) => (
+        <Space size={6}>
+          <Tag color={STATUS_COLOR[s]}>{s}</Tag>
+          {/* Sprint #4 (Mini-ADR U-30) — distance-to-stale hint.
+              Shows only for ``active`` rows so operators get an early
+              signal before the Curator's nightly sweep flips them. */}
+          {s === "active" && record.last_used_at !== null && !record.pinned && (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {staleEtaLabel(record.last_used_at, t)}
+            </Text>
+          )}
+        </Space>
+      ),
     },
     {
       title: t("skills.col_category"),

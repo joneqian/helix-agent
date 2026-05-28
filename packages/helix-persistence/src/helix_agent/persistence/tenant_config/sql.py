@@ -40,6 +40,8 @@ def _row_to_record(row: TenantConfigRow) -> TenantConfigRecord:
         event_log_retention_days=row.event_log_retention_days,
         trigger_fire_scan_mode=cast(TriggerFireScanMode, row.trigger_fire_scan_mode),
         memory_recall_mode=cast(MemoryRecallMode, row.memory_recall_mode),
+        skill_stale_days=row.skill_stale_days,
+        skill_archive_days=row.skill_archive_days,
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -99,6 +101,10 @@ class SqlTenantConfigStore(TenantConfigStore):
                     values["trigger_fire_scan_mode"] = patch.trigger_fire_scan_mode
                 if patch.memory_recall_mode is not None:
                     values["memory_recall_mode"] = patch.memory_recall_mode
+                if patch.skill_stale_days is not None:
+                    values["skill_stale_days"] = patch.skill_stale_days
+                if patch.skill_archive_days is not None:
+                    values["skill_archive_days"] = patch.skill_archive_days
                 stmt = (
                     pg_insert(TenantConfigRow)
                     .values(**values)
@@ -142,6 +148,16 @@ class SqlTenantConfigStore(TenantConfigStore):
                 existing.trigger_fire_scan_mode = patch.trigger_fire_scan_mode
             if patch.memory_recall_mode is not None:
                 existing.memory_recall_mode = patch.memory_recall_mode
+            # Capability Uplift Sprint #4 — apply both fields, then let
+            # the DB CHECK (``skill_archive_days > skill_stale_days``)
+            # catch any invariant violation on commit. The Pydantic
+            # model validator also runs in :func:`_row_to_record` so
+            # the same invariant is enforced if the SQL side ever
+            # disagrees.
+            if patch.skill_stale_days is not None:
+                existing.skill_stale_days = patch.skill_stale_days
+            if patch.skill_archive_days is not None:
+                existing.skill_archive_days = patch.skill_archive_days
             existing.updated_at = _utc_now()
             existing.updated_by = actor_id
             await session.commit()

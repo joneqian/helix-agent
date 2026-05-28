@@ -72,6 +72,10 @@ function recordToPatchJson(record: TenantConfigRecord): string {
     mcp_servers: record.mcp_servers,
     audit_retention_days: record.audit_retention_days,
     event_log_retention_days: record.event_log_retention_days,
+    // Sprint #4 (Mini-ADR U-28) — Curator thresholds round-trip
+    // through the same JSON-edit surface as the rest of tenant_config.
+    skill_stale_days: record.skill_stale_days,
+    skill_archive_days: record.skill_archive_days,
   };
   return JSON.stringify(patch, null, 2);
 }
@@ -269,6 +273,19 @@ export function SettingsTenantConfig() {
             <dd style={{ margin: 0 }}>{record.audit_retention_days}</dd>
             <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.event_log_retention_days")}</dt>
             <dd style={{ margin: 0 }}>{record.event_log_retention_days}</dd>
+            {/* Sprint #4 (Mini-ADR U-28) — Curator thresholds.
+                Displayed read-only; edit goes through the same JSON
+                editor as the rest of tenant_config (we deliberately
+                don't split out per-field forms — the JSON model keeps
+                the surface flat). */}
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.skill_stale_days")}</dt>
+            <dd style={{ margin: 0 }} data-testid="tenant-config-skill-stale-days">
+              {record.skill_stale_days}
+            </dd>
+            <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.skill_archive_days")}</dt>
+            <dd style={{ margin: 0 }} data-testid="tenant-config-skill-archive-days">
+              {record.skill_archive_days}
+            </dd>
             <dt style={{ color: "var(--hx-text-tertiary)" }}>{t("settings_ops.mcp_allowlist")}</dt>
             <dd style={{ margin: 0 }}>
               {record.mcp_allowlist.length === 0 ? (

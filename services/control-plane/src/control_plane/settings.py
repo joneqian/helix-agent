@@ -287,6 +287,19 @@ class Settings(BaseSettings):
     #: ceiling, the table is the authoritative count (like cron quota).
     max_eval_dataset_rows_per_tenant: int = Field(default=1000, gt=0)
 
+    # --------------------------------------------------------- skill curator (Sprint #4)
+    #: Capability Uplift Sprint #4 (Mini-ADR U-26) — how often the
+    #: Curator sweeps every tenant + applies the state-machine
+    #: transitions. Default 86400 = once per day. Tests dial this down
+    #: to seconds to verify state transitions.
+    skill_curator_interval_s: int = Field(default=86_400, gt=0)
+
+    #: TTL on the in-process activity throttle (Mini-ADR U-27). Default
+    #: 3600 = each skill produces at most one ``last_used_at`` UPDATE
+    #: per hour per replica. Tighter than the state machine cares about
+    #: but loose enough to cap write amplification under high fan-out.
+    skill_activity_throttle_s: int = Field(default=3_600, gt=0)
+
     # ------------------------------------------------------------------ tenant rate limit (C.6)
     #: Per-tenant request bucket capacity (tokens). Drained one token
     #: per authenticated request.

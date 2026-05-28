@@ -30,6 +30,12 @@ def _skill_row_to_dto(row: SkillRow) -> Skill:
         latest_version=row.latest_version,
         description=row.description,
         category=row.category,
+        # Capability Uplift Sprint #4 (Mini-ADR U-25). Existing rows
+        # carry default values per migration 0043 backfill
+        # (pinned=false, last_used_at=updated_at, state_changed_at=updated_at).
+        pinned=bool(row.pinned),
+        last_used_at=row.last_used_at,
+        state_changed_at=row.state_changed_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -178,10 +184,11 @@ class SqlSkillStore(SkillStore):
 
     async def set_status(self, *, skill_id: UUID, tenant_id: UUID, status: SkillStatus) -> Skill:
         async with self._sf() as session:
+            now = datetime.now(UTC)
             result = await session.execute(
                 update(SkillRow)
                 .where(SkillRow.id == skill_id, SkillRow.tenant_id == tenant_id)
-                .values(status=status.value, updated_at=datetime.now(UTC))
+                .values(status=status.value, updated_at=now, state_changed_at=now)
                 .returning(SkillRow)
             )
             row = result.scalar_one_or_none()
@@ -317,3 +324,121 @@ class SqlSkillStore(SkillStore):
         return await self.get_version_by_number(
             skill_id=skill.id, tenant_id=tenant_id, version=version
         )
+
+    # ------------------------------------------------------------ Curator (Sprint #4)
+
+    async def bump_last_used_at(self, *, skill_id: UUID, tenant_id: UUID) -> tuple[bool, bool]:
+        """Atomic activity bump + stale→active auto-revive (Mini-ADR U-27/U-29).
+
+        Single transaction: SELECT prior status (with row lock) → UPDATE
+        conditionally flips ``stale`` to ``active``. archived / draft
+        rows are filtered by the WHERE clause → no-op + return
+        (False, False). Pinned rows still bump last_used_at — pin means
+        "don't auto-transition", not "don't track activity".
+        """
+        async with self._sf() as session:
+            prior = (
+                await session.execute(
+                    select(SkillRow.status)
+                    .where(SkillRow.id == skill_id, SkillRow.tenant_id == tenant_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if prior is None or prior not in ("active", "stale"):
+                # archived / draft / missing → cold path no-op
+                await session.commit()
+                return (False, False)
+            now = datetime.now(UTC)
+            auto_revived = prior == "stale"
+            await session.execute(
+                update(SkillRow)
+                .where(SkillRow.id == skill_id, SkillRow.tenant_id == tenant_id)
+                .values(
+                    last_used_at=now,
+                    status="active" if auto_revived else prior,
+                    state_changed_at=now if auto_revived else SkillRow.state_changed_at,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+        return (True, auto_revived)
+
+    async def curator_promote_active_to_stale(self, *, tenant_id: UUID, stale_days: int) -> int:
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(days=stale_days)
+        async with self._sf() as session:
+            now = datetime.now(UTC)
+            result = await session.execute(
+                update(SkillRow)
+                .where(
+                    SkillRow.tenant_id == tenant_id,
+                    SkillRow.status == "active",
+                    SkillRow.pinned.is_(False),
+                    # NULL last_used_at sweeps as if "infinitely stale" so
+                    # rows created before the migration backfill don't
+                    # linger as active forever (defensive: migration 0043
+                    # backfills last_used_at to updated_at, so this branch
+                    # only catches application-level inserts that forgot
+                    # to seed the column).
+                    (SkillRow.last_used_at.is_(None) | (SkillRow.last_used_at < cutoff)),
+                )
+                .values(status="stale", state_changed_at=now, updated_at=now)
+            )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def curator_promote_stale_to_archived(self, *, tenant_id: UUID, archive_days: int) -> int:
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(days=archive_days)
+        async with self._sf() as session:
+            now = datetime.now(UTC)
+            result = await session.execute(
+                update(SkillRow)
+                .where(
+                    SkillRow.tenant_id == tenant_id,
+                    SkillRow.status == "stale",
+                    SkillRow.pinned.is_(False),
+                    (SkillRow.last_used_at.is_(None) | (SkillRow.last_used_at < cutoff)),
+                )
+                .values(status="archived", state_changed_at=now, updated_at=now)
+            )
+            await session.commit()
+        return result.rowcount or 0
+
+    async def set_pinned(self, *, skill_id: UUID, tenant_id: UUID, pinned: bool) -> Skill:
+        async with self._sf() as session:
+            result = await session.execute(
+                update(SkillRow)
+                .where(SkillRow.id == skill_id, SkillRow.tenant_id == tenant_id)
+                .values(pinned=pinned, updated_at=datetime.now(UTC))
+                .returning(SkillRow)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                raise SkillNotFoundError(str(skill_id))
+            await session.commit()
+        return _skill_row_to_dto(row)
+
+    async def curator_distinct_tenant_ids(self) -> list[UUID]:
+        async with self._sf() as session:
+            rows = (
+                await session.execute(
+                    select(SkillRow.tenant_id)
+                    .where(SkillRow.status.in_(["active", "stale"]))
+                    .distinct()
+                )
+            ).all()
+        return [r[0] for r in rows]
+
+    async def count_pinned(self) -> int:
+        from sqlalchemy import func
+
+        async with self._sf() as session:
+            result = (
+                await session.execute(
+                    select(func.count()).select_from(SkillRow).where(SkillRow.pinned.is_(True))
+                )
+            ).scalar_one()
+        return int(result or 0)

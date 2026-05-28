@@ -64,6 +64,16 @@ class TenantConfigRow(Base):
     memory_recall_mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'hybrid'"), default="hybrid"
     )
+    # Capability Uplift Sprint #4 — Mini-ADR U-28. Curator thresholds.
+    # Defaults 30 / 90 derive from external skill-marketplace
+    # observations; M1-K J.7b-1 will revisit. CHECK constraints +
+    # cross-field invariant (archive > stale) live in migration 0044.
+    skill_stale_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("30"), default=30
+    )
+    skill_archive_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("90"), default=90
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

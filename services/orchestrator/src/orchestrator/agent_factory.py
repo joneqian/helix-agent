@@ -31,18 +31,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from orchestrator.tools.skill_view import SkillResolution
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 
+from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.persistence import MemoryStore
 from helix_agent.persistence.memory import MemoryWritebackDLQ
 from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.protocol import (
     AgentSpec,
     ModelSpec,
+    Skill,
     SkillVersion,
     parse_agent_ref,
     parse_skill_ref,
@@ -178,19 +183,29 @@ class _SkillLookupResult:
     The orchestrator's loader maps the tri-state to a specific
     exception class so build-time errors carry actionable detail:
 
-    * ``found(version)`` — return the version row.
+    * ``found(version, skill=...)`` — return the version row.
     * ``not_found()`` — skill name unknown for tenant.
     * ``version_not_found()`` — skill exists but pinned version is absent.
     * ``not_active()`` — skill exists, bare-name reference, but skill
-      status is not ``ACTIVE``.
+      status is neither ``ACTIVE`` nor ``STALE`` (Mini-ADR U-29: stale
+      auto-revives on bind, so it's also bind-able at build time).
+
+    ``skill`` is optional: resolvers that have the parent ``Skill`` row
+    cheaply available (the production SqlSkillStore-backed callable
+    does) should populate it so the runtime
+    :class:`orchestrator.tools.skill_view.SkillResolver` shim can read
+    the live ``status`` for the archived-dispatch path without a second
+    round-trip. Resolvers that don't have it (older eval tooling) leave
+    it ``None``; the shim performs a fallback fetch.
     """
 
     version: SkillVersion | None = None
     reason: str | None = None  # "not_found" | "version_not_found" | "not_active"
+    skill: Skill | None = None
 
     @classmethod
-    def ok(cls, version: SkillVersion) -> _SkillLookupResult:
-        return cls(version=version, reason=None)
+    def ok(cls, version: SkillVersion, *, skill: Skill | None = None) -> _SkillLookupResult:
+        return cls(version=version, reason=None, skill=skill)
 
     @classmethod
     def not_found(cls) -> _SkillLookupResult:
@@ -201,8 +216,8 @@ class _SkillLookupResult:
         return cls(version=None, reason="version_not_found")
 
     @classmethod
-    def not_active(cls) -> _SkillLookupResult:
-        return cls(version=None, reason="not_active")
+    def not_active(cls, *, skill: Skill | None = None) -> _SkillLookupResult:
+        return cls(version=None, reason="not_active", skill=skill)
 
 
 @dataclass(frozen=True)
@@ -242,6 +257,14 @@ async def build_agent(
     subagent_depth: int = 0,
     skill_resolver: SkillResolver | None = None,
     tenant_id: Any = None,
+    # Capability Uplift Sprint #4 — Mini-ADR U-27. When wired, every
+    # skill resolved during the build (and every ``skill_view`` runtime
+    # read, via the tool wiring below) bumps ``skill.last_used_at`` so
+    # the Curator doesn't auto-stale a skill that's actively in use.
+    # ``None`` keeps the agent build runnable without Curator deps
+    # (tests + eval CLI commonly leave it unset; activity simply isn't
+    # tracked, the Curator works off whatever last_used_at the DB has).
+    skill_activity_recorder: SkillActivityRecorder | None = None,
 ) -> BuiltAgent:
     """Assemble a :class:`BuiltAgent` from a validated :class:`AgentSpec`.
 
@@ -377,6 +400,7 @@ async def build_agent(
         skill_resolver=skill_resolver,
         tenant_id=tenant_id,
         registry=registry,
+        activity_recorder=skill_activity_recorder,
     )
 
     # Capability Uplift Sprint #3 (Mini-ADR U-17) — register the single
@@ -397,6 +421,7 @@ async def build_agent(
             SkillViewTool(
                 resolver=_SkillResolverShim(callable_=skill_resolver, tenant_id=tenant_id),
                 allowed_skill_names=frozenset(loaded_skills.activated_skill_names),
+                activity_recorder=skill_activity_recorder,
             )
         )
 
@@ -446,6 +471,7 @@ async def _load_skills(
     skill_resolver: SkillResolver | None,
     tenant_id: Any,
     registry: Any,
+    activity_recorder: SkillActivityRecorder | None = None,
 ) -> _LoadedSkills:
     """Resolve + merge ``spec.skills`` into prompt fragments + tool set.
 
@@ -518,6 +544,21 @@ async def _load_skills(
         if not version.lazy_load:
             fragments.append(_render_skill_fragment(name=ref.name, version=version))
         activated.append(ref.name)
+
+        # Capability Uplift Sprint #4 (Mini-ADR U-27) — bump the
+        # skill's last_used_at so the Curator doesn't auto-stale a
+        # skill that's actively bound to a building agent. Errors are
+        # swallowed by the recorder; never fail the build because the
+        # bookkeeping hiccuped.
+        if activity_recorder is not None:
+            try:
+                await activity_recorder.record(
+                    skill_id=version.skill_id, tenant_id=version.tenant_id
+                )
+            except Exception:  # noqa: S110 — best-effort hot path
+                # ThrottledActivityRecorder swallows its own errors;
+                # this guard is belt-and-braces for non-default recorders.
+                pass
 
     return _LoadedSkills(
         prompt_fragments=fragments,
@@ -951,16 +992,26 @@ class _SkillResolverShim:
     is for the summary block only — the tool itself round-trips to the
     store to catch any post-build DB tampering.
 
-    Wraps the same ``skill_resolver`` callable injected into ``build_agent``,
-    so this shim has no extra dep injection footprint.
+    Sprint #4 (Mini-ADR U-29): also forwards the parent ``Skill`` row
+    when the resolver supplied it (production callables do; older eval
+    callables don't, in which case ``skill`` is ``None`` and the tool
+    treats it like an unknown skill — safer than reading an archived
+    row through the runtime path).
     """
 
     callable_: SkillResolver
     tenant_id: Any
 
-    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillVersion | None:
+    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillResolution:
         # tenant_id from ToolContext should match the one stamped at
         # build time; cross-tenant skill_view is rejected by the store.
         del tenant_id  # use the build-time bound id for consistency
+        from orchestrator.tools.skill_view import SkillResolution
+
         result = await _resolve_one(self.callable_, self.tenant_id, skill_name, None)
-        return result.version
+        # ``result.reason`` differentiates "skill exists but state forbids"
+        # (not_active → skill is populated when the resolver knows it) vs
+        # "skill is unknown to this tenant". Both surface as the same
+        # downstream behavior except for archived which gets a tailored
+        # message.
+        return SkillResolution(skill=result.skill, version=result.version)

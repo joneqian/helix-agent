@@ -70,6 +70,10 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                     row_kwargs["trigger_fire_scan_mode"] = patch.trigger_fire_scan_mode
                 if patch.memory_recall_mode is not None:
                     row_kwargs["memory_recall_mode"] = patch.memory_recall_mode
+                if patch.skill_stale_days is not None:
+                    row_kwargs["skill_stale_days"] = patch.skill_stale_days
+                if patch.skill_archive_days is not None:
+                    row_kwargs["skill_archive_days"] = patch.skill_archive_days
                 row = TenantConfigRecord(**row_kwargs)  # type: ignore[arg-type]
             else:
                 row = existing.model_copy(
@@ -88,10 +92,18 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                             "event_log_retention_days": patch.event_log_retention_days,
                             "trigger_fire_scan_mode": patch.trigger_fire_scan_mode,
                             "memory_recall_mode": patch.memory_recall_mode,
+                            "skill_stale_days": patch.skill_stale_days,
+                            "skill_archive_days": patch.skill_archive_days,
                         }.items()
                         if v is not None
                     }
                     | {"updated_at": now, "updated_by": actor_id},
                 )
+                # Re-validate the merged row to catch the cross-field
+                # invariant (archive_days > stale_days). model_copy
+                # doesn't run validators; force a round-trip through
+                # construction so an admin patch can't slip a config
+                # that the platform rejects on first Curator read.
+                row = TenantConfigRecord.model_validate(row.model_dump())
             self._rows[tenant_id] = row
             return row

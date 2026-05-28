@@ -76,6 +76,10 @@ class InMemorySkillStore(SkillStore):
             latest_version=0,
             description=description,
             category=category,
+            # Sprint #4 — match the SQL ``server_default=text("now()")``
+            # so the in-memory and Postgres backends emit the same
+            # DTO shape on first read.
+            state_changed_at=now,
             created_at=now,
             updated_at=now,
         )
@@ -122,7 +126,10 @@ class InMemorySkillStore(SkillStore):
         row = await self.get_skill(skill_id=skill_id, tenant_id=tenant_id)
         if row is None:
             raise SkillNotFoundError(str(skill_id))
-        updated = row.model_copy(update={"status": status, "updated_at": datetime.now(UTC)})
+        now = datetime.now(UTC)
+        updated = row.model_copy(
+            update={"status": status, "updated_at": now, "state_changed_at": now}
+        )
         self._skills[skill_id] = updated
         return updated
 
@@ -227,6 +234,96 @@ class InMemorySkillStore(SkillStore):
         return await self.get_version_by_number(
             skill_id=skill.id, tenant_id=tenant_id, version=version
         )
+
+    # ------------------------------------------------------------ Curator (Sprint #4)
+
+    async def bump_last_used_at(self, *, skill_id: UUID, tenant_id: UUID) -> tuple[bool, bool]:
+        row = await self.get_skill(skill_id=skill_id, tenant_id=tenant_id)
+        if row is None:
+            return (False, False)
+        # archived / draft never advance via activity; only admin status
+        # PATCH can move them. Pinned still bumps last_used_at — pin is
+        # "don't auto-transition", not "don't track".
+        if row.status not in (SkillStatus.ACTIVE, SkillStatus.STALE):
+            return (False, False)
+        now = datetime.now(UTC)
+        auto_revived = row.status == SkillStatus.STALE
+        updated = row.model_copy(
+            update={
+                "last_used_at": now,
+                "status": SkillStatus.ACTIVE if auto_revived else row.status,
+                "state_changed_at": now if auto_revived else row.state_changed_at,
+                "updated_at": now,
+            }
+        )
+        self._skills[skill_id] = updated
+        return (True, auto_revived)
+
+    async def curator_promote_active_to_stale(self, *, tenant_id: UUID, stale_days: int) -> int:
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(days=stale_days)
+        n = 0
+        for skill_id, row in list(self._skills.items()):
+            if row.tenant_id != tenant_id:
+                continue
+            if row.status != SkillStatus.ACTIVE or row.pinned:
+                continue
+            # NULL last_used_at means "never been used since migration";
+            # rely on backfill to have populated it. Belt-and-braces: a
+            # row with NULL last_used_at is treated as "infinitely
+            # stale" (transition).
+            if row.last_used_at is None or row.last_used_at < cutoff:
+                now = datetime.now(UTC)
+                self._skills[skill_id] = row.model_copy(
+                    update={
+                        "status": SkillStatus.STALE,
+                        "state_changed_at": now,
+                        "updated_at": now,
+                    }
+                )
+                n += 1
+        return n
+
+    async def curator_promote_stale_to_archived(self, *, tenant_id: UUID, archive_days: int) -> int:
+        from datetime import timedelta
+
+        cutoff = datetime.now(UTC) - timedelta(days=archive_days)
+        n = 0
+        for skill_id, row in list(self._skills.items()):
+            if row.tenant_id != tenant_id:
+                continue
+            if row.status != SkillStatus.STALE or row.pinned:
+                continue
+            if row.last_used_at is None or row.last_used_at < cutoff:
+                now = datetime.now(UTC)
+                self._skills[skill_id] = row.model_copy(
+                    update={
+                        "status": SkillStatus.ARCHIVED,
+                        "state_changed_at": now,
+                        "updated_at": now,
+                    }
+                )
+                n += 1
+        return n
+
+    async def set_pinned(self, *, skill_id: UUID, tenant_id: UUID, pinned: bool) -> Skill:
+        row = await self.get_skill(skill_id=skill_id, tenant_id=tenant_id)
+        if row is None:
+            raise SkillNotFoundError(str(skill_id))
+        updated = row.model_copy(update={"pinned": pinned, "updated_at": datetime.now(UTC)})
+        self._skills[skill_id] = updated
+        return updated
+
+    async def curator_distinct_tenant_ids(self) -> list[UUID]:
+        seen: set[UUID] = set()
+        for row in self._skills.values():
+            if row.status in (SkillStatus.ACTIVE, SkillStatus.STALE):
+                seen.add(row.tenant_id)
+        return sorted(seen)
+
+    async def count_pinned(self) -> int:
+        return sum(1 for row in self._skills.values() if row.pinned)
 
 
 def _new_id() -> UUID:

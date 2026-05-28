@@ -239,6 +239,9 @@ export interface TranslationKeys {
     plan: string;
     audit_retention_days: string;
     event_log_retention_days: string;
+    // Sprint #4 (Mini-ADR U-28) — Curator thresholds.
+    skill_stale_days: string;
+    skill_archive_days: string;
     mcp_allowlist: string;
     http_allowlist: string;
     updated: string;
@@ -439,6 +442,15 @@ export interface TranslationKeys {
     file_mime_label: string;
     file_load_failed: string;
     detail_skill_md_readonly_hint: string;
+    // Sprint #4 — Curator pin + ETA hint.
+    pin: string;
+    unpin: string;
+    pinned_toast: string;
+    unpinned_toast: string;
+    pin_tooltip_on: string;
+    pin_tooltip_off: string;
+    eta_days_to_stale: string;
+    eta_due_soon: string;
   };
   memory: {
     page_title: string;
@@ -843,6 +855,8 @@ const en: TranslationKeys = {
     plan: "Plan",
     audit_retention_days: "Audit retention (days)",
     event_log_retention_days: "Event log retention (days)",
+    skill_stale_days: "Skill stale threshold (days)",
+    skill_archive_days: "Skill archive threshold (days)",
     mcp_allowlist: "MCP allowlist",
     http_allowlist: "HTTP tool allowlist",
     updated: "Updated",
@@ -1056,6 +1070,14 @@ const en: TranslationKeys = {
     file_mime_label: "MIME",
     file_load_failed: "Failed to load file",
     detail_skill_md_readonly_hint: "SKILL.md represents the version's prompt fragment + frontmatter. Edit through ZIP import or the JSON-API to create a new version.",
+    pin: "Pin",
+    unpin: "Unpin",
+    pinned_toast: "Pinned — Curator will skip this skill at every stage.",
+    unpinned_toast: "Unpinned — Curator will treat this skill normally.",
+    pin_tooltip_on: "Pinned. Curator skips this skill at every transition.",
+    pin_tooltip_off: "Pin to exempt this skill from auto-stale / auto-archive.",
+    eta_days_to_stale: "{{days}}d to stale",
+    eta_due_soon: "stale soon",
   },
   memory: {
     page_title: "Memory",
