@@ -205,3 +205,67 @@ class SkillStore(abc.ABC):
         allowed — pinning is the reproducibility escape hatch). Returns
         ``None`` when either the name or the version row is absent.
         """
+
+    # -------------------------------------------------- Curator (Sprint #4)
+
+    @abc.abstractmethod
+    async def bump_last_used_at(self, *, skill_id: UUID, tenant_id: UUID) -> tuple[bool, bool]:
+        """Mark a skill as just-used by an agent build or skill_view call.
+
+        Atomic semantics (Mini-ADR U-27 / U-29):
+        * ``active`` → ``last_used_at = now()``, status unchanged
+        * ``stale`` → ``last_used_at = now()`` AND status → ``active``
+          (auto-revive) AND ``state_changed_at = now()``
+        * ``archived`` → no-op (cold storage; admin must unarchive)
+        * ``draft`` → no-op (draft skills don't have an "active" lifecycle
+          to lapse out of)
+        * pinned → ``last_used_at = now()`` regardless, status unchanged
+
+        Returns ``(updated, auto_revived)``:
+        * ``updated`` — ``True`` iff at least one row was changed
+        * ``auto_revived`` — ``True`` iff the row transitioned
+          ``stale → active`` as part of this call
+
+        Caller is responsible for application-layer throttling
+        (:class:`control_plane.skill_activity.ThrottledActivityRecorder`);
+        the store itself always executes the SQL when invoked.
+        """
+
+    @abc.abstractmethod
+    async def curator_promote_active_to_stale(self, *, tenant_id: UUID, stale_days: int) -> int:
+        """Batch-transition: ``active`` skills with last_used_at older than
+        ``stale_days`` (and not pinned) → ``stale``.
+
+        Returns the number of rows transitioned.
+        """
+
+    @abc.abstractmethod
+    async def curator_promote_stale_to_archived(self, *, tenant_id: UUID, archive_days: int) -> int:
+        """Batch-transition: ``stale`` skills with last_used_at older than
+        ``archive_days`` (and not pinned) → ``archived``.
+
+        Returns the number of rows transitioned.
+        """
+
+    @abc.abstractmethod
+    async def set_pinned(self, *, skill_id: UUID, tenant_id: UUID, pinned: bool) -> Skill:
+        """Admin pin / unpin. Raises :class:`SkillNotFoundError` if the
+        id is unknown for this tenant. ``updated_at`` advances;
+        ``state_changed_at`` does NOT (pin is metadata, not a state
+        transition)."""
+
+    @abc.abstractmethod
+    async def curator_distinct_tenant_ids(self) -> list[UUID]:
+        """Tenants that have at least one ``active`` or ``stale`` skill.
+
+        The Curator's sweep iterates this list (vs every tenant on the
+        platform) so a fresh tenant with no skills doesn't burn cycles.
+        Caller MUST be inside ``bypass_rls_session()`` — Curator is a
+        platform background worker, not a tenant-scoped request.
+        """
+
+    @abc.abstractmethod
+    async def count_pinned(self) -> int:
+        """Total pinned skills across all tenants — for the
+        ``helix_uplift_skill_pinned_total`` gauge. Caller MUST be inside
+        ``bypass_rls_session()``."""

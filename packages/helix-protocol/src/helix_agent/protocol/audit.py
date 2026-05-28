@@ -94,6 +94,15 @@ class AuditAction(StrEnum):
     # writes are admin); M1-K J.7b-1 self-authored skills get gated.
     SKILL_HIGH_RISK_ACTIVATION_BLOCKED = "skill:high_risk_activation_blocked"
     SKILL_HIGH_RISK_ACTIVATED = "skill:high_risk_activated"
+    # skill — Capability Uplift Sprint #4 Curator (Mini-ADRs U-26 / U-29 / U-30).
+    # Sweep summary (per-tenant per-day); per-skill auto-revival from
+    # ``stale`` on activity; skill_view blocked because the skill was
+    # auto-archived (cold path); admin pin / unpin events.
+    SKILL_CURATOR_RUN = "skill:curator_run"
+    SKILL_AUTO_REVIVED = "skill:auto_revived"
+    SKILL_VIEW_BLOCKED_ARCHIVED = "skill:view_blocked_archived"
+    SKILL_PINNED = "skill:pinned"
+    SKILL_UNPINNED = "skill:unpinned"
     # artifact (Stream J.9-step3 — Mini-ADR J-25). ``ARTIFACT_SAVE`` is
     # reserved for the orchestrator-side save-artifact tool emit; that
     # wiring lands when ToolEnv gains an :class:`AuditLogger` handle.

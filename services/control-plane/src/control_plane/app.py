@@ -106,6 +106,8 @@ from control_plane.runtime import (
 )
 from control_plane.scheduler import TriggerScheduler
 from control_plane.settings import Settings
+from control_plane.skill_activity import ThrottledActivityRecorder
+from control_plane.skill_curator import SkillCurator
 from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
 from helix_agent.common.health import DefaultHealthProvider
@@ -461,6 +463,25 @@ def create_app(
         if enable_scheduler
         else None
     )
+    # Capability Uplift Sprint #4 (Mini-ADRs U-26 / U-27) — Curator
+    # sweep + activity recorder. Curator is single-replica (same
+    # rationale as the trigger scheduler); the recorder is process-
+    # local (each replica throttles independently — Curator's day-scale
+    # decisions don't notice the per-replica fuzz).
+    skill_curator: SkillCurator | None = (
+        SkillCurator(
+            skill_store=resolved_skill_store,
+            tenant_config_service=resolved_tenant_config_service,
+            audit_logger=resolved_audit,
+            interval_s=float(resolved_settings.skill_curator_interval_s),
+        )
+        if enable_scheduler
+        else None
+    )
+    skill_activity_recorder = ThrottledActivityRecorder(
+        resolved_skill_store,
+        ttl_seconds=resolved_settings.skill_activity_throttle_s,
+    )
     health_provider = DefaultHealthProvider(
         service=resolved_settings.service_name,
         version=_VERSION,
@@ -612,6 +633,9 @@ def create_app(
             if scheduler is not None:
                 scheduler.start()
                 _app.state.trigger_scheduler = scheduler
+            if skill_curator is not None:
+                skill_curator.start()
+                _app.state.skill_curator = skill_curator
             if curation_worker is not None:
                 curation_worker.start()
                 _app.state.curation_worker = curation_worker
@@ -642,6 +666,8 @@ def create_app(
                     await reaper.stop()
                 if scheduler is not None:
                     await scheduler.stop()
+                if skill_curator is not None:
+                    await skill_curator.stop()
                 if curation_worker is not None:
                     await curation_worker.stop()
                 ingestion_runner: KnowledgeIngestionRunner | None = getattr(
@@ -684,6 +710,11 @@ def create_app(
     app.state.knowledge_store = resolved_knowledge_store
     app.state.image_upload_store = resolved_image_upload_store
     app.state.skill_store = resolved_skill_store
+    # Capability Uplift Sprint #4 — exposed on app.state so a future
+    # PR (when skill_resolver is wired into ``make_agent_builder``) can
+    # thread it through to ``_load_skills`` + ``SkillViewTool`` for
+    # bind / view activity tracking.
+    app.state.skill_activity_recorder = skill_activity_recorder
     # Stream J.6 — the object store is created in the lifespan (it goes on
     # the AsyncExitStack); the upload endpoint reads it from app.state.
     app.state.object_store = None

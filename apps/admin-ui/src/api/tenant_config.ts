@@ -25,6 +25,13 @@ export interface TenantConfigRecord {
   mcp_servers: Record<string, unknown>[];
   audit_retention_days: number;
   event_log_retention_days: number;
+  /** Sprint #4 (Mini-ADR U-28) — Curator thresholds.
+   *  ``skill_stale_days`` default 30, range [1, 365].
+   *  ``skill_archive_days`` default 90, range [2, 730], and must be
+   *  strictly greater than ``skill_stale_days`` (DB CHECK + Pydantic
+   *  model_validator). */
+  skill_stale_days: number;
+  skill_archive_days: number;
   created_at: string;
   updated_at: string;
   updated_by: string;
@@ -41,6 +48,8 @@ export interface TenantConfigPatchBody {
   mcp_servers?: Record<string, unknown>[];
   audit_retention_days?: number;
   event_log_retention_days?: number;
+  skill_stale_days?: number;
+  skill_archive_days?: number;
 }
 
 export async function getTenantConfig(tenantId: string): Promise<TenantConfigRecord> {

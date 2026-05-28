@@ -76,13 +76,26 @@ class SkillStatus(StrEnum):
     resolve to ``skill.latest_version`` (which must be active when the
     skill is in this state).
 
+    ``STALE`` — Capability Uplift Sprint #4 (Mini-ADRs U-26 / U-29).
+    Auto-marked by the Curator worker when an ``ACTIVE`` skill has not
+    seen ``bind`` or ``view`` activity for ``tenant_config.skill_stale_days``
+    (default 30). Bare ``name`` references still resolve to the latest
+    version *and* auto-revive the skill to ``ACTIVE`` via the
+    ``bump_last_used_at`` SQL — the "asleep, wake on touch" semantic.
+    Distinct from ``DRAFT`` so operators can tell "never published" from
+    "published but went cold".
+
     ``ARCHIVED`` — retired skills; bare ``name`` references reject at
     build time but historical pinned ``name@N`` references still resolve
     (reproducibility — agents pinned to old versions keep working).
+    Sprint #4 makes this auto-reachable from ``STALE`` after
+    ``skill_archive_days`` (default 90); Curator never deletes — admin
+    must explicitly unarchive (PATCH ``status`` back to ``ACTIVE``).
     """
 
     DRAFT = "draft"
     ACTIVE = "active"
+    STALE = "stale"
     ARCHIVED = "archived"
 
 
@@ -179,6 +192,16 @@ class Skill(BaseModel):
     latest_version: int = Field(ge=0)  # 0 only between create + first version insert
     description: str = ""
     category: str | None = None
+    # Capability Uplift Sprint #4 — Mini-ADR U-25.
+    # ``pinned`` is the operator's "do not Curator-touch" escape hatch.
+    # ``last_used_at`` is the throttled (1h/skill) activity timestamp
+    # bumped by ``_load_skills`` (build-time bind) + ``skill_view`` (runtime).
+    # ``state_changed_at`` advances on every Curator transition + every
+    # manual PATCH status; the runbook uses it to answer "when did this
+    # skill go stale?" without joining the audit log.
+    pinned: bool = False
+    last_used_at: datetime | None = None
+    state_changed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

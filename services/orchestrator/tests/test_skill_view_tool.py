@@ -246,3 +246,134 @@ async def test_short_content_is_not_truncated() -> None:
     )
     assert "chars truncated" not in result.content
     assert result.meta["truncated"] is False
+
+
+# ─── Sprint #4 (Mini-ADR U-29) — archived dispatch ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_archived_skill_returns_blocked_and_records_metric() -> None:
+    """An archived skill is cold storage — admin must unarchive."""
+    from helix_agent.protocol import Skill, SkillStatus
+
+    version = _make_version()
+    skill_row = Skill(
+        id=version.skill_id,
+        tenant_id=version.tenant_id,
+        name="api-debug",
+        status=SkillStatus.ARCHIVED,
+        latest_version=version.version,
+        description="archived skill",
+        category="ops",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    resolver = RecordingSkillResolver(
+        versions={(version.tenant_id, "api-debug"): version},
+        skills={(version.tenant_id, "api-debug"): skill_row},
+    )
+    tool = SkillViewTool(resolver=resolver, allowed_skill_names=frozenset({"api-debug"}))
+    result = await tool.call(
+        {"skill_name": "api-debug", "path": "SKILL.md"},
+        ctx=_ctx_for(version),
+    )
+    assert "BLOCKED" in result.content
+    assert "archived" in result.content
+    assert result.meta["result"] == "archived"
+    assert result.meta["is_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_draft_skill_returns_not_found() -> None:
+    """Draft skills are invisible to the agent runtime — same as missing."""
+    from helix_agent.protocol import Skill, SkillStatus
+
+    version = _make_version()
+    skill_row = Skill(
+        id=version.skill_id,
+        tenant_id=version.tenant_id,
+        name="api-debug",
+        status=SkillStatus.DRAFT,
+        latest_version=version.version,
+        description="wip",
+        category="ops",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    resolver = RecordingSkillResolver(
+        versions={(version.tenant_id, "api-debug"): version},
+        skills={(version.tenant_id, "api-debug"): skill_row},
+    )
+    tool = SkillViewTool(resolver=resolver, allowed_skill_names=frozenset({"api-debug"}))
+    result = await tool.call(
+        {"skill_name": "api-debug", "path": "SKILL.md"},
+        ctx=_ctx_for(version),
+    )
+    assert "NOT FOUND" in result.content
+    assert result.meta["result"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_activity_recorder_invoked_on_successful_read() -> None:
+    """skill_view bumps last_used_at when the recorder is wired."""
+    from uuid import UUID
+
+    version = _make_version()
+    recorded: list[tuple[UUID, UUID]] = []
+
+    class _Recorder:
+        async def record(self, *, skill_id: UUID, tenant_id: UUID) -> None:
+            recorded.append((skill_id, tenant_id))
+
+    resolver = RecordingSkillResolver(versions={(version.tenant_id, "api-debug"): version})
+    tool = SkillViewTool(
+        resolver=resolver,
+        allowed_skill_names=frozenset({"api-debug"}),
+        activity_recorder=_Recorder(),
+    )
+    await tool.call(
+        {"skill_name": "api-debug", "path": "SKILL.md"},
+        ctx=_ctx_for(version),
+    )
+    assert recorded == [(version.skill_id, version.tenant_id)]
+
+
+@pytest.mark.asyncio
+async def test_activity_recorder_not_invoked_on_archived() -> None:
+    """Archived skill is a hard stop — don't even bump activity."""
+    from uuid import UUID
+
+    from helix_agent.protocol import Skill, SkillStatus
+
+    version = _make_version()
+    skill_row = Skill(
+        id=version.skill_id,
+        tenant_id=version.tenant_id,
+        name="api-debug",
+        status=SkillStatus.ARCHIVED,
+        latest_version=version.version,
+        description="cold",
+        category="ops",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    recorded: list[tuple[UUID, UUID]] = []
+
+    class _Recorder:
+        async def record(self, *, skill_id: UUID, tenant_id: UUID) -> None:
+            recorded.append((skill_id, tenant_id))
+
+    resolver = RecordingSkillResolver(
+        versions={(version.tenant_id, "api-debug"): version},
+        skills={(version.tenant_id, "api-debug"): skill_row},
+    )
+    tool = SkillViewTool(
+        resolver=resolver,
+        allowed_skill_names=frozenset({"api-debug"}),
+        activity_recorder=_Recorder(),
+    )
+    await tool.call(
+        {"skill_name": "api-debug", "path": "SKILL.md"},
+        ctx=_ctx_for(version),
+    )
+    assert recorded == []

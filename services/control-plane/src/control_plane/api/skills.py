@@ -98,9 +98,21 @@ class _AddVersionBody(BaseModel):
 
 
 class _PatchStatusBody(BaseModel):
-    """``PATCH /v1/skills/{id}`` request body."""
+    """``PATCH /v1/skills/{id}`` request body.
 
-    status: SkillStatus
+    All fields are optional so admins can patch one knob at a time.
+    Capability Uplift Sprint #4 (Mini-ADR U-30) extends this with
+    ``pinned`` — operator's "do not Curator-touch" escape hatch. At
+    least one of ``status`` / ``pinned`` must be set; an empty patch
+    rejects with 422.
+    """
+
+    status: SkillStatus | None = None
+    # Mini-ADR U-30. ``True`` opts the skill out of every Curator
+    # transition forever (unless the admin un-pins it). ``False``
+    # restores the default lifecycle. Stays nullable so the same
+    # endpoint can carry just-a-status patches without touching pinned.
+    pinned: bool | None = None
 
 
 class _PutSupportingFileBody(BaseModel):
@@ -199,6 +211,16 @@ def _skill_dict(skill: Skill) -> dict[str, Any]:
         "latest_version": skill.latest_version,
         "description": skill.description,
         "category": skill.category,
+        # Capability Uplift Sprint #4 (Mini-ADR U-25 / U-30). UI needs
+        # these to render the 📌 pin icon + "distance to stale" hint
+        # without a separate fetch.
+        "pinned": skill.pinned,
+        "last_used_at": (
+            skill.last_used_at.isoformat() if skill.last_used_at is not None else None
+        ),
+        "state_changed_at": (
+            skill.state_changed_at.isoformat() if skill.state_changed_at is not None else None
+        ),
         "created_at": skill.created_at.isoformat(),
         "updated_at": skill.updated_at.isoformat(),
     }
@@ -629,9 +651,41 @@ def build_skills_router() -> APIRouter:
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         actor_id: str = getattr(request.state, "actor_id", "anonymous")
+        if body.status is None and body.pinned is None:
+            raise HTTPException(
+                status_code=422,
+                detail="patch body must set at least one of: status, pinned",
+            )
         prior = await store.get_skill(skill_id=skill_id, tenant_id=tenant_id)
         if prior is None:
             raise HTTPException(status_code=404, detail="skill not found")
+
+        # ── Capability Uplift Sprint #4 (Mini-ADR U-30) ──────────────
+        # Pin a high-risk skill = handing it a free pass to skip
+        # Curator review forever. Combined with M1-K J.7b-1 agent-self-
+        # authored skills, that's an attack vector — agent creates a
+        # high-risk skill, asks the platform to pin it, and from then
+        # on the Curator can't auto-archive it. Refuse the combination
+        # unless the caller is admin/system_admin; pin defaults to NO
+        # for high-risk rows.
+        if body.pinned is True and prior.latest_version > 0:
+            latest_for_pin = await store.get_version_by_number(
+                skill_id=skill_id,
+                tenant_id=tenant_id,
+                version=prior.latest_version,
+            )
+            if latest_for_pin is not None and latest_for_pin.high_risk:
+                principal_for_pin = getattr(request.state, "principal", None)
+                roles_for_pin = (
+                    _collect_roles(principal_for_pin) if principal_for_pin is not None else set()
+                )
+                if Role.ADMIN not in roles_for_pin and Role.SYSTEM_ADMIN not in roles_for_pin:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            "pinning a high-risk skill requires tenant admin or system admin role"
+                        ),
+                    )
 
         # ── Capability Uplift Sprint #3 (Mini-ADR U-24) ──────────────
         # High-risk publish gate: when activating, look up the version
@@ -675,24 +729,47 @@ def build_skills_router() -> APIRouter:
                         ),
                     )
 
-        try:
-            updated = await store.set_status(
-                skill_id=skill_id, tenant_id=tenant_id, status=body.status
-            )
-        except SkillNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="skill not found") from exc
+        updated = prior
+        if body.status is not None:
+            try:
+                updated = await store.set_status(
+                    skill_id=skill_id, tenant_id=tenant_id, status=body.status
+                )
+            except SkillNotFoundError as exc:
+                raise HTTPException(status_code=404, detail="skill not found") from exc
 
-        await audit_emit(
-            audit,
-            tenant_id=tenant_id,
-            actor_id=actor_id,
-            action=AuditAction.SKILL_STATUS_CHANGE,
-            resource_type="skill",
-            resource_id=str(skill_id),
-            result=AuditResult.SUCCESS,
-            trace_id=current_trace_id_hex(),
-            details={"from": prior.status.value, "to": updated.status.value},
-        )
+            await audit_emit(
+                audit,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action=AuditAction.SKILL_STATUS_CHANGE,
+                resource_type="skill",
+                resource_id=str(skill_id),
+                result=AuditResult.SUCCESS,
+                trace_id=current_trace_id_hex(),
+                details={"from": prior.status.value, "to": updated.status.value},
+            )
+
+        # Sprint #4 (Mini-ADR U-30) — pin / unpin. Distinct audit
+        # actions so SecOps can filter on either side.
+        if body.pinned is not None and body.pinned != updated.pinned:
+            try:
+                updated = await store.set_pinned(
+                    skill_id=skill_id, tenant_id=tenant_id, pinned=body.pinned
+                )
+            except SkillNotFoundError as exc:
+                raise HTTPException(status_code=404, detail="skill not found") from exc
+            await audit_emit(
+                audit,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action=(AuditAction.SKILL_PINNED if body.pinned else AuditAction.SKILL_UNPINNED),
+                resource_type="skill",
+                resource_id=str(skill_id),
+                result=AuditResult.SUCCESS,
+                trace_id=current_trace_id_hex(),
+                details={"pinned": body.pinned},
+            )
 
         # If we just activated a high-risk skill with the right role,
         # leave a positive audit + metric trail (Mini-ADR U-24).

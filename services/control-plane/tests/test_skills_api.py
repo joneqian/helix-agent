@@ -458,3 +458,68 @@ async def test_get_supporting_file_400_for_invalid_path(setup: Setup) -> None:
         f"/v1/skills/{skill_id}/versions/{version_n}/supporting-files/reference/secret.env"
     )
     assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Capability Uplift Sprint #4 PR B — Curator schema + pin + tenant_config
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_skill_dict_exposes_curator_fields(setup: Setup) -> None:
+    """GET /v1/skills/{id} surfaces pinned + last_used_at + state_changed_at."""
+    client, _ = setup
+    skill = await client.post("/v1/skills", json={"name": "curator-shape"})
+    skill_id = skill.json()["id"]
+    response = await client.get(f"/v1/skills/{skill_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pinned"] is False
+    # New skills have last_used_at == None (no activity yet); the
+    # state_changed_at is populated by the in-memory store on create.
+    assert body["last_used_at"] is None
+    assert body["state_changed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_patch_pinned_toggles_flag_and_audits(setup: Setup) -> None:
+    client, audit_store = setup
+    skill = await client.post("/v1/skills", json={"name": "pinner"})
+    skill_id = skill.json()["id"]
+
+    pin = await client.patch(f"/v1/skills/{skill_id}", json={"pinned": True})
+    assert pin.status_code == 200
+    assert pin.json()["pinned"] is True
+
+    unpin = await client.patch(f"/v1/skills/{skill_id}", json={"pinned": False})
+    assert unpin.status_code == 200
+    assert unpin.json()["pinned"] is False
+
+    page = await audit_store.query(AuditQuery(tenant_id=_TENANT, limit=50))
+    actions = [r.action for r in page.entries]
+    assert AuditAction.SKILL_PINNED in actions
+    assert AuditAction.SKILL_UNPINNED in actions
+
+
+@pytest.mark.asyncio
+async def test_patch_empty_body_rejects_422(setup: Setup) -> None:
+    client, _ = setup
+    skill = await client.post("/v1/skills", json={"name": "noop"})
+    skill_id = skill.json()["id"]
+    response = await client.patch(f"/v1/skills/{skill_id}", json={})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_status_and_pinned_in_one_call(setup: Setup) -> None:
+    """Same endpoint can carry both fields in a single PATCH."""
+    client, _ = setup
+    skill = await client.post("/v1/skills", json={"name": "combo"})
+    skill_id = skill.json()["id"]
+    response = await client.patch(
+        f"/v1/skills/{skill_id}", json={"status": "active", "pinned": True}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "active"
+    assert body["pinned"] is True

@@ -118,6 +118,11 @@ const skillRow = {
   latest_version: 3,
   description: "Search the web and return top N results.",
   category: "web",
+  // Sprint #4 — Curator fields default on every fixture so the
+  // SkillRecord type is always satisfied.
+  pinned: false,
+  last_used_at: "2026-05-25T10:00:00Z",
+  state_changed_at: "2026-05-20T10:00:00Z",
   created_at: "2026-05-20T10:00:00Z",
   updated_at: "2026-05-26T10:00:00Z",
 };
@@ -461,5 +466,56 @@ describe("SkillDetail (PR C)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("skill-add-file-path")).toBeInTheDocument(),
     );
+  });
+
+  // ── Sprint #4 (Mini-ADR U-30) — Pin button ─────────────────────────
+
+  it("Pin button toggles skill.pinned via PATCH", async () => {
+    let lastPatchBody: unknown = null;
+    installAdapter([
+      { match: (u) => u === "/v1/me", respond: () => meResponse },
+      {
+        match: (u, m) => u === "/v1/skills/sk1" && m === "get",
+        respond: () => skillRow,
+      },
+      {
+        match: (u) => u === "/v1/skills/sk1/versions",
+        respond: () => ({ items: [versionRow] }),
+      },
+      {
+        match: (u, m) => u === "/v1/skills/sk1" && m === "patch",
+        respond: ({ data }) => {
+          lastPatchBody = data;
+          return { ...skillRow, pinned: true };
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+    renderSkillsRouter(["/skills/sk1"]);
+    await waitFor(() => expect(screen.getByTestId("skill-pin-button")).toBeInTheDocument());
+    await user.click(screen.getByTestId("skill-pin-button"));
+    await waitFor(() => expect(lastPatchBody).not.toBeNull());
+    // Body is sent as a JSON string by axios; parse + assert it
+    // carried { pinned: true }.
+    const parsed = typeof lastPatchBody === "string" ? JSON.parse(lastPatchBody) : lastPatchBody;
+    expect(parsed).toEqual({ pinned: true });
+  });
+
+  it("Pin button is disabled for non-admin on high-risk skill", async () => {
+    installAdapter([
+      { match: (u) => u === "/v1/me", respond: () => ({ ...meResponse, roles: ["viewer"] }) },
+      {
+        match: (u, m) => u === "/v1/skills/sk1" && m === "get",
+        respond: () => ({ ...skillRow, status: "draft" as const }),
+      },
+      {
+        match: (u) => u === "/v1/skills/sk1/versions",
+        respond: () => ({ items: [highRiskVersionRow] }),
+      },
+    ]);
+    renderSkillsRouter(["/skills/sk1"], { roles: ["viewer"] });
+    await waitFor(() => expect(screen.getByTestId("skill-pin-button")).toBeInTheDocument());
+    const pin = screen.getByTestId("skill-pin-button");
+    expect(pin).toBeDisabled();
   });
 });

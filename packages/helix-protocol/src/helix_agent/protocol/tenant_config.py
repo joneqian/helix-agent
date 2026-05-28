@@ -24,7 +24,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "MemoryRecallMode",
@@ -61,6 +61,17 @@ class TenantPlan(StrEnum):
 _RETENTION_MIN_DAYS = 1
 _RETENTION_MAX_DAYS = 3650
 
+# Capability Uplift Sprint #4 — Mini-ADR U-28.
+# Curator threshold bounds. Defaults 30 / 90 derive from external
+# skill-marketplace observations; M1-K J.7b-1 will revisit after 2-4
+# weeks of real agent-self-create data. The 365 / 730 day ceilings
+# guard against accidental "effectively disabled" settings — anything
+# longer than 1-2 years and the Curator stops being useful infrastructure.
+_SKILL_STALE_MIN_DAYS = 1
+_SKILL_STALE_MAX_DAYS = 365
+_SKILL_ARCHIVE_MIN_DAYS = 2
+_SKILL_ARCHIVE_MAX_DAYS = 730
+
 
 class TenantConfigRecord(BaseModel):
     """One row of ``tenant_config`` as exposed by the admin API."""
@@ -96,9 +107,27 @@ class TenantConfigRecord(BaseModel):
     trigger_fire_scan_mode: TriggerFireScanMode = "warn"
     # Capability Uplift Sprint #6 — Mini-ADR U-5.
     memory_recall_mode: MemoryRecallMode = "hybrid"
+    # Capability Uplift Sprint #4 — Mini-ADR U-28. Curator state-
+    # machine thresholds. Cross-field invariant ``archive_days > stale_days``
+    # is enforced by the model validator below + a DB CHECK in migration
+    # 0044.
+    skill_stale_days: int = Field(default=30, ge=_SKILL_STALE_MIN_DAYS, le=_SKILL_STALE_MAX_DAYS)
+    skill_archive_days: int = Field(
+        default=90, ge=_SKILL_ARCHIVE_MIN_DAYS, le=_SKILL_ARCHIVE_MAX_DAYS
+    )
     created_at: datetime
     updated_at: datetime
     updated_by: str
+
+    @model_validator(mode="after")
+    def _skill_archive_strictly_greater_than_stale(self) -> TenantConfigRecord:
+        if self.skill_archive_days <= self.skill_stale_days:
+            msg = (
+                f"skill_archive_days ({self.skill_archive_days}) must be strictly "
+                f"greater than skill_stale_days ({self.skill_stale_days})"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class TenantConfigPatch(BaseModel):
@@ -129,3 +158,14 @@ class TenantConfigPatch(BaseModel):
     trigger_fire_scan_mode: TriggerFireScanMode | None = None
     # Capability Uplift Sprint #6 — Mini-ADR U-5.
     memory_recall_mode: MemoryRecallMode | None = None
+    # Capability Uplift Sprint #4 — Mini-ADR U-28. Curator threshold
+    # patch. The cross-field invariant is enforced by the service
+    # layer when applying the patch (it has the merged record), not
+    # here — a patch that only carries one of the two days fields is
+    # legal in isolation.
+    skill_stale_days: int | None = Field(
+        default=None, ge=_SKILL_STALE_MIN_DAYS, le=_SKILL_STALE_MAX_DAYS
+    )
+    skill_archive_days: int | None = Field(
+        default=None, ge=_SKILL_ARCHIVE_MIN_DAYS, le=_SKILL_ARCHIVE_MAX_DAYS
+    )

@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from helix_agent.common.observability import helix_counter
+from helix_agent.common.observability.metrics import helix_gauge
 from helix_agent.common.threat_patterns import ThreatFinding
 
 _scan_total = helix_counter(
@@ -137,6 +138,29 @@ _skill_high_risk_event_total = helix_counter(
     "High-risk skill publish gate events (Mini-ADR U-24). "
     "Event enum: activation_blocked | activated.",
     label_names=("event",),
+)
+
+# Capability Uplift Sprint #4 — Curator state machine (Mini-ADR U-31).
+_curator_transition_total = helix_counter(
+    "helix_uplift_curator_transition_total",
+    "Skill lifecycle transitions driven by the Curator worker or by an "
+    "activity-triggered auto-revive (Mini-ADRs U-26 / U-29). "
+    "from_state ∈ {active, stale}; to_state ∈ {active, stale, archived}.",
+    label_names=("from_state", "to_state"),
+)
+
+_curator_pinned_skills = helix_gauge(
+    "helix_uplift_curator_pinned_skills",
+    "Total number of pinned skills across all tenants (Curator escape "
+    "hatch — Mini-ADR U-25). Refreshed at the end of each Curator sweep.",
+)
+
+_skill_view_archived_blocked_total = helix_counter(
+    "helix_uplift_skill_view_archived_blocked_total",
+    "skill_view calls that hit an archived skill — cold path (Mini-ADR "
+    "U-29). Expected to be near-zero in steady state; a non-trivial rate "
+    "means an agent's manifest references an auto-archived skill that "
+    "should be unarchived or replaced.",
 )
 
 
@@ -277,8 +301,33 @@ def record_skill_high_risk_event(*, event: str) -> None:
     _skill_high_risk_event_total.labels(event=event).inc()
 
 
+def record_curator_transition(*, from_state: str, to_state: str, count: int = 1) -> None:
+    """Bump ``helix_uplift_curator_transition_total{from_state,to_state}``
+    by ``count`` (Mini-ADR U-31). Used by the Curator worker for batch
+    transitions and by :func:`SkillStore.bump_last_used_at` for the
+    per-call ``stale → active`` auto-revive path."""
+    if count <= 0:
+        return
+    _curator_transition_total.labels(from_state=from_state, to_state=to_state).inc(count)
+
+
+def set_curator_pinned_skills(count: int) -> None:
+    """Refresh the ``helix_uplift_curator_pinned_skills`` gauge — called
+    at the end of each Curator sweep so the Admin dashboard tracks the
+    operator-managed escape-hatch population (Mini-ADR U-31)."""
+    _curator_pinned_skills.set(count)
+
+
+def record_skill_view_archived_blocked() -> None:
+    """Bump ``helix_uplift_skill_view_archived_blocked_total``. Fires
+    when ``skill_view`` resolves to an archived skill — cold path
+    (Mini-ADR U-29)."""
+    _skill_view_archived_blocked_total.inc()
+
+
 __all__ = [
     "record_anthropic_cache_anchor",
+    "record_curator_transition",
     "record_mcp_call",
     "record_mcp_circuit_state",
     "record_memory_blocked",
@@ -291,8 +340,10 @@ __all__ = [
     "record_skill_high_risk_event",
     "record_skill_redacted",
     "record_skill_view",
+    "record_skill_view_archived_blocked",
     "record_skill_zip_reject",
     "record_threat_pattern_hits",
     "record_threat_scan",
     "record_trigger_blocked",
+    "set_curator_pinned_skills",
 ]

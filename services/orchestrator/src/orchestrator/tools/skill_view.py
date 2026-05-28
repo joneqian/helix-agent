@@ -36,18 +36,20 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
+from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.common.threat_patterns import scan_for_threats
 from helix_agent.common.uplift_metrics import (
     record_skill_drift,
     record_skill_redacted,
     record_skill_view,
+    record_skill_view_archived_blocked,
     record_threat_pattern_hits,
 )
-from helix_agent.protocol import SkillVersion
+from helix_agent.protocol import Skill, SkillStatus, SkillVersion
 from helix_agent.protocol.skill import (
     compute_content_hash,
     supporting_files_to_jsonable,
@@ -73,26 +75,84 @@ _TRUNCATION_PREFIX = "...["
 _TRUNCATION_SUFFIX = " chars truncated]..."
 
 
+@dataclass(frozen=True)
+class SkillResolution:
+    """Capability Uplift Sprint #4 (Mini-ADR U-29) — richer resolver
+    return so ``skill_view`` can dispatch on lifecycle state.
+
+    ``skill is None`` → unknown for this tenant; ``skill_view`` returns
+    NOT FOUND. ``skill.status``:
+
+    * ``ACTIVE`` / ``STALE`` → ``version`` is the latest published row;
+      ``skill_view`` reads + bumps activity. ``STALE`` auto-revives on
+      bump.
+    * ``ARCHIVED`` → ``version`` may still be populated for forensic
+      inspection but ``skill_view`` returns ``[BLOCKED]`` rather than
+      content; cold path expected to be near-zero in steady state.
+    * ``DRAFT`` → treated identically to "unknown" for the agent's
+      purposes (the agent never sees draft skills via skill_view).
+    """
+
+    skill: Skill | None
+    version: SkillVersion | None
+
+
 @runtime_checkable
 class SkillResolver(Protocol):
     """Minimum surface :class:`SkillViewTool` needs.
 
-    Production wiring: a thin shim over :class:`SkillStore.resolve_by_name`.
-    Tests inject a :class:`RecordingSkillResolver` for determinism.
+    Production wiring: a thin shim over :class:`SkillStore.get_skill_by_name`
+    + :class:`SkillStore.get_version_by_number`. Tests inject a
+    :class:`RecordingSkillResolver` for determinism.
     """
 
-    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillVersion | None:
-        """Return the active version for ``skill_name``, or ``None``."""
+    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillResolution:
+        """Return the resolution for ``skill_name``.
+
+        Always returns a :class:`SkillResolution` (never ``None``); a
+        truly unknown skill manifests as ``SkillResolution(skill=None,
+        version=None)``.
+        """
 
 
 @dataclass(frozen=True)
 class RecordingSkillResolver:
-    """In-memory :class:`SkillResolver` for tests."""
+    """In-memory :class:`SkillResolver` for tests.
+
+    Test authors construct one of two mappings:
+
+    * ``skills``: ``(tenant_id, skill_name) → Skill`` — drives the
+      status dispatch path (active / stale / archived / draft).
+    * ``versions``: ``(tenant_id, skill_name) → SkillVersion`` — the
+      content side, fetched only when ``skill.status`` is in the
+      readable set.
+    """
 
     versions: Mapping[tuple[UUID, str], SkillVersion]
+    skills: Mapping[tuple[UUID, str], Skill] = field(default_factory=dict)
 
-    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillVersion | None:
-        return self.versions.get((tenant_id, skill_name))
+    async def resolve(self, *, tenant_id: UUID, skill_name: str) -> SkillResolution:
+        key = (tenant_id, skill_name)
+        version = self.versions.get(key)
+        skill = self.skills.get(key)
+        if skill is None and version is not None:
+            # Tests that only supply ``versions`` get a synthetic ACTIVE
+            # skill so the dispatch path doesn't refuse to read.
+            from datetime import UTC, datetime
+
+            now = datetime.now(UTC)
+            skill = Skill(
+                id=version.skill_id,
+                tenant_id=tenant_id,
+                name=skill_name,
+                status=SkillStatus.ACTIVE,
+                latest_version=version.version,
+                description=version.description,
+                category=version.category,
+                created_at=now,
+                updated_at=now,
+            )
+        return SkillResolution(skill=skill, version=version)
 
 
 @dataclass(frozen=True)
@@ -110,6 +170,10 @@ class SkillViewTool:
     resolver: SkillResolver
     allowed_skill_names: frozenset[str]
     content_char_cap: int = SKILL_VIEW_CONTENT_CAP
+    # Capability Uplift Sprint #4 — Mini-ADR U-27. ``None`` keeps the
+    # tool runnable in tests without a Curator stack; production wires
+    # a :class:`ThrottledActivityRecorder`.
+    activity_recorder: SkillActivityRecorder | None = None
 
     @property
     def spec(self) -> ToolSpec:
@@ -160,13 +224,60 @@ class SkillViewTool:
                 meta={"skill_name": skill_name, "result": "not_allowed"},
             )
 
-        version = await self.resolver.resolve(tenant_id=ctx.tenant_id, skill_name=skill_name)
+        resolution = await self.resolver.resolve(tenant_id=ctx.tenant_id, skill_name=skill_name)
+        skill = resolution.skill
+        version = resolution.version
+
+        # Sprint #4 (Mini-ADR U-29) — dispatch on the parent skill's
+        # lifecycle state before reading any content. ARCHIVED takes
+        # priority over the version probe; DRAFT and missing both
+        # surface as NOT FOUND for the agent.
+        if skill is None or skill.status == SkillStatus.DRAFT:
+            record_skill_view(result="not_found")
+            return ToolResult(
+                content=f"[NOT FOUND: skill {skill_name!r}]",
+                meta={"skill_name": skill_name, "result": "not_found"},
+            )
+        if skill.status == SkillStatus.ARCHIVED:
+            record_skill_view_archived_blocked()
+            # Audit row is the orchestrator caller's job (it builds the
+            # per-tool-call audit envelope downstream). We log a
+            # structured marker so SecOps can correlate the metric
+            # bump to the offending agent / skill pair.
+            logger.warning(
+                "skill_view.archived_blocked skill=%s path=%s",
+                skill_name,
+                path,
+            )
+            return ToolResult(
+                content=(
+                    f"[BLOCKED: skill {skill_name!r} is archived — contact "
+                    f"a tenant admin to unarchive before reading]"
+                ),
+                meta={
+                    "skill_name": skill_name,
+                    "result": "archived",
+                    "is_error": True,
+                },
+            )
         if version is None:
             record_skill_view(result="not_found")
             return ToolResult(
                 content=f"[NOT FOUND: skill {skill_name!r}]",
                 meta={"skill_name": skill_name, "result": "not_found"},
             )
+
+        # Sprint #4 (Mini-ADR U-27) — mark this skill as "just used".
+        # Fires for both ACTIVE and STALE; STALE rows auto-revive to
+        # ACTIVE inside the recorder's SQL UPDATE. The recorder owns
+        # throttling + error swallowing.
+        if self.activity_recorder is not None:
+            try:
+                await self.activity_recorder.record(skill_id=skill.id, tenant_id=ctx.tenant_id)
+            except Exception:  # noqa: S110 — best-effort hot path
+                # ThrottledActivityRecorder swallows its own errors;
+                # this guard is belt-and-braces for non-default recorders.
+                pass
 
         # ── U-21 step 1: drift check ────────────────────────────────
         jsonable_files = supporting_files_to_jsonable(version.supporting_files)
