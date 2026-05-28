@@ -72,6 +72,21 @@ _SKILL_STALE_MAX_DAYS = 365
 _SKILL_ARCHIVE_MIN_DAYS = 2
 _SKILL_ARCHIVE_MAX_DAYS = 730
 
+# Capability Uplift Sprint #7 — Mini-ADR U-38.
+# MemoryConsolidator threshold bounds.
+#   min_cluster_size:  N=2 too aggressive (any 2 similar items trip),
+#                      N>5 too conservative (real clusters missed)
+#   similarity:        embedding cosine ≥ 0.85 = "clearly synonymous"
+#                      empirical floor; below 0.7 too permissive,
+#                      above 0.99 only exact-paraphrase clusters trigger
+#   purge_min_age:     7d floor = "still in use"; 365d ceiling = ~off
+_MEMORY_CLUSTER_MIN_SIZE = 2
+_MEMORY_CLUSTER_MAX_SIZE = 20
+_MEMORY_SIMILARITY_MIN = 0.7
+_MEMORY_SIMILARITY_MAX = 0.99
+_MEMORY_PURGE_MIN_DAYS = 7
+_MEMORY_PURGE_MAX_DAYS = 365
+
 
 class TenantConfigRecord(BaseModel):
     """One row of ``tenant_config`` as exposed by the admin API."""
@@ -114,6 +129,24 @@ class TenantConfigRecord(BaseModel):
     skill_stale_days: int = Field(default=30, ge=_SKILL_STALE_MIN_DAYS, le=_SKILL_STALE_MAX_DAYS)
     skill_archive_days: int = Field(
         default=90, ge=_SKILL_ARCHIVE_MIN_DAYS, le=_SKILL_ARCHIVE_MAX_DAYS
+    )
+    # Capability Uplift Sprint #7 — Mini-ADR U-38. MemoryConsolidator
+    # thresholds. ``min_cluster_size`` is the number of similar transient
+    # items required before LLM verification fires; ``similarity`` is the
+    # cosine-similarity floor (1 - cosine_distance). ``purge_enabled`` lets
+    # high-compliance tenants opt out of lone-item noise purge entirely
+    # (the consolidate path still runs). ``purge_min_age_days`` is the
+    # grace window during which a transient item cannot be purged even if
+    # it is never retrieved (per Mini-ADR U-37 protection #1).
+    memory_consolidation_min_cluster_size: int = Field(
+        default=3, ge=_MEMORY_CLUSTER_MIN_SIZE, le=_MEMORY_CLUSTER_MAX_SIZE
+    )
+    memory_consolidation_similarity: float = Field(
+        default=0.85, ge=_MEMORY_SIMILARITY_MIN, le=_MEMORY_SIMILARITY_MAX
+    )
+    memory_purge_enabled: bool = True
+    memory_purge_min_age_days: int = Field(
+        default=30, ge=_MEMORY_PURGE_MIN_DAYS, le=_MEMORY_PURGE_MAX_DAYS
     )
     created_at: datetime
     updated_at: datetime
@@ -168,4 +201,16 @@ class TenantConfigPatch(BaseModel):
     )
     skill_archive_days: int | None = Field(
         default=None, ge=_SKILL_ARCHIVE_MIN_DAYS, le=_SKILL_ARCHIVE_MAX_DAYS
+    )
+    # Capability Uplift Sprint #7 — Mini-ADR U-38. MemoryConsolidator
+    # threshold patch. All optional; patches carrying any subset are valid.
+    memory_consolidation_min_cluster_size: int | None = Field(
+        default=None, ge=_MEMORY_CLUSTER_MIN_SIZE, le=_MEMORY_CLUSTER_MAX_SIZE
+    )
+    memory_consolidation_similarity: float | None = Field(
+        default=None, ge=_MEMORY_SIMILARITY_MIN, le=_MEMORY_SIMILARITY_MAX
+    )
+    memory_purge_enabled: bool | None = None
+    memory_purge_min_age_days: int | None = Field(
+        default=None, ge=_MEMORY_PURGE_MIN_DAYS, le=_MEMORY_PURGE_MAX_DAYS
     )

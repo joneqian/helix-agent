@@ -635,7 +635,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 - [x] **#3 Skill 附属文件 + Claude Code 标准 SKILL.md + Progressive Disclosure + 多层威胁防御** —— `skill_version.supporting_files` JSONB 列（migration 0042，5 MB cap）+ Claude Code 标准 SKILL.md 格式（YAML frontmatter + `helix:` 命名空间扩展，跨平台互通）+ progressive disclosure（per-skill `lazy_load` flag，可选 body 懒加载到 `skill_view` 工具）+ 单文件 PUT/DELETE supporting-files API + ZIP 双格式 read（向后兼容）+ U-21 drift detection（blake2b content_hash + 读时校验 → BLOCKED）+ U-22 obfuscation 防御（base64 / NFKC / 空格归一 4 variants）+ U-23 中文 prompt injection patterns（12 cn_* 规则）+ U-24 high-risk publish gate（含 `exec_python` / `http` / `scripts/*` → DRAFT→ACTIVE 必 admin）+ Admin UI 双栏 Monaco 编辑器（5 mutation 路径 + 高危徽章 + Lazy 调试视图）。**Mini-ADRs U-14 ~ U-24**（PR A 设计 #313 + PR B 设计补强 #314 + PR B backend #315 + PR C Admin UI #316）。**2026-05-28 完成**。**J.7b-6 supporting files 已并入,M1-K J.7b 仅剩 7 项**;**J.7b-1 visibility / fork / promote 三大支柱**在 2026-05-28 预约定到 STREAM-J-DESIGN § 15.7（PR #319），M1-K design phase 直接基于此展开。
 - [x] **#4 Curator 自动状态机** —— `SkillRow` 加 `pinned: bool` + `last_used_at: timestamptz` + `state_changed_at: timestamptz`（migration 0043）+ `tenant_config` 加 `skill_stale_days` / `skill_archive_days`（migration 0044，cross-field validator + DB CHECK）+ 新建 `services/control-plane/skill_curator.py` 每天 03:00 UTC 周期 worker 四条状态机路径（active→stale / stale→archived / pin 屏蔽 / stale→active 自动复活）+ `ThrottledActivityRecorder` 双路径 activity 跟踪（_load_skills + skill_view）+ Admin UI Pin 按钮 + 状态分组 + 距 stale ETA hint + Tenant Config 阈值显示 + 5 个新 audit action + 4 recording rules + 2 alerts + runbook 7 节。**Mini-ADRs U-25 ~ U-32**（PR A 设计 #317 + PR B 实施 #318）。**2026-05-28 完成**。**基础设施 Gate 期完成**；启用阈值调参等 J.7b-1 上线后看真实膨胀率（M1-K 期间，默认 30/90 可能改 7/30）。
-- [ ] **#7 Memory 短期 → 长期凝结引擎（基础设施）** —— `MemoryItemRow` 加 4 列（`status` Literal[transient/consolidated/archived] + `consolidated_into: UUID|None` + `consolidated_from: list[UUID]` JSONB + `last_reviewed_at: timestamptz|None`，migration 0045）+ `tenant_config` 加 4 阈值字段（`memory_consolidation_min_cluster_size` / `memory_consolidation_similarity` / `memory_purge_enabled` / `memory_purge_min_age_days`，migration 0046）+ 新建 `services/control-plane/memory_consolidator.py` 每 4h 周期双 pass worker：SUB-PASS 1 hybrid clustering（embedding 召回候选 cluster → LLM 验证 + 总结 + 防误学三合一 prompt），SUB-PASS 2 lone-item noise purge（30 天 + 0 召回 + last_reviewed_at 三保护）+ Hermes 4 类 anti-mislearn + helix 2 类扩展（time-bound state / credential-shape）+ `MemoryStore.archive()` abstract method 预留 M2-C + `retrieve()` 默认 WHERE 跳被凝结的 raw transient + `MemoryConsolidationPolicy.aux_model` 独立于 ContextCompressor + 7 audit actions 双 Literal 同步 + 7 metrics + 5 recording rules + 3 alerts + runbook。**Mini-ADRs U-33 ~ U-42**（PR A 设计 + PR B 实施）。**3 个不可逆 ADR 已 2026-05-28 用户拍板：数据模型 / 触发机制 / 防误学层级**。**基础设施 Gate 期内完成**；触发阈值（default min_cluster_size=3 / similarity=0.85 / purge_age=30d）+ 凝结频率（default 4h）M1 dogfood 数据反过来调。**Week 11-13，~3 周**。**唯一剩余项**。
+- [x] **#7 Memory 短期 → 长期凝结引擎（基础设施）** —— `MemoryItemRow` 加 4 列（`status` Literal[transient/consolidated/archived] + `consolidated_into: UUID|None` + `consolidated_from: list[UUID]` JSONB + `last_reviewed_at: timestamptz|None`，migration 0045）+ `tenant_config` 加 4 阈值字段（`memory_consolidation_min_cluster_size` / `memory_consolidation_similarity` / `memory_purge_enabled` / `memory_purge_min_age_days`，migration 0046）+ 新建 `services/control-plane/memory_consolidator.py` 每 4h 周期双 pass worker：SUB-PASS 1 hybrid clustering（embedding 召回候选 cluster → LLM 验证 + 总结 + 防误学三合一 prompt），SUB-PASS 2 lone-item noise purge（30 天 + 0 召回 + last_reviewed_at 三保护）+ Hermes 4 类 anti-mislearn + helix 2 类扩展（time-bound state / credential-shape）+ `MemoryStore.archive()` abstract method 预留 M2-C + `retrieve()` 默认 WHERE 跳被凝结的 raw transient + `MemoryConsolidationPolicy.aux_model` 独立于 ContextCompressor + 7 audit actions 双 Literal 同步 + 7 metrics + 5 recording rules + 3 alerts + runbook 9 节。**Mini-ADRs U-33 ~ U-42**（PR A 设计 #321 + PR B 实施）。**3 个不可逆 ADR 2026-05-28 用户拍板：数据模型 / 触发机制 / 防误学层级**。**2026-05-28 完成**。**Aux 模型默认 no-op 占位**（schema + worker + audit + 可观测均产品级；真 LLM 适配器作为 M1 跟进项 wire；详见 runbook § 3）。**基础设施 Gate 期完成**；触发阈值（default min_cluster_size=3 / similarity=0.85 / purge_age=30d）+ 凝结频率（default 4h）M1 dogfood 数据反过来调。
 
 **Sprint Verification**：
 
@@ -644,7 +644,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - 30 天稳定性观察期不被搅动（SLO 实时采集，破任一立刻 retro）
 - schema 变更（#6 migration 0040 → #3 migration 0042 → #4 migrations 0043+0044）**串行上 main**，不并行降风险
 
-**进度（2026-05-28）**：**7/8 闭环**(#1 #2 #3 #4 #5 #6 #8 全部 shipped)；只剩 **#7 Memory 凝结引擎**未启动。
+**进度（2026-05-28）**：**8/8 全部闭环** —— #1 #2 #3 #4 #5 #6 #7 #8 全部 shipped。Capability Uplift Sprint 收官（M1 期间仅做阈值调参 / Aux 模型 wire，不再新能力）。
 
 **M1 期间需要做的事项**（仅启用 + 调参，非新能力开发）：
 
@@ -823,14 +823,14 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 > **2026-05-20 范围明确化**：J.3 long-term memory + K6/K7 CRUD/DLQ + L2 summarization 已覆盖 working + summarization；M2-C 真正新的只是 archive 层（冷热分层 + 自动晋升 / 召回）。
 >
-> **[2026-05-27 关联 / 2026-05-28 状态更新]** Memory 短期 → 长期自动凝结引擎作为 **Capability Uplift Sprint #7** 在 Gate 期交付基础设施（凝结引擎本体 + 防误学约束 + `MemoryStore.archive()` 抽象方法 + `status='archived'` retrieve filter）；**Sprint #7 设计 2026-05-28 锁定（Mini-ADRs U-33~U-42），实施进行中**；M2-C 直接对接凝结引擎输出的 long-term entries（archive 流水线接口在 Sprint #7 预留 `NotImplementedError` 占位，M2-C PR 只需实现不动 schema）；M1 期间用 dogfood 数据调凝结触发策略，M2-C 启动时 archive 路径直接挂凝结后的 long-term 数据。
+> **[2026-05-27 关联 / 2026-05-28 状态更新]** Memory 短期 → 长期自动凝结引擎作为 **Capability Uplift Sprint #7** 在 Gate 期交付基础设施（凝结引擎本体 + 防误学约束 + `MemoryStore.archive()` 抽象方法 + `status='archived'` retrieve filter）；**Sprint #7 设计 + 实施 2026-05-28 完成（Mini-ADRs U-33~U-42，PR A #321 + PR B #?）**；M2-C 直接对接凝结引擎输出的 long-term entries（archive 流水线接口在 Sprint #7 预留 `NotImplementedError` 占位，M2-C PR 只需实现不动 schema）；M1 期间用 dogfood 数据调凝结触发策略，M2-C 启动时 archive 路径直接挂凝结后的 long-term 数据。
 
 参考：[research/04-deerflow-source-analysis.md](./research/04-deerflow-source-analysis.md) §"Memory"
 - [ ] **memory archive 表 + 冷热分层**（working hot in pgvector / archive cold in S3）
 - [ ] **自动晋升策略**（按访问频次 / 时间衰减 → archive）
 - [ ] **archive 召回路径**（按需 promote 回 working）
 
-历史项（已覆盖）：~~working layer~~ → 已在 **J.3 + K6/K7**；~~summarization layer~~ → 已在 **L2 ContextCompressor**；~~consolidation engine~~ → **Capability Uplift Sprint #7（设计 2026-05-28 锁，实施进行中）**
+历史项（已覆盖）：~~working layer~~ → 已在 **J.3 + K6/K7**；~~summarization layer~~ → 已在 **L2 ContextCompressor**；~~consolidation engine~~ → 已在 **Capability Uplift Sprint #7（2026-05-28 完成）**
 
 #### M2-D Eval Gate + 持续改进 pipeline（~3 周；合并 J.12 + J.13b/c）
 

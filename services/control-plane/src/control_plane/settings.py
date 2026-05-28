@@ -300,6 +300,21 @@ class Settings(BaseSettings):
     #: but loose enough to cap write amplification under high fan-out.
     skill_activity_throttle_s: int = Field(default=3_600, gt=0)
 
+    # --------------------------------------------------- memory consolidator (Sprint #7)
+    #: Capability Uplift Sprint #7 (Mini-ADR U-34) — MemoryConsolidator
+    #: sweep cadence. Default 14400 = every 4 hours (4 sweeps / day).
+    #: Tighter than SkillCurator's daily because fact accumulation
+    #: happens on hours-to-days, not weeks.
+    memory_consolidator_interval_s: int = Field(default=14_400, gt=0)
+
+    #: Capability Uplift Sprint #7 (Mini-ADR U-39) — default aux model
+    #: name used when an agent's manifest leaves
+    #: ``policies.memory_consolidation.aux_model`` unset. Sonnet rather
+    #: than Haiku because the anti-mislearn classification benefits from
+    #: a stronger model; this is a cold path so the cost premium is
+    #: bounded.
+    memory_consolidator_default_aux_model: str = "claude-sonnet-4-6"
+
     # ------------------------------------------------------------------ tenant rate limit (C.6)
     #: Per-tenant request bucket capacity (tokens). Drained one token
     #: per authenticated request.

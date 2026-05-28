@@ -74,6 +74,19 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                     row_kwargs["skill_stale_days"] = patch.skill_stale_days
                 if patch.skill_archive_days is not None:
                     row_kwargs["skill_archive_days"] = patch.skill_archive_days
+                # Capability Uplift Sprint #7 — MemoryConsolidator thresholds.
+                if patch.memory_consolidation_min_cluster_size is not None:
+                    row_kwargs["memory_consolidation_min_cluster_size"] = (
+                        patch.memory_consolidation_min_cluster_size
+                    )
+                if patch.memory_consolidation_similarity is not None:
+                    row_kwargs["memory_consolidation_similarity"] = (
+                        patch.memory_consolidation_similarity
+                    )
+                if patch.memory_purge_enabled is not None:
+                    row_kwargs["memory_purge_enabled"] = patch.memory_purge_enabled
+                if patch.memory_purge_min_age_days is not None:
+                    row_kwargs["memory_purge_min_age_days"] = patch.memory_purge_min_age_days
                 row = TenantConfigRecord(**row_kwargs)  # type: ignore[arg-type]
             else:
                 row = existing.model_copy(
@@ -94,6 +107,15 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                             "memory_recall_mode": patch.memory_recall_mode,
                             "skill_stale_days": patch.skill_stale_days,
                             "skill_archive_days": patch.skill_archive_days,
+                            # Capability Uplift Sprint #7.
+                            "memory_consolidation_min_cluster_size": (
+                                patch.memory_consolidation_min_cluster_size
+                            ),
+                            "memory_consolidation_similarity": (
+                                patch.memory_consolidation_similarity
+                            ),
+                            "memory_purge_enabled": patch.memory_purge_enabled,
+                            "memory_purge_min_age_days": patch.memory_purge_min_age_days,
                         }.items()
                         if v is not None
                     }

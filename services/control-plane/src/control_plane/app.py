@@ -67,6 +67,11 @@ from control_plane.curation_worker import CurationWorker
 from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
 from control_plane.manifest import ManifestLoader
 from control_plane.memory import MemoryDLQWorker
+from control_plane.memory_consolidator import (
+    MemoryConsolidator,
+    make_consolidator_embedder,
+    make_null_consolidator_aux_model,
+)
 from control_plane.middleware import (
     AuditContextMiddleware,
     AuthMiddleware,
@@ -652,6 +657,28 @@ def create_app(
                 )
                 memory_dlq_worker.start()
                 _app.state.memory_dlq_worker = memory_dlq_worker
+            # Capability Uplift Sprint #7 (Mini-ADRs U-34 / U-39) —
+            # MemoryConsolidator. Starts only when an embedder is
+            # available (needed to embed the consolidated summary text);
+            # ships with a no-op aux model (returns ``false_cluster`` for
+            # every cluster + ``durable`` for every lone item) so the
+            # worker runs end-to-end without consolidating until a real
+            # LLM adapter is wired in a follow-on M1 task.
+            memory_consolidator: MemoryConsolidator | None = None
+            if enable_scheduler and embedder is not None:
+                memory_consolidator = MemoryConsolidator(
+                    memory_store=resolved_memory_store,
+                    tenant_config_service=resolved_tenant_config_service,
+                    audit_logger=resolved_audit,
+                    aux_model=make_null_consolidator_aux_model(),
+                    embedder=make_consolidator_embedder(embedder),
+                    interval_s=float(resolved_settings.memory_consolidator_interval_s),
+                    default_aux_model_name=(
+                        resolved_settings.memory_consolidator_default_aux_model
+                    ),
+                )
+                memory_consolidator.start()
+                _app.state.memory_consolidator = memory_consolidator
             resolved_lifecycle.mark_ready()
             logger.info(
                 "control_plane.lifespan.ready",
@@ -660,6 +687,8 @@ def create_app(
             try:
                 yield
             finally:
+                if memory_consolidator is not None:
+                    await memory_consolidator.stop()
                 if memory_dlq_worker is not None:
                     await memory_dlq_worker.stop()
                 if reaper is not None:

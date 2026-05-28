@@ -171,6 +171,48 @@ groups:
         expr: |
           sum(rate(helix_uplift_skill_view_archived_blocked_total[1h]))
 
+  - name: helix_uplift_memory_consolidator
+    interval: 60s
+    rules:
+      # Capability Uplift Sprint #7 — MemoryConsolidator state-machine.
+      #   * memory_consolidated_rate:1d — daily count of successful
+      #     consolidations; expected 0–N per tenant per day; sustained
+      #     0 across all tenants triggers HelixUpliftConsolidatorIdle.
+      #   * memory_cluster_rejection_rate:1d{reason} — labeled split so
+      #     SecOps can see whether anti-mislearn is firing for env
+      #     failures, credentials, etc.
+      #   * memory_purged_rate:1d{category} — same shape for the
+      #     lone-item noise-purge sub-pass.
+      #   * memory_review_durable_ratio:1d — % of lone-item reviews
+      #     that pass; healthy memory_writeback is typically 0.7–0.9.
+      #   * consolidator_aux_tokens_input:1d — Sprint #7 LLM spend
+      #     telemetry split from main-model accounting.
+      - record: helix:uplift:memory_consolidated_rate:1d
+        expr: |
+          sum(increase(helix_uplift_memory_consolidated_total[1d]))
+
+      - record: helix:uplift:memory_cluster_rejection_rate:1d
+        expr: |
+          sum by (reason) (increase(helix_uplift_memory_cluster_rejected_total[1d]))
+
+      - record: helix:uplift:memory_purged_rate:1d
+        expr: |
+          sum by (category) (increase(helix_uplift_memory_purged_total[1d]))
+
+      - record: helix:uplift:memory_review_durable_ratio:1d
+        expr: |
+          sum(increase(helix_uplift_memory_reviewed_durable_total[1d]))
+          /
+          clamp_min(
+            sum(increase(helix_uplift_memory_reviewed_durable_total[1d]))
+            + sum(increase(helix_uplift_memory_purged_total[1d])),
+            1
+          )
+
+      - record: helix:uplift:consolidator_aux_tokens_input:1d
+        expr: |
+          sum(increase(helix_uplift_consolidator_llm_tokens_total{kind="input"}[1d]))
+
   - name: helix_uplift_mcp_client
     interval: 30s
     rules:
@@ -389,3 +431,52 @@ groups:
           summary: "Agents trying to read archived skills > 6/hr"
           description: "{{ $value }} archived-skill read attempts/sec sustained 30m — an agent's manifest probably references an auto-archived skill. See runbook § 4."
           runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/skill-curator.md#section-4"
+
+      # Capability Uplift Sprint #7 (Mini-ADR U-41) — MemoryConsolidator.
+      # P2 — 0 consolidations across all tenants for 3 days means either
+      # threshold misconfig, embedding pipeline broken, or LLM rejecting
+      # everything. Healthy state is a slow trickle every day.
+      - alert: HelixUpliftConsolidatorIdle
+        expr: helix:uplift:memory_consolidated_rate:1d == 0
+        for: 3d
+        labels:
+          severity: P2
+        annotations:
+          summary: "MemoryConsolidator produced 0 consolidations in 3 days"
+          description: "Zero consolidations sustained 3d — verify aux_model is wired (Sprint #7 ships a no-op default), tenant_config thresholds aren't disabling, embedding pipeline is healthy. See runbook § 4."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/memory-consolidator.md#section-4"
+
+      # P2 — > 100 noise-purges in one day is well above the expected
+      # trickle and points at either upstream memory_writeback emitting
+      # too much noise (good catch) or anti-mislearn over-rejecting
+      # (regression). The labeled rate lets the runbook split which.
+      - alert: HelixUpliftConsolidatorPurgeSurge
+        expr: sum(helix:uplift:memory_purged_rate:1d) > 100
+        for: 1d
+        labels:
+          severity: P2
+        annotations:
+          summary: "MemoryConsolidator purged > 100 items in last day"
+          description: "{{ $value }} purges in 24h — investigate whether memory_writeback is leaking noise or anti-mislearn prompt regressed. See runbook § 5."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/memory-consolidator.md#section-5"
+
+      # P3 — anti-mislearn rejection rate > 50% of all cluster decisions
+      # is a soft warning that either (a) writeback is generating too
+      # much noise (root cause is upstream) or (b) anti-mislearn prompt
+      # is over-strict (Sprint #7 PR may need a re-tune).
+      - alert: HelixUpliftConsolidatorRejectionDominant
+        expr: |
+          sum(rate(helix_uplift_memory_cluster_rejected_total{reason!="false_cluster"}[1d]))
+          /
+          clamp_min(
+            sum(rate(helix_uplift_memory_consolidated_total[1d]))
+            + sum(rate(helix_uplift_memory_cluster_rejected_total{reason!="false_cluster"}[1d])),
+            1
+          ) > 0.5
+        for: 1d
+        labels:
+          severity: P3
+        annotations:
+          summary: "MemoryConsolidator anti-mislearn rejection > 50% of decisions"
+          description: "Rejection ratio is {{ $value }} sustained 1d — either upstream writeback is leaking noise (good catch) or anti-mislearn prompt regressed. See runbook § 6."
+          runbook_url: "https://github.com/joneqian/helix-agent/blob/main/docs/runbooks/memory-consolidator.md#section-6"

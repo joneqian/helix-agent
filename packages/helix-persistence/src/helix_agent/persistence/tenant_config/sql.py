@@ -42,6 +42,11 @@ def _row_to_record(row: TenantConfigRow) -> TenantConfigRecord:
         memory_recall_mode=cast(MemoryRecallMode, row.memory_recall_mode),
         skill_stale_days=row.skill_stale_days,
         skill_archive_days=row.skill_archive_days,
+        # Capability Uplift Sprint #7 — MemoryConsolidator thresholds.
+        memory_consolidation_min_cluster_size=row.memory_consolidation_min_cluster_size,
+        memory_consolidation_similarity=row.memory_consolidation_similarity,
+        memory_purge_enabled=row.memory_purge_enabled,
+        memory_purge_min_age_days=row.memory_purge_min_age_days,
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -105,6 +110,20 @@ class SqlTenantConfigStore(TenantConfigStore):
                     values["skill_stale_days"] = patch.skill_stale_days
                 if patch.skill_archive_days is not None:
                     values["skill_archive_days"] = patch.skill_archive_days
+                # Capability Uplift Sprint #7 — MemoryConsolidator
+                # thresholds (Mini-ADR U-38).
+                if patch.memory_consolidation_min_cluster_size is not None:
+                    values["memory_consolidation_min_cluster_size"] = (
+                        patch.memory_consolidation_min_cluster_size
+                    )
+                if patch.memory_consolidation_similarity is not None:
+                    values["memory_consolidation_similarity"] = (
+                        patch.memory_consolidation_similarity
+                    )
+                if patch.memory_purge_enabled is not None:
+                    values["memory_purge_enabled"] = patch.memory_purge_enabled
+                if patch.memory_purge_min_age_days is not None:
+                    values["memory_purge_min_age_days"] = patch.memory_purge_min_age_days
                 stmt = (
                     pg_insert(TenantConfigRow)
                     .values(**values)
@@ -158,6 +177,19 @@ class SqlTenantConfigStore(TenantConfigStore):
                 existing.skill_stale_days = patch.skill_stale_days
             if patch.skill_archive_days is not None:
                 existing.skill_archive_days = patch.skill_archive_days
+            # Capability Uplift Sprint #7 — MemoryConsolidator thresholds.
+            # DB CHECK constraints in migration 0046 catch out-of-range
+            # values; the Pydantic record_validator re-checks on read.
+            if patch.memory_consolidation_min_cluster_size is not None:
+                existing.memory_consolidation_min_cluster_size = (
+                    patch.memory_consolidation_min_cluster_size
+                )
+            if patch.memory_consolidation_similarity is not None:
+                existing.memory_consolidation_similarity = patch.memory_consolidation_similarity
+            if patch.memory_purge_enabled is not None:
+                existing.memory_purge_enabled = patch.memory_purge_enabled
+            if patch.memory_purge_min_age_days is not None:
+                existing.memory_purge_min_age_days = patch.memory_purge_min_age_days
             existing.updated_at = _utc_now()
             existing.updated_by = actor_id
             await session.commit()

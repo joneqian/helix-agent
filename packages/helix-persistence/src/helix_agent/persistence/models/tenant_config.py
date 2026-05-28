@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import DateTime, Integer, Text, func, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -73,6 +73,22 @@ class TenantConfigRow(Base):
     )
     skill_archive_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("90"), default=90
+    )
+    # Capability Uplift Sprint #7 — Mini-ADR U-38. MemoryConsolidator
+    # thresholds. Defaults derive from Hermes consolidation observations
+    # + M0 estimates; M1 dogfood (2-4 wk after enabling) will revisit.
+    # CHECK constraints + cross-field bounds live in migration 0046.
+    memory_consolidation_min_cluster_size: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("3"), default=3
+    )
+    memory_consolidation_similarity: Mapped[float] = mapped_column(
+        Float(precision=2), nullable=False, server_default=text("0.85"), default=0.85
+    )
+    memory_purge_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true"), default=True
+    )
+    memory_purge_min_age_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("30"), default=30
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

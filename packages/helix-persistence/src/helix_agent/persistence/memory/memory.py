@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from helix_agent.common.search.rrf import rrf_fuse
 from helix_agent.common.threat_patterns import ThreatFinding, scan_for_threats
@@ -111,6 +111,11 @@ class InMemoryMemoryStore(MemoryStore):
             if row.tenant_id == tenant_id
             and row.user_id == user_id
             and row.deleted_at is None  # Stream K.K6 — hide soft-deleted
+            # Capability Uplift Sprint #7 (Mini-ADR U-33) — skip archived
+            # + skip raw transient that has been superseded by a
+            # consolidated parent (prevents double-counting raw + summary).
+            and row.status != "archived"
+            and (row.status == "consolidated" or row.consolidated_into is None)
             and (kind is None or row.kind == kind)
         ]
         # Vector recall — closest cosine distance first.
@@ -212,3 +217,168 @@ class InMemoryMemoryStore(MemoryStore):
                 self._rows[idx] = row.model_copy(update={"deleted_at": datetime.now(UTC)})
                 return True
         return False
+
+    # ------------------------------------------------------------------
+    # Capability Uplift Sprint #7 — MemoryConsolidator interface
+    # ------------------------------------------------------------------
+
+    async def consolidator_distinct_tenant_ids(self) -> list[UUID]:
+        seen: set[UUID] = set()
+        for row in self._rows:
+            if row.deleted_at is None and row.status == "transient":
+                seen.add(row.tenant_id)
+        return sorted(seen)
+
+    async def distinct_users(self, *, tenant_id: UUID) -> list[UUID]:
+        seen: set[UUID] = set()
+        for row in self._rows:
+            if row.tenant_id == tenant_id and row.deleted_at is None and row.status == "transient":
+                seen.add(row.user_id)
+        return sorted(seen)
+
+    async def list_transient(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        max_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+        candidates = [
+            row
+            for row in self._rows
+            if row.tenant_id == tenant_id
+            and row.user_id == user_id
+            and row.deleted_at is None
+            and row.status == "transient"
+            and row.consolidated_into is None
+            and (row.created_at or datetime.now(UTC)) >= cutoff
+        ]
+        candidates.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=UTC))
+        return candidates[:limit]
+
+    async def vector_neighbors(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        embedding: Sequence[float],
+        cosine_max: float,
+        limit: int,
+    ) -> list[MemoryItem]:
+        candidates = [
+            row
+            for row in self._rows
+            if row.tenant_id == tenant_id
+            and row.user_id == user_id
+            and row.deleted_at is None
+            and row.status == "transient"
+            and row.consolidated_into is None
+        ]
+        scored = [(row, _cosine_distance(embedding, row.embedding)) for row in candidates]
+        scored = [(row, d) for row, d in scored if d <= cosine_max]
+        scored.sort(key=lambda pair: pair[1])
+        return [row for row, _ in scored[:limit]]
+
+    async def write_consolidated(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        content: str,
+        embedding: Sequence[float],
+        source_ids: Sequence[UUID],
+    ) -> MemoryItem:
+        # Idempotency guard — fail fast if any source already consolidated
+        for sid in source_ids:
+            for row in self._rows:
+                if row.id == sid and row.consolidated_into is not None:
+                    msg = f"memory item {sid} already consolidated_into {row.consolidated_into}"
+                    raise RuntimeError(msg)
+        now = datetime.now(UTC)
+        new_id = uuid4()
+        new_item = MemoryItem(
+            id=new_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            kind="fact",
+            content=content,
+            embedding=tuple(float(v) for v in embedding),
+            content_hash=hash_content(content),
+            created_at=now,
+            last_used_at=now,
+            status="consolidated",
+            consolidated_from=tuple(source_ids),
+        )
+        self._rows.append(new_item)
+        # Atomically link sources back to the new consolidated parent.
+        for idx, row in enumerate(self._rows):
+            if row.id in set(source_ids):
+                self._rows[idx] = row.model_copy(update={"consolidated_into": new_id})
+        return new_item
+
+    async def list_purge_candidates(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        min_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
+        candidates = []
+        for row in self._rows:
+            if not (
+                row.tenant_id == tenant_id
+                and row.user_id == user_id
+                and row.deleted_at is None
+                and row.status == "transient"
+                and row.consolidated_into is None
+                and row.last_reviewed_at is None
+                and row.created_at is not None
+                and row.created_at < cutoff
+            ):
+                continue
+            # never retrieved: last_used_at ≤ created_at + 1 minute
+            if row.last_used_at is None:
+                candidates.append(row)
+                continue
+            if row.last_used_at <= row.created_at + timedelta(minutes=1):
+                candidates.append(row)
+        candidates.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=UTC))
+        return candidates[:limit]
+
+    async def mark_reviewed(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        for idx, row in enumerate(self._rows):
+            if (
+                row.id == memory_id
+                and row.tenant_id == tenant_id
+                and row.user_id == user_id
+                and row.deleted_at is None
+            ):
+                self._rows[idx] = row.model_copy(update={"last_reviewed_at": datetime.now(UTC)})
+                return True
+        return False
+
+    async def archive(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        # Capability Uplift Sprint #7 (Mini-ADR U-40) — reserved for
+        # M2-C archive pipeline. Raised loud rather than no-op so the
+        # M2-C implementer gets a clear "do me" signal.
+        msg = (
+            "MemoryStore.archive() is reserved for M2-C; Sprint #7 only "
+            "lands the interface + status='archived' retrieve filter."
+        )
+        raise NotImplementedError(msg)

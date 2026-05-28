@@ -132,3 +132,127 @@ class MemoryStore(abc.ABC):
 
         Idempotent: returns ``True`` even when already deleted. Returns
         ``False`` for unknown id / wrong tenant / wrong user."""
+
+    # ------------------------------------------------------------------
+    # Capability Uplift Sprint #7 — MemoryConsolidator interface.
+    # Mini-ADRs U-33 / U-34 / U-37 / U-40. The control-plane
+    # ``MemoryConsolidator`` worker is the only caller of these methods
+    # in M0; M1-K Admin UI may extend.
+    # ------------------------------------------------------------------
+
+    @abc.abstractmethod
+    async def consolidator_distinct_tenant_ids(self) -> list[UUID]:
+        """Return all tenant ids with at least one live transient memory row.
+
+        Used by the ``MemoryConsolidator`` worker to enumerate tenants
+        worth scanning per tick (skipping tenants with no transient data).
+        Mirrors :meth:`SkillStore.curator_distinct_tenant_ids` (Sprint #4
+        Mini-ADR U-26 pattern). Soft-deleted rows are excluded."""
+
+    @abc.abstractmethod
+    async def distinct_users(
+        self,
+        *,
+        tenant_id: UUID,
+    ) -> list[UUID]:
+        """Return distinct ``user_id`` with at least one transient row.
+
+        Used by the consolidator worker to enumerate users worth
+        scanning per tick (skipping users with no fresh writes).
+        Soft-deleted rows are excluded."""
+
+    @abc.abstractmethod
+    async def list_transient(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        max_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        """Sprint #7 SUB-PASS 1 candidate fetch — return live transient
+        items written within ``max_age_days``, oldest first, capped at
+        ``limit``. Skips items already consolidated_into something."""
+
+    @abc.abstractmethod
+    async def vector_neighbors(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        embedding: Sequence[float],
+        cosine_max: float,
+        limit: int,
+    ) -> list[MemoryItem]:
+        """Sprint #7 SUB-PASS 1 cluster builder — return live transient
+        items within ``cosine_max`` cosine distance of ``embedding``,
+        closest first, capped at ``limit``. Skips items already
+        ``consolidated_into`` something.
+
+        Implementations should use the existing pgvector HNSW index
+        (no new index for Sprint #7)."""
+
+    @abc.abstractmethod
+    async def write_consolidated(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        content: str,
+        embedding: Sequence[float],
+        source_ids: Sequence[UUID],
+    ) -> MemoryItem:
+        """Sprint #7 SUB-PASS 1 commit — write a new consolidated item
+        with ``status='consolidated'`` + ``consolidated_from=source_ids``
+        and atomically mark every source's ``consolidated_into`` to the
+        new id. The new item's ``kind`` is always ``"fact"`` (episodic
+        consolidation is out-of-scope for Sprint #7).
+
+        Idempotent under retry: if any source already has
+        ``consolidated_into`` set the entire operation aborts and the
+        method raises so the worker can skip the cluster on the next tick."""
+
+    @abc.abstractmethod
+    async def list_purge_candidates(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        min_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        """Sprint #7 SUB-PASS 2 candidate fetch — return live transient
+        items older than ``min_age_days`` that have never been retrieved
+        (``last_used_at <= created_at + 1 minute``) and have never been
+        reviewed (``last_reviewed_at IS NULL``).
+
+        Oldest first, capped at ``limit``. The 3 filters together are
+        Mini-ADR U-37's purge protections."""
+
+    @abc.abstractmethod
+    async def mark_reviewed(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        """Sprint #7 SUB-PASS 2 commit — stamp ``last_reviewed_at`` so
+        future ticks skip this item. Returns ``False`` for unknown id /
+        wrong tenant / wrong user."""
+
+    @abc.abstractmethod
+    async def archive(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        """Reserved for M2-C archive pipeline (Stream K.K6 vNext).
+
+        Sprint #7 (Mini-ADR U-40) reserves the interface +
+        ``status='archived'`` semantics so M2-C can land without a
+        schema migration. Sprint #7 implementations raise
+        ``NotImplementedError`` to make the gap loud — better than a
+        silent no-op."""
