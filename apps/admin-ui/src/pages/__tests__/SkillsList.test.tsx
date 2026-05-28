@@ -391,11 +391,13 @@ describe("SkillDetail (PR C)", () => {
     const tree = await screen.findByTestId("skill-file-tree");
     // Expand reference/ folder (default expanded) + click notes.md
     await user.click(within(tree).getByText("notes.md"));
-    await waitFor(() => expect(screen.getByTestId("skill-editor-monaco")).toBeInTheDocument());
-    // Click Edit to enter edit mode
+    // ``skill-editor-monaco`` is the wrapper div; the mocked Monaco
+    // textarea inside it carries ``monaco-stub`` (default mock testid).
+    await waitFor(() =>
+      expect(screen.getByTestId("skill-editor-monaco")).toBeInTheDocument(),
+    );
     await user.click(screen.getByTestId("skill-editor-edit-btn"));
-    const editor = screen.getByTestId("skill-editor-monaco") as HTMLTextAreaElement;
-    // Type into the textarea stub (replaces value due to controlled input)
+    const editor = screen.getByTestId("monaco-stub") as HTMLTextAreaElement;
     await user.clear(editor);
     await user.type(editor, "updated text");
     await user.click(screen.getByTestId("skill-editor-save-btn"));

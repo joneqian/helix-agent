@@ -346,7 +346,10 @@ export function FileEditor({
       )}
 
       {!isBinary && (
-        <>
+        // ``@monaco-editor/react`` doesn't forward ``data-testid`` to a
+        // queryable DOM node — wrap so Playwright + vitest both have a
+        // stable handle on the editor container.
+        <div data-testid="skill-editor-monaco">
           {mode === "edit" && showDiff && loaded !== null ? (
             <DiffEditor
               language={languageFor(selectedPath)}
@@ -380,10 +383,9 @@ export function FileEditor({
                 renderWhitespace: "boundary",
                 wordWrap: "on",
               }}
-              data-testid="skill-editor-monaco"
             />
           )}
-        </>
+        </div>
       )}
 
       <div
