@@ -41,7 +41,7 @@ def _record(
         plan=TenantPlan.FREE,
         credentials_mode=mode,  # type: ignore[arg-type]
         model_credentials_ref=model_creds or {},
-        tool_credentials=tool_creds or {},
+        tool_credentials=tool_creds or {},  # type: ignore[arg-type]
         created_at=_NOW,
         updated_at=_NOW,
         updated_by="tester",
@@ -63,8 +63,8 @@ def _resolver(
     platform_tools: dict[str, str] | None = None,
 ) -> CredentialsResolver:
     return CredentialsResolver(
-        platform_provider_credentials=platform_provs or {},
-        platform_tool_credentials=platform_tools or {},
+        platform_provider_credentials=platform_provs or {},  # type: ignore[arg-type]
+        platform_tool_credentials=platform_tools or {},  # type: ignore[arg-type]
         tenant_config_getter=_FakeTenantConfigGetter(tenant_record),
     )
 
