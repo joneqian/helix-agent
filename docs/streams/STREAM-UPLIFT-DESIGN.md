@@ -2668,14 +2668,706 @@ async def memory_recall_node(state, config):
 
 ## 8. Sprint #7 — Memory 短期 → 长期自动凝结
 
-> **本章节 stub** — Sprint #7 开工前补完。预计 Week 11-13。
+> **2026-05-28 完整设计**(原 Week 11-13 stub 填实,3 条不可逆 ADR 经用户拍板:数据模型 / 触发机制 / 防误学层级)。基础设施 ~3 周本 Sprint 做完;触发阈值 + 凝结频率等 M1 dogfood 数据反过来调。
 
-主要设计要点(占位)：
-- 新建 `services/control-plane/src/control_plane/memory_consolidator.py`：识别"反复出现的事实" trigger 信号
-- 凝结 LLM 调用：辅助 model(如 Haiku)总结 N 轮窗口 → 写 long-term memory
-- 防误学约束(参考 Hermes Skill review prompt 的 4 条分类：环境性失败 / 负面工具断言 / session-specific transient errors / one-off task narratives)
-- M2-C archive 流水线接口预留(per [memory:complete-not-minimal](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md))
-- **触发策略 + 阈值 M1 dogfood 数据反过来调**(本 Sprint 不动)
+### 8.1 背景:为什么不能不做
+
+helix M0 的 long-term memory 工作流是**写入即永久**:
+
+```
+每个 turn 结束 → memory_writeback_node(LLM 提取事实)
+                → MemoryStore.write([raw items])
+                → 永久(直到 manual soft_delete)
+```
+
+`MemoryItem.kind ∈ {fact, episodic}` 是平铺的、互不关联的。后果:
+
+- **冗余**:同一事实多次出现(`"用户喜欢深色 UI"` + `"dark mode 偏好"` + `"屏幕暗一点"`)在 DB 里是 3 行独立 row。retrieve 时可能 3 条都被召回 → 同一事实 3 倍 token + 噪音
+- **无强信号 / 弱信号区分**:agent 看不出"反复确认的强偏好"还是"5 个不同上下文的零散观察"
+- **库无界膨胀**:M1-K J.7b-1 上线后 agent 自创建 skill,加上每个 turn 写 memory,per-user 长期 memory 集合可能从几十到几千条
+- **坏 fact 永久污染**:`memory_writeback_node` 当前 LLM 提取没有"durability check"。一次 "GPG 没装" 写进去 → 永久 hit 召回 → 教 agent 用户系统**永远**没 GPG → 错的偏好被强化
+
+→ **需要凝结引擎**:周期性后台识别"同一事实的多次表述",用便宜 LLM 总结一条 consolidated long-term fact + 把原始 transient 项链接到总结(call-site 优先用总结)。
+
+→ **顺带能力 — noise purge**:同一引擎复用 anti-mislearn prompt,扫"长期未被召回的老 transient 项",拦 Hermes 4 类不该 long-term 化的内容。
+
+→ **M2-C archive 流水线接口提前预留**:`MemoryStore.archive()` + `status='archived'` 在 Sprint #7 落地;M2-C 启动时 archive 路径直接接已凝结的 long-term 数据,无需改 schema(per [memory:complete-not-minimal])。
+
+### 8.2 范围 & 边界
+
+#### 8.2.1 In-scope
+
+1. **`MemoryItemRow` schema 扩展** — 4 个新字段(Mini-ADR U-33):`status: Literal["transient","consolidated","archived"]` + `consolidated_into: UUID | None` + `consolidated_from: list[UUID]`(JSONB)+ `last_reviewed_at: timestamptz | None`
+2. **`MemoryConsolidator` worker** — 新建 `services/control-plane/src/control_plane/memory_consolidator.py`,双 pass 周期(Mini-ADR U-34)
+3. **Hybrid clustering** — embedding 召回候选 cluster + LLM 验证 + 总结 + 防误学**三合一 prompt**(Mini-ADR U-35 + U-36)
+4. **单条 noise purge sub-pass** — 30 天 + 0 召回 + `last_reviewed_at` 守护(Mini-ADR U-37)
+5. **per-tenant 阈值** — `tenant_config` 加 4 字段(`memory_consolidation_min_cluster_size` / `memory_consolidation_similarity` / `memory_purge_min_age_days` / `memory_purge_enabled`)(Mini-ADR U-38)
+6. **Aux model 显式声明** — `AgentSpec.policies.memory_consolidation.aux_model` 字段(Mini-ADR U-39)
+7. **M2-C archive 接口预留** — `MemoryStore.archive(memory_id)` 抽象方法 + `status='archived'` 路径,Sprint #7 不调用,M2-C 接入(Mini-ADR U-40)
+8. **`MemoryStore.retrieve()` 默认过滤** — `WHERE status != 'archived' AND (status='consolidated' OR consolidated_into IS NULL)` 跳过被凝结的原始项(Mini-ADR U-33 顺延)
+9. **可观测** — 7 个新 metric + 5 recording rules + 3 alerts(Mini-ADR U-41)
+10. **Audit 双份同步** — 7 个新 action,protocol + control-plane 两处(Mini-ADR U-42,per [memory:audit-literal-drift])
+11. **Runbook** — 新章节 `docs/runbooks/memory-consolidator.md`
+
+#### 8.2.2 Out-of-scope(明确不做)
+
+- **触发阈值调参**(默认 `min_cluster_size=3` / `similarity=0.85` / `purge_min_age_days=30` 不动;M1 dogfood 跑完再调) — 本 Sprint 只锁数据模型 + worker + 3 合一 prompt + 默认值
+- **Cross-tenant 凝结**(合并不同租户的相似 fact)— 违反多租户隔离原则,跟 Sprint #4 Curator 同款边界
+- **Episodic memory 凝结**(`kind="episodic"` 单独处理)— Sprint #7 仅覆盖 `kind="fact"`;episodic 时间序列性强,凝结语义不同,留 M2
+- **Hard delete**(物理删除)— purge 走 `soft_delete`(现有 `deleted_at` 列),保留 audit / restore 能力
+- **凝结后的反向编辑**(操作员修改 consolidated 项后回滚原始 transient)— Sprint #7 不动凝结后的编辑路径;Admin UI 可看 + soft_delete + restore(已有),改 content 走 M1
+- **Cross-session episodic stitching**(把多个 session 的 episodic 串起来)— 跟凝结正交,M2-C 时另外讨论
+- **DLQ for consolidator failures** — consolidator 失败 log + skip,下个 tick 重试(idempotent 自然处理),不引 DLQ — 跟 Sprint #4 Curator 同款决策
+
+#### 8.2.3 验收(Sprint Exit)
+
+参考 § 4.5 同款 6 条结尾门(per [memory:zero-tech-debt]):
+
+- 无 TODO/FIXME / 测试覆盖 ≥ 80% / 文档同步 / 可观测齐全 / CI 全绿 / bug 不遗留
+
+Sprint #7 特有(8 条):
+
+- migration backfill 完成 + 老 row 全部 `status='transient'` / `consolidated_into=NULL` / `consolidated_from='[]'` / `last_reviewed_at=NULL`
+- `MemoryConsolidator` 双 pass 4 条路径有 fixture-driven test:cluster→consolidate / cluster→reject_by_anti_mislearn / lone_item→purge / lone_item→reviewed_durable
+- LLM 三合一 prompt 在 8 类 Hermes 4-类 + helix 2 类扩展的攻击样本上拒拦 ≥ 90%
+- `retrieve()` 在含 transient + consolidated 混合的 fixture 上**只返回 consolidated 项 + 未凝结 transient**(被凝结的 transient 不出现)
+- archive 接口 abstract method 在 sql + memory 双实现 + 抛 `NotImplementedError`(占位)— M2-C 启动时只需实现,不动 schema
+- 7 个新 audit action protocol + control-plane Literal 同步(grep 验证)
+- runbook `docs/runbooks/memory-consolidator.md`:阈值调参建议 + 误删恢复流程 + 失败模式诊断
+- [memory:codeql-unused-global] preflight + [memory:ruff-strict-lint-traps] preflight + [memory:alembic-revision-id-32-chars] preflight 全过
+
+### 8.3 架构
+
+#### 8.3.1 Mini-ADR U-33 — `MemoryItemRow` schema 扩展(lifecycle + 双向链接)
+
+**决策**:`MemoryItemRow` 加 4 个字段 + 调整 `retrieve()` 默认 SQL。
+
+```python
+# packages/helix-persistence/src/helix_agent/persistence/models/memory_item.py
+class MemoryItemRow(Base):
+    ...
+    # Capability Uplift Sprint #7 — migration 0045.
+    # Lifecycle of a memory item:
+    #   transient    — raw write from memory_writeback_node
+    #                  (default for all new items)
+    #   consolidated — created by MemoryConsolidator;
+    #                  consolidated_from points back to source transients
+    #   archived     — soft-archived (Sprint #7 reserves; M2-C populates)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'transient'"),
+    )
+    # If non-NULL, this transient item has been superseded by a
+    # consolidated parent. retrieve() default WHERE clause excludes
+    # such items.
+    consolidated_into: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True,
+    )
+    # Only populated on consolidated items. Reverse index of the
+    # transient source UUIDs this consolidated fact summarises.
+    # Stored as JSONB array for cheap append / read.
+    consolidated_from: Mapped[list[UUID]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb"),
+    )
+    # Set by MemoryConsolidator's single-item review sub-pass when the
+    # LLM classifies a lone transient as durable. NULL ↔ not reviewed.
+    # Used to skip re-reviewing items that already passed the noise filter.
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+```
+
+**Indexes**(migration 0045 inline):
+
+- `ix_memory_item_consolidator_scan` ON `(tenant_id, user_id, status, created_at)` WHERE `status = 'transient' AND deleted_at IS NULL` — Sprint #7 双 pass 扫描路径
+- `ix_memory_item_consolidated_into` ON `(consolidated_into)` WHERE `consolidated_into IS NOT NULL` — 反查 + retrieve filter
+- 现有 `(tenant_id, user_id)` index 不动
+
+**Backfill**:
+- `status = 'transient'`
+- `consolidated_into = NULL`
+- `consolidated_from = '[]'::jsonb`
+- `last_reviewed_at = NULL`
+
+**`retrieve()` 默认 SQL 改动**(`packages/helix-persistence/src/helix_agent/persistence/memory/sql.py`):
+
+```sql
+-- 加 WHERE 条件(在 tenant_id / user_id / kind / deleted_at 的现有过滤之上):
+AND status != 'archived'                          -- 永远跳 archived
+AND (status = 'consolidated' OR consolidated_into IS NULL)
+                                                  -- 跳被凝结的原始 transient
+```
+
+**为什么 status 用 `String(16)` 而不是 PG ENUM**:跟现有 `MemoryItem.kind: str` (line 39 模型)风格一致,新增 status 值无需 `ALTER TYPE`;Pydantic 层用 `Literal[...]` 守 enum 语义。
+
+**`consolidated_from` 为什么 JSONB 不是 ARRAY[UUID]**:JSONB index 可以用 GIN(未来如果需要"找所有合并到 X 的原始项");现在不建 GIN,留接口。
+
+**`MemoryItem` DTO 同步扩展**(`packages/helix-protocol/src/helix_agent/protocol/memory_item.py`):
+- `MemoryStatus = Literal["transient", "consolidated", "archived"]`(新 alias)
+- `MemoryItem.status: MemoryStatus = "transient"`(默认值兼容)
+- `MemoryItem.consolidated_into: UUID | None = None`
+- `MemoryItem.consolidated_from: tuple[UUID, ...] = ()`(immutable,跟 dataclass 风格一致)
+- `MemoryItem.last_reviewed_at: datetime | None = None`
+
+#### 8.3.2 Mini-ADR U-34 — `MemoryConsolidator` worker 架构(双 pass + 周期 hook)
+
+**决策**:新建 `services/control-plane/src/control_plane/memory_consolidator.py`,跟 `skill_curator.py` 同款 scheduler 模式,但跑 4h 周期(facts 比 skill 状态变化快)。
+
+```python
+# 周期 hook 注册在 app.py:
+scheduler.add_job(
+    memory_consolidator.run_once,
+    trigger="interval",
+    hours=4,                # 比 Curator 的 daily 频繁
+    id="memory_consolidator",
+    coalesce=True,
+    max_instances=1,
+)
+```
+
+**worker 双 pass**(伪):
+
+```python
+async def run_once(*, store: MemoryStore, llm: LLMCaller,
+                   tenant_config: TenantConfigStore,
+                   embedder: Embedder) -> ConsolidatorRunSummary:
+    """Idempotent — re-running has no effect on already-consolidated /
+    purged rows since status moves monotonically."""
+    summary = ConsolidatorRunSummary()
+    async for tenant_row in tenant_config.iter_all():
+        # 每 tenant 拿 active users 列表(SELECT DISTINCT user_id
+        # FROM memory_item WHERE tenant_id=...)
+        async for user_id in store.distinct_users(tenant_id=tenant_row.tenant_id):
+
+            # SUB-PASS 1: cluster → consolidate
+            clusters = await _find_candidate_clusters(
+                store=store, tenant_id=tenant_row.tenant_id, user_id=user_id,
+                min_cluster_size=tenant_row.memory_consolidation_min_cluster_size,
+                similarity=tenant_row.memory_consolidation_similarity,
+            )
+            for cluster in clusters:
+                result = await _llm_verify_and_summarize(
+                    llm=llm, cluster=cluster,
+                )
+                if result.keep:
+                    await store.write_consolidated(
+                        tenant_id=tenant_row.tenant_id,
+                        user_id=user_id,
+                        content=result.summary,
+                        embedding=await embedder.embed_one(result.summary),
+                        source_ids=[item.id for item in cluster],
+                    )
+                    summary.consolidated += 1
+                else:
+                    audit.write(MEMORY_CONSOLIDATION_REJECTED, ...)
+                    summary.cluster_rejected += 1
+
+            # SUB-PASS 2: lone-item noise purge
+            if tenant_row.memory_purge_enabled:
+                lone_items = await store.list_purge_candidates(
+                    tenant_id=tenant_row.tenant_id, user_id=user_id,
+                    min_age_days=tenant_row.memory_purge_min_age_days,
+                    limit=tenant_row.memory_purge_max_per_run,
+                )
+                for item in lone_items:
+                    verdict = await _llm_classify_single(llm=llm, item=item)
+                    if verdict.is_noise:
+                        await store.soft_delete(item.id, ...)
+                        audit.write(MEMORY_PURGED_AS_NOISE, ...)
+                        summary.purged += 1
+                    else:
+                        await store.mark_reviewed(item.id, ...)
+                        summary.reviewed_durable += 1
+
+    audit.write(MEMORY_CONSOLIDATOR_RUN, details=summary)
+    record_consolidator_summary(summary)
+    return summary
+```
+
+**幂等性**:
+- SUB-PASS 1:cluster 候选过滤 `status='transient' AND consolidated_into IS NULL` → 已合并的不会再进 cluster
+- SUB-PASS 2:`last_reviewed_at IS NULL` → 审过的不会再审
+
+**为什么 4h 而非 daily**:Curator 处理 skill lifecycle(30/90 day 时间尺度),memory 凝结处理 fact 累积(数小时到数天)。4h 是"半工作日"粗粒度 — 早班 + 中班 + 晚班 + 夜班各 1 次,刚好赶在用户回会话前完成。
+
+**为什么不和 Curator 复用 worker**:不同关注点 / 不同周期 / 不同 schema / 不同 LLM 调用模式;同 process 跑 2 个 scheduled job 比单 worker 多分支干净。
+
+#### 8.3.3 Mini-ADR U-35 — Hybrid clustering(embedding 召回 → LLM 验证三合一)
+
+**决策**:候选 cluster 用 embedding(pgvector cosine);最终判定 + 总结 + 防误学**单次 LLM 调用三合一**。
+
+**为什么 hybrid 而非纯 embedding 或纯 LLM**(用户决策 #2,2026-05-28):
+
+| 方案 | 效果 | 性能 |
+|------|------|------|
+| 纯 embedding 聚类 | ⚠️ 反义词误归一类("喜欢深色" + "喜欢浅色")/ 复合事实拆解失败 / 跨语言漂移 | ✅ HNSW O(log N) |
+| 纯 LLM 周期聚类 | ✅ 懂否定 + 复合 + 同义 | ⚠️ 非确定性 + 窗口溢出(>50 条要分 chunk → 跨 chunk 漏)|
+| **Hybrid(选)** | ✅ embedding 给候选(高召回低精度)+ LLM 验证 + 总结 + 防误学(高精度) | ✅ LLM 调用次数 = 候选 cluster 数,不是 memory 总数 |
+
+**候选 cluster 算法**(SUB-PASS 1 STEP A):
+
+```python
+async def _find_candidate_clusters(
+    store: MemoryStore, tenant_id: UUID, user_id: UUID,
+    *, min_cluster_size: int, similarity: float,
+) -> list[list[MemoryItem]]:
+    """Returns disjoint clusters of transient items where pairwise
+    cosine similarity >= ``similarity`` and cluster size >= ``min_cluster_size``."""
+    transients = await store.list_transient(
+        tenant_id=tenant_id, user_id=user_id,
+        max_age_days=30,           # 30 天滑窗,不无穷回追
+        limit=500,                 # 单 user 单 tick cap
+    )
+    if len(transients) < min_cluster_size:
+        return []
+
+    # pgvector cosine neighbors within tenant scope
+    seeds: set[UUID] = set()
+    clusters: list[list[MemoryItem]] = []
+    for item in transients:
+        if item.id in seeds:
+            continue
+        neighbors = await store.vector_neighbors(
+            tenant_id=tenant_id, user_id=user_id,
+            embedding=item.embedding,
+            cosine_max=1 - similarity,   # cosine_distance < 0.15 ↔ similarity > 0.85
+            limit=20,
+            status="transient",
+            exclude_consolidated=True,
+        )
+        if len(neighbors) >= min_cluster_size:
+            clusters.append(neighbors)
+            seeds.update(n.id for n in neighbors)
+
+    return clusters
+```
+
+**LLM 三合一 prompt**(SUB-PASS 1 STEP B,定义在 § 8.3.4 U-36):
+
+- 输入:候选 cluster N 条 item content
+- 输出 JSON:`{"keep": bool, "summary": str | null, "reject_reason": "anti_mislearn:env_failure" | "anti_mislearn:negative_tool" | ... | "false_cluster" | null}`
+- 决策:
+  - `keep=true` → 写 consolidated 项,链回 cluster.ids
+  - `keep=false, reject_reason="false_cluster"` → cluster 不是同一事实,放回(下次可能因 embedding 不同 seed 重组)
+  - `keep=false, reject_reason="anti_mislearn:..."` → emit audit MEMORY_CONSOLIDATION_REJECTED + 原始 transient 不动(让 SUB-PASS 2 单独 noise purge 处理)
+
+**为什么一次 LLM 调用合 3 件事**:cluster 上下文是同一份,prompt 同一份,response schema 同一份;拆 3 次调用是 3× 成本 + 3× 延迟 + 3 次结果可能冲突。
+
+**为什么不 fallback 到 nx-style 联通分量算法**:embedding seed 扫一遍 + neighbor 列就够 — 真完整 connected component 需要 batch transitive closure,Sprint #7 的 500-item-per-tick cap 下没必要。
+
+#### 8.3.4 Mini-ADR U-36 — 防误学 prompt(Hermes 4 类 + helix 2 类扩展)
+
+**决策**:`MemoryConsolidator` 的 LLM 三合一 prompt + 单条 review prompt **共享一套** 6 类 anti-mislearn 规则。源:`docs/research/hermes-deep-dive.md:317-323` 的 4 类 + helix 扩展 2 类。
+
+```python
+_ANTI_MISLEARN_RULES = """REJECT consolidation if the cluster (or single item) represents any of:
+
+1. Environment-dependent failure
+   missing binary / fresh-install error / unconfigured credential /
+   post-migration mismatch / "command not found" / uninstalled package.
+   These are transient to the current environment, not durable user facts.
+
+2. Negative claim about a tool
+   "browser tools do not work" / "X tool is broken" / "cannot use Y" —
+   may be a one-time misuse; do not harden into a refusal pattern.
+
+3. Session-specific transient error that resolved
+   if retry / different approach worked, the lesson is the recovery
+   pattern, not the original failure.
+
+4. One-off task narrative
+   "user asked me to refactor X" / "fixed bug in Y" — task-scoped, not
+   user-scoped; expires when the task ends.
+
+5. (helix extension) Time-bound state
+   current model availability / current quota / today's date /
+   "the API returned 503 today" — bound to wall-clock time, not durable.
+
+6. (helix extension) Credential-shaped content
+   anything looking like a token / key / password / connection string —
+   never long-term, always purge to audit.
+"""
+```
+
+**Cluster prompt 构造**:
+
+```python
+_CLUSTER_VERIFY_PROMPT = f"""You are a memory consolidator. You receive
+a candidate cluster of {{n}} memory items that an embedding-similarity
+prefilter identified as likely-related.
+
+{_ANTI_MISLEARN_RULES}
+
+Otherwise, write ONE summary fact (under 200 chars) that captures the
+durable user truth this cluster represents. Prefer the user's own
+phrasing over paraphrase.
+
+Cluster items:
+{{items_rendered}}
+
+Respond ONLY with JSON:
+{{
+  "keep": true|false,
+  "summary": "<200 chars or null>",
+  "reject_reason": "false_cluster" | "anti_mislearn:env_failure" | "anti_mislearn:negative_tool" | "anti_mislearn:transient_error" | "anti_mislearn:one_off_narrative" | "anti_mislearn:time_bound" | "anti_mislearn:credential_shape" | null
+}}
+"""
+```
+
+**Single-item prompt** 同款规则,简化输出:`{"is_noise": bool, "category": "..." | "durable"}`
+
+**为什么 helix 加 #5 #6**:
+- #5 *time-bound state* — 用户跟 agent 聊 "API 今天又 503 了" 是真实事件 / 写进 transient 没问题,但凝结成 long-term "API 经常 503" 会污染 agent 后续判断
+- #6 *credential-shape* — Sprint #2 (memory poisoning defense) 已在 write 时拦了 strict pattern;但凝结引擎再加一道作为深度防御(被 strict scan 漏的 obfuscated 形式)
+
+**为什么不让 Sprint #2 的威胁 pattern 库重用而是单独写一套**:威胁 pattern 是**威胁检测**(prompt injection / 钓鱼),anti-mislearn 是**语义类别判定**(durability check)。两者目的不同 + 输出不同(threat block raise / mislearn verdict json)。复用会强行把两个概念糅一起,违反 [memory:complete-not-minimal]。
+
+#### 8.3.5 Mini-ADR U-37 — 单条 noise purge sub-pass
+
+**决策**:同 worker 第 2 pass,扫"30 天 + 0 召回 + 未审过" 的 transient lone item,LLM 单条分类 → noise 则 soft_delete + audit。
+
+**为什么需要这一 pass**:Hybrid clustering(SUB-PASS 1)只处理"有相似邻居的"事实。**没邻居的孤立坏 fact**(写一次就再没说过的 "GPG missing")会永久躺在库里被召回。SUB-PASS 2 兜底。
+
+**3 个保护机制(防误删)**:
+
+1. **30 天宽限期** — 防新写入的真有用 fact 被立刻审掉(还没机会被召回)
+2. **`last_used_at <= created_at + 60s`** — 从未被召回过(被召回过说明 agent 用过,保留)
+3. **`last_reviewed_at IS NULL`** — 审过判 durable 的不重审(borderline fact 多次 LLM 抖动会风险叠加,审过一次就锁)
+
+**SQL** (`MemoryStore.list_purge_candidates`):
+
+```sql
+SELECT *
+FROM memory_item
+WHERE tenant_id = $1 AND user_id = $2
+  AND status = 'transient'
+  AND deleted_at IS NULL
+  AND created_at < NOW() - $3 * INTERVAL '1 day'      -- min_age_days
+  AND last_used_at <= created_at + INTERVAL '1 minute'  -- never retrieved
+  AND last_reviewed_at IS NULL                          -- never reviewed
+ORDER BY created_at ASC
+LIMIT $4
+```
+
+**误删的可恢复性**:
+- `soft_delete` 用现有 `deleted_at` 列(不 hard delete)
+- Admin UI 可"restore"(M1-K 加;Sprint #7 后端接口预留)
+- Audit 永留 `MEMORY_PURGED_AS_NOISE` 含 item content snapshot → 完整可追溯
+
+**为什么不让 SUB-PASS 1 顺便处理孤立 fact**:cluster 算法预设 N≥3,孤立 fact(neighbors < N)会被 skip。强行让 cluster pass 也处理 single item 会污染 cluster 语义(cluster 是"凝结",single 是"清理")。
+
+#### 8.3.6 Mini-ADR U-38 — `tenant_config` 凝结 + purge 阈值字段
+
+**决策**:`TenantConfigRecord` + `TenantConfigPatch` 加 4 字段。Defaults 来自 Hermes 经验 + helix M0 dogfood 估算;M1 dogfood 数据反过来调。
+
+```python
+# packages/helix-protocol/src/helix_agent/protocol/tenant_config.py
+class TenantConfigRecord(BaseModel):
+    ...
+    # Capability Uplift Sprint #7 — MemoryConsolidator thresholds.
+    # Defaults from Hermes consolidation observations + M0 estimates.
+    # M1 dogfood (2-4 wk after enabling) will revisit.
+    memory_consolidation_min_cluster_size: int = Field(default=3, ge=2, le=20)
+    memory_consolidation_similarity: float = Field(default=0.85, ge=0.7, le=0.99)
+    memory_purge_enabled: bool = Field(default=True)
+    memory_purge_min_age_days: int = Field(default=30, ge=7, le=365)
+```
+
+**字段含义**:
+
+- `memory_consolidation_min_cluster_size`:cluster ≥ N 条相似 item 才触发 LLM 验证。N=2 过激进(任何两条相似就凝结);N>5 过保守(很多真 cluster 漏)
+- `memory_consolidation_similarity`:cosine ≥ 0.85 是 embedding-model 经验"明显同义"的下限阈值。0.7 太宽(很多假阳),0.99 太严(几乎完全重复才匹配)
+- `memory_purge_enabled`:enterprise 高合规 tenant 可关(永不删,只标 reviewed)
+- `memory_purge_min_age_days`:7 是下限(再小就是"还在用"),365 是上限(再大基本等于关 purge)
+
+**Migration 0046**(单独 migration,跟 0045 schema 表分开;per [memory:alembic-revision-id-32-chars] 命名 ≤ 32 字符:`0046_tenant_memory_thresholds.py`):
+- `tenant_config` 加 4 列 + CHECK 约束镜像 Pydantic Field ge/le
+
+**为什么不放 `policies.memory_consolidation` 而放 `tenant_config`**:这是**租户运营策略**(平台级 lifecycle 行为),不是**单 agent 行为**(运行时调用)。跟 Sprint #4 的 `skill_stale_days` / `skill_archive_days` 同款边界 — tenant 全局生效,跨 agent 一致。
+
+#### 8.3.7 Mini-ADR U-39 — Aux model 显式 spec(`policies.memory_consolidation.aux_model`)
+
+**决策**:`PolicySpec` 加 `memory_consolidation: MemoryConsolidationPolicy = ...`,内含 `aux_model: ModelSpec | None = None`。`None` 默认 → consolidator fall back 到平台 default aux model(env-configured)。
+
+```python
+# packages/helix-protocol/src/helix_agent/protocol/agent_spec.py
+class MemoryConsolidationPolicy(BaseModel):
+    """Stream Uplift Sprint #7 — per-agent memory consolidator knobs.
+
+    The consolidator is a background worker, not an agent-runtime call,
+    but the model choice is per-agent because different agents may want
+    different durability bars for their long-term memory. ``aux_model``
+    NULL ↔ consolidator falls back to env ``HELIX_AGENT_DEFAULT_AUX_MODEL``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    aux_model: ModelSpec | None = None
+
+class PolicySpec(BaseModel):
+    ...
+    memory_consolidation: MemoryConsolidationPolicy = Field(
+        default_factory=MemoryConsolidationPolicy
+    )
+```
+
+**为什么独立于 `context_compression.summariser_model`**(Stream L.L2 已有):
+
+- context compression 是 **hot path**(每个 turn 可能跑)— 要求 cheap + fast,Haiku 是 sweet spot
+- memory consolidation 是 **cold path**(4h 一次)— 可以用更强 model(Sonnet)换更高质量 anti-mislearn 判定
+- 两者业务不同 → 独立调参字段,不共用
+
+**Settings 兜底**(`services/control-plane/src/control_plane/settings.py`):
+
+```python
+memory_consolidator_interval_s: int = 14_400  # 4h
+memory_consolidator_max_users_per_tick: int = 50
+memory_consolidator_max_clusters_per_user: int = 10
+memory_consolidator_default_aux_model: str = "claude-sonnet-4-6"
+```
+
+#### 8.3.8 Mini-ADR U-40 — M2-C archive 接口预留
+
+**决策**:`MemoryStore` 抽象方法加 `archive(memory_id, tenant_id, user_id) -> bool`,sql + memory 双实现都 raise `NotImplementedError("Sprint #7 reserves interface; M2-C archive pipeline implements")`。`status='archived'` 已被 `retrieve()` 默认过滤(U-33),M2-C 直接接 archive 路径不动 schema。
+
+```python
+# packages/helix-persistence/src/helix_agent/persistence/memory/base.py
+class MemoryStore(Protocol):
+    ...
+    async def archive(
+        self, *, memory_id: UUID, tenant_id: UUID, user_id: UUID,
+    ) -> bool:
+        """Reserved for M2-C archive pipeline (Stream K.K6 vNext).
+
+        Sprint #7 reserves the interface + ``status='archived'`` semantics
+        so that M2-C can land without a schema migration. Sprint #7
+        implementations raise NotImplementedError to make the gap loud
+        — better than a silent no-op.
+        """
+```
+
+**为什么 raise 而非 stub-pass**:
+- pass / return False 会让 M2-C 的开发者以为 "archive 已经实现"
+- NotImplementedError + 明确字符串 → IDE 上一眼看出"这是 Sprint #7 预留接口"
+- M2-C PR 改实现时只需删 raise,不动签名 → contract 完全锁定
+
+**Sprint #7 不调用** `archive()`,只声明:
+- abstract method 在 base
+- sql + memory 实现 raise
+- Pydantic `MemoryItem.status = "archived"` 路径在 `retrieve()` 已过滤
+- Audit action `MEMORY_ARCHIVED` 已在 audit enum(M2-C 直接 emit)
+
+#### 8.3.9 Mini-ADR U-41 — 可观测
+
+**Metrics**(`packages/helix-common/src/helix_agent/common/uplift_metrics.py`):
+
+```python
+# Cluster pass
+def record_memory_cluster_candidates(*, tenant_id: UUID, count: int) -> None:
+    """Histogram — cluster sizes seen per consolidator tick."""
+
+def record_memory_consolidated(*, tenant_id: UUID) -> None:
+    """Counter — consolidated items created."""
+
+def record_memory_cluster_rejected(*, reason: str) -> None:
+    """Counter — labels reason ∈ {false_cluster, env_failure,
+    negative_tool, transient_error, one_off_narrative, time_bound,
+    credential_shape}."""
+
+# Purge pass
+def record_memory_purged(*, category: str) -> None:
+    """Counter — same category labels as cluster_rejected,
+    but for single-item purge path."""
+
+def record_memory_reviewed_durable() -> None:
+    """Counter — single-item review verdict = durable, marked
+    last_reviewed_at."""
+
+# Worker run
+def record_consolidator_run(*, summary: dict[str, int]) -> None:
+    """Summary metric — populates 5 gauges per run."""
+
+# Cost telemetry
+def record_consolidator_llm_tokens(*, model: str, input_tokens: int, output_tokens: int) -> None:
+    """Counter — aux model token use,跟 main model 隔离便于成本归因。"""
+```
+
+**Recording rules**(`tools/observability/rules/uplift.yml` 新 `helix_uplift_memory_consolidator` group):
+
+```yaml
+- record: helix:uplift:memory_consolidated_rate:1d
+  expr: sum(increase(helix_uplift_memory_consolidated_total[1d]))
+
+- record: helix:uplift:memory_cluster_rejection_rate:1d
+  expr: sum by(reason)(increase(helix_uplift_memory_cluster_rejected_total[1d]))
+
+- record: helix:uplift:memory_purged_rate:1d
+  expr: sum by(category)(increase(helix_uplift_memory_purged_total[1d]))
+
+- record: helix:uplift:memory_review_durable_ratio:1d
+  expr: |
+    sum(increase(helix_uplift_memory_reviewed_durable_total[1d]))
+    / clamp_min(sum(increase(helix_uplift_memory_reviewed_durable_total[1d]))
+                + sum(increase(helix_uplift_memory_purged_total[1d])), 1)
+
+- record: helix:uplift:consolidator_aux_tokens_input:1d
+  expr: sum(increase(helix_uplift_consolidator_llm_tokens_total{kind="input"}[1d]))
+```
+
+**Alerts**:
+
+```yaml
+- alert: HelixUpliftConsolidatorIdle
+  expr: helix:uplift:memory_consolidated_rate:1d == 0
+  for: 3d
+  labels: { severity: P2 }
+  annotations:
+    summary: "MemoryConsolidator produced 0 consolidations in 3 days"
+    description: "Either threshold misconfig, embedding pipeline broken, or LLM rejecting everything — investigate"
+
+- alert: HelixUpliftConsolidatorPurgeSurge
+  expr: helix:uplift:memory_purged_rate:1d > 100
+  for: 1d
+  labels: { severity: P2 }
+  annotations:
+    summary: "MemoryConsolidator purged > 100 items in last day"
+    description: "Unusually high noise rate — possible memory_writeback regression, or anti-mislearn prompt over-rejecting"
+
+- alert: HelixUpliftConsolidatorRejectionDominant
+  expr: |
+    sum(rate(helix_uplift_memory_cluster_rejected_total{reason!="false_cluster"}[1d]))
+    / clamp_min(sum(rate(helix_uplift_memory_consolidated_total[1d]))
+                + sum(rate(helix_uplift_memory_cluster_rejected_total{reason!="false_cluster"}[1d])), 1) > 0.5
+  for: 1d
+  labels: { severity: P3 }
+  annotations:
+    summary: "MemoryConsolidator anti-mislearn rejection > 50% of decisions"
+    description: "Either upstream memory_writeback is producing too much noise (good catch), or anti-mislearn prompt is over-strict (regression)"
+```
+
+#### 8.3.10 Mini-ADR U-42 — Audit Literal 双份同步(per [memory:audit-literal-drift])
+
+**新 audit actions**(同时改 `packages/helix-protocol/src/helix_agent/protocol/audit.py` + `services/control-plane/src/control_plane/audit_log.py` 两处 Literal):
+
+| Action | 触发 |
+|--------|------|
+| `MEMORY_CONSOLIDATED` | cluster LLM 判 keep + 写 consolidated 项 |
+| `MEMORY_CONSOLIDATION_REJECTED` | cluster LLM 判 anti_mislearn:* 或 false_cluster |
+| `MEMORY_PURGED_AS_NOISE` | 单条审查判 noise + soft_delete |
+| `MEMORY_REVIEWED_DURABLE` | 单条审查判 durable + 标 last_reviewed_at |
+| `MEMORY_DEMOTED` | retrieve() 之外的显式 "this transient was consolidated into X" 调用(M1-K Admin UI 可能用;Sprint #7 写但暂不调) |
+| `MEMORY_ARCHIVED` | M2-C 调 archive() 触发;Sprint #7 预留 |
+| `MEMORY_CONSOLIDATOR_RUN` | 每次 worker 一次 sweep 的 summary 行(单写) |
+
+**7 个新 action**,grep 两处必须同步。Pre-merge checklist 必须 grep 验证(per Sprint #4 PR B 经验,已踩过坑)。
+
+### 8.4 数据流(综合)
+
+```
+memory_writeback_node(每个 turn):
+  extract → embed → MemoryStore.write([items])
+  → 默认 status='transient', consolidated_into=NULL
+
+retrieve()(agent build / runtime recall):
+  SELECT ... WHERE
+    status != 'archived'
+    AND (status = 'consolidated' OR consolidated_into IS NULL)
+  → 跳被凝结的 raw transient,只返回 consolidated + 未凝结 transient
+
+MemoryConsolidator(每 4h):
+  per tenant, per user:
+    SUB-PASS 1(cluster → consolidate):
+      candidates = vector_neighbors(cosine > 0.85, size >= 3)
+      for cluster in candidates:
+        verdict = LLM(_CLUSTER_VERIFY_PROMPT)   # 三合一:验证+总结+反误学
+        if verdict.keep:
+          write_consolidated(content=summary, consolidated_from=[ids])
+          UPDATE transient SET consolidated_into = <new_id> WHERE id IN cluster
+          audit MEMORY_CONSOLIDATED
+        else if verdict.reject_reason startswith "anti_mislearn":
+          audit MEMORY_CONSOLIDATION_REJECTED
+        else: # false_cluster
+          pass   # 不动,下次重组
+
+    SUB-PASS 2(lone noise purge):
+      if memory_purge_enabled:
+        lones = list_purge_candidates(age > 30d, never_used, never_reviewed)
+        for item in lones:
+          verdict = LLM(_SINGLE_REVIEW_PROMPT)
+          if verdict.is_noise:
+            soft_delete(item)
+            audit MEMORY_PURGED_AS_NOISE
+          else:
+            UPDATE SET last_reviewed_at = NOW()
+            audit MEMORY_REVIEWED_DURABLE
+
+  audit MEMORY_CONSOLIDATOR_RUN(summary)
+
+M2-C(Sprint #7 外,未来):
+  MemoryStore.archive(memory_id) → status='archived'
+  retrieve() 自动跳过(已由 U-33 WHERE 实现)
+```
+
+### 8.5 PR 拆分
+
+预计 ~3 周(15 个工作日)。schema + worker + LLM prompt + observability + Admin UI 后端预留 + runbook 同一 impl PR,不二次拆分:
+
+1. **PR A — `uplift/7-consolidator-design`**(本 PR):仅本 § 8 扩写 + ITERATION-PLAN backlog 描述精化;无代码。
+2. **PR B — `uplift/7-consolidator-impl`**:
+   - migration 0045(`memory_item` 4 列)+ 0046(`tenant_config` 4 列)
+   - protocol/persistence schema 扩展(MemoryItem DTO + MemoryItemRow + MemoryStore.archive abstract + retrieve filter)
+   - `MemoryConsolidationPolicy` + `PolicySpec.memory_consolidation`
+   - `MemoryConsolidator` worker + scheduler hook + 3 个 prompt 模板
+   - `_find_candidate_clusters` + `_llm_verify_and_summarize` + `_llm_classify_single`
+   - tenant_config CRUD 扩展(4 新字段)
+   - 7 audit actions × 2 处 Literal
+   - uplift_metrics + recording rules + alerts
+   - settings.py 4 新配置
+   - 单测覆盖 SUB-PASS 1 + 2 各路径 + anti-mislearn 8 类样本
+   - 集成测覆盖 worker 端到端 + retrieve filter 正确
+   - runbook `docs/runbooks/memory-consolidator.md`
+
+### 8.6 Sprint Exit 验收(checklist)
+
+参照 § 4.5 6 条 base + Sprint #7 特有 12 条:
+
+- [ ] **migration 0045 + 0046** backfill 跑通,M0 deployed rows 全部 status='transient' / consolidated_into=NULL / consolidated_from='[]' / last_reviewed_at=NULL / 4 个 tenant_config 字段填默认值
+- [ ] **U-33 retrieve filter**:fixture 含 5 transient + 2 consolidated(2 个 consolidated 各链 2 个 transient)→ retrieve 返回 2 consolidated + 1 未链 transient = 3 条;不返回被链的 4 个 raw transient
+- [ ] **U-34 worker 4 条路径** fixture-driven test:cluster→consolidate / cluster→reject_anti_mislearn / lone_item→purge / lone_item→reviewed_durable
+- [ ] **U-35 hybrid clustering**:embedding pre-filter 在 30 条 fixture(5 个真 cluster + 散乱噪音)上正确划分 ≥ 4 个真 cluster
+- [ ] **U-36 anti-mislearn prompt**:8 类样本(6 anti-mislearn + 2 真 durable)拒拦率 ≥ 90%
+- [ ] **U-37 purge 保护机制**:3 路 fixture 测试(< 30 天 / 被召回过 / 已 reviewed)都不被 purge
+- [ ] **U-38 tenant_config 4 字段** API CRUD + cross-field validation(memory_purge_enabled=False 时其他 3 字段仍合法)
+- [ ] **U-39 aux_model fallback** 链:agent spec→tenant default→env default 3 层验证
+- [ ] **U-40 archive 接口**:sql + memory store 各 raise NotImplementedError + audit MEMORY_ARCHIVED 已声明
+- [ ] **U-41 可观测**:7 metrics + 5 recording rules + 3 alerts 加入 + alert rule 单测覆盖
+- [ ] **U-42 [memory:audit-literal-drift]**:7 个新 action × 2 处 Literal 同步,grep 验证
+- [ ] runbook `docs/runbooks/memory-consolidator.md`:阈值调参建议 + 误删恢复流程 + Consolidator Idle 诊断 + Purge Surge 诊断 + Rejection Dominant 诊断
+- [ ] CI 全绿(ruff / mypy / pre-commit / CodeQL / pytest / integration)
+- [ ] 单测覆盖 ≥ 80%(含 worker 双 pass + LLM prompt builder + anti-mislearn 类别解析 + retrieve filter)
+- [ ] [memory:ruff-strict-lint-traps] preflight
+- [ ] [memory:codeql-unused-global] preflight
+- [ ] [memory:alembic-revision-id-32-chars] preflight(0045/0046 命名 ≤ 32 字符)
+- [ ] [memory:envelope-vs-raw-contract-check] preflight(tenant_config patch 走 envelope,grep `JSONResponse`/`success` 核对)
+- [ ] ITERATION-PLAN backlog 同步 `[x]` + PR 编号(per [memory:iteration-plan-sync-after-ship])
+
+### 8.7 与其他 Sprint 的依赖关系
+
+- **依赖**:
+  - Sprint #2 memory poisoning defense — Sprint #7 anti-mislearn 是**深度防御第 2 层**,Sprint #2 在 write 时 strict block 仍是第 1 层
+  - Sprint #6 hybrid retrieval — `MemoryStore.vector_neighbors` + pgvector HNSW 索引复用(凝结 SUB-PASS 1 candidate clustering)
+  - Stream L.L2 ContextCompressor — `aux_model` field 命名 + 默认 fall back 模式参考
+  - Stream K.K6 long-term memory — `MemoryItem` / `MemoryStore` 基础接口已有
+- **被依赖**:
+  - **M1-K J.7b-1 agent 自创建 skill** — agent 大量自动学 → 凝结引擎压住 memory 库膨胀;Sprint #7 必须在 J.7b-1 上线前完成
+  - **M2-C archive 流水线** — `MemoryStore.archive()` + `status='archived'` + retrieve filter + audit `MEMORY_ARCHIVED` 全部 Sprint #7 落地;M2-C 直接接,不动 schema
+
+### 8.8 关键决策点(2026-05-28 用户拍板,实施期不可推翻)
+
+| # | 决策 | 选 | 反对方案为何弃 |
+|---|------|----|-----------------|
+| 1 | 数据模型 lifecycle | `status` + `consolidated_into` + `consolidated_from` + `last_reviewed_at`(4 列)| 极简方案(只加 consolidated_from)→ retrieve double-count + Admin UI 看不出凝结状态 + 未来 archive 需再改 schema |
+| 2 | 凝结触发机制 | **Hybrid** — embedding 召回候选 + LLM 验证 + 总结 + 防误学三合一 | 纯 embedding → 反义词误归 / 复合事实拆解失败;纯 LLM → 非确定性 + 窗口溢出 |
+| 3 | 防误学层级 | 凝结 LLM prompt 内置(deep)+ 单条 noise purge sub-pass(cleanup 已进库的) | writeback hot path 加 → +100-300ms 延迟 + 单条无 cluster 上下文,误拒率高;纯 regex pattern → 召回 < 30% + 维护成本同 Sprint #1 威胁库经验 |
 
 ---
 
