@@ -11,8 +11,8 @@ from datetime import datetime
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CHAR, DateTime, Index, Text, func, text
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy import CHAR, DateTime, Index, String, Text, func, text
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -66,5 +66,26 @@ class MemoryItemRow(Base):
     # so the migration is non-blocking; the GIN index in migration 0040
     # backs the ``@@ plainto_tsquery`` filter.
     content_tsv: Mapped[str | None] = mapped_column(TSVECTOR(), nullable=True)
+    # Capability Uplift Sprint #7 (Mini-ADR U-33) — lifecycle columns.
+    # CHECK constraint ``memory_item_status_check`` mirrors the
+    # ``MemoryStatus`` Literal in helix_agent.protocol.memory_item.
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=text("'transient'"),
+    )
+    consolidated_into: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+    )
+    consolidated_from: Mapped[list[UUID]] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     __table_args__ = (Index("memory_item_tenant_user_idx", "tenant_id", "user_id"),)

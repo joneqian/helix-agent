@@ -163,6 +163,63 @@ _skill_view_archived_blocked_total = helix_counter(
     "should be unarchived or replaced.",
 )
 
+# Capability Uplift Sprint #7 — MemoryConsolidator (Mini-ADR U-41).
+_memory_cluster_candidates_total = helix_counter(
+    "helix_uplift_memory_cluster_candidates_total",
+    "MemoryConsolidator cluster candidates surfaced by the embedding "
+    "pre-filter (Mini-ADR U-35). Used to track candidate volume vs. "
+    "actual consolidations (a low conversion ratio means embedding "
+    "threshold is too permissive, or LLM is over-rejecting).",
+)
+
+_memory_consolidated_total = helix_counter(
+    "helix_uplift_memory_consolidated_total",
+    "Consolidated long-term memory items written by the consolidator "
+    "(LLM verified the cluster + summary written + sources linked).",
+)
+
+_memory_cluster_rejected_total = helix_counter(
+    "helix_uplift_memory_cluster_rejected_total",
+    "Clusters rejected by the consolidator LLM. Reason label "
+    "distinguishes anti-mislearn categories (env_failure | "
+    "negative_tool | transient_error | one_off_narrative | "
+    "time_bound | credential_shape) from false_cluster (embedding "
+    "thought related, LLM disagrees).",
+    label_names=("reason",),
+)
+
+_memory_purged_total = helix_counter(
+    "helix_uplift_memory_purged_total",
+    "Lone-item transient memories soft-deleted by the consolidator "
+    "noise-purge sub-pass (Mini-ADR U-37). Category label mirrors "
+    "the cluster_rejected reason enum so the same recording rule "
+    "groups apply across both paths.",
+    label_names=("category",),
+)
+
+_memory_reviewed_durable_total = helix_counter(
+    "helix_uplift_memory_reviewed_durable_total",
+    "Lone-item transient memories the consolidator reviewed and "
+    "decided to keep — last_reviewed_at marked so future ticks skip "
+    "(Mini-ADR U-37 protection #3).",
+)
+
+_consolidator_llm_tokens_total = helix_counter(
+    "helix_uplift_consolidator_llm_tokens_total",
+    "Aux model token consumption by the MemoryConsolidator. Cost "
+    "telemetry is split from main-model accounting so the Sprint #7 "
+    "spend can be attributed precisely (model + kind labels).",
+    label_names=("model", "kind"),  # kind ∈ input | output
+)
+
+_consolidator_runs_total = helix_counter(
+    "helix_uplift_consolidator_runs_total",
+    "MemoryConsolidator worker sweeps that completed (1 per scheduled "
+    "tick). The labeled outcome lets the alert distinguish 'sweep ran "
+    "but had nothing to do' from 'sweep didn't run at all'.",
+    label_names=("outcome",),  # outcome ∈ ok | error
+)
+
 
 def record_threat_scan(*, scope: str, result: str, variant: str = "original") -> None:
     """Bump ``helix_uplift_threat_scan_total``.
@@ -325,16 +382,84 @@ def record_skill_view_archived_blocked() -> None:
     _skill_view_archived_blocked_total.inc()
 
 
+# Capability Uplift Sprint #7 — MemoryConsolidator recorders (Mini-ADR U-41).
+
+
+def record_memory_cluster_candidates(count: int = 1) -> None:
+    """Bump ``helix_uplift_memory_cluster_candidates_total`` by ``count``."""
+    if count <= 0:
+        return
+    _memory_cluster_candidates_total.inc(count)
+
+
+def record_memory_consolidated() -> None:
+    """Bump ``helix_uplift_memory_consolidated_total`` once per
+    consolidation commit (Mini-ADR U-34)."""
+    _memory_consolidated_total.inc()
+
+
+def record_memory_cluster_rejected(*, reason: str) -> None:
+    """Bump ``helix_uplift_memory_cluster_rejected_total{reason}``.
+
+    ``reason`` ∈ ``{"false_cluster", "env_failure", "negative_tool",
+    "transient_error", "one_off_narrative", "time_bound",
+    "credential_shape"}`` (Mini-ADR U-36).
+    """
+    _memory_cluster_rejected_total.labels(reason=reason).inc()
+
+
+def record_memory_purged(*, category: str) -> None:
+    """Bump ``helix_uplift_memory_purged_total{category}``. Category
+    enum matches :func:`record_memory_cluster_rejected` reason enum
+    minus ``false_cluster`` (single-item review has no false-cluster
+    case)."""
+    _memory_purged_total.labels(category=category).inc()
+
+
+def record_memory_reviewed_durable() -> None:
+    """Bump ``helix_uplift_memory_reviewed_durable_total`` once per
+    lone-item review verdict = durable (Mini-ADR U-37 protection #3)."""
+    _memory_reviewed_durable_total.inc()
+
+
+def record_consolidator_llm_tokens(*, model: str, input_tokens: int, output_tokens: int) -> None:
+    """Bump ``helix_uplift_consolidator_llm_tokens_total{model,kind}``.
+
+    Aux model spend is tracked separately from main-model accounting
+    so the Sprint #7 cost is unambiguous in the dashboards.
+    """
+    if input_tokens > 0:
+        _consolidator_llm_tokens_total.labels(model=model, kind="input").inc(input_tokens)
+    if output_tokens > 0:
+        _consolidator_llm_tokens_total.labels(model=model, kind="output").inc(output_tokens)
+
+
+def record_consolidator_run(*, outcome: str) -> None:
+    """Bump ``helix_uplift_consolidator_runs_total{outcome}``.
+
+    ``outcome`` ∈ ``{"ok", "error"}``. Called once per scheduled tick;
+    ``ok`` covers "ran cleanly, possibly with nothing to do"; ``error``
+    covers an unhandled exception escaping the worker entry."""
+    _consolidator_runs_total.labels(outcome=outcome).inc()
+
+
 __all__ = [
     "record_anthropic_cache_anchor",
+    "record_consolidator_llm_tokens",
+    "record_consolidator_run",
     "record_curator_transition",
     "record_mcp_call",
     "record_mcp_circuit_state",
     "record_memory_blocked",
+    "record_memory_cluster_candidates",
+    "record_memory_cluster_rejected",
+    "record_memory_consolidated",
     "record_memory_drift",
     "record_memory_inject_mode",
+    "record_memory_purged",
     "record_memory_redacted",
     "record_memory_retrieval",
+    "record_memory_reviewed_durable",
     "record_skill_blocked",
     "record_skill_drift",
     "record_skill_high_risk_event",

@@ -1,0 +1,357 @@
+"""Sprint #7 PR B — MemoryConsolidator worker.
+
+Covers the 4 state-machine paths from Mini-ADRs U-34 / U-35 / U-36 / U-37:
+
+1. cluster → consolidate (LLM keep=true)
+2. cluster → reject_anti_mislearn (LLM keep=false, reject_reason set)
+3. lone_item → purge (single review classifies noise)
+4. lone_item → reviewed_durable (single review classifies durable)
+
+Plus parser robustness on malformed JSON, prompt construction includes
+all 6 anti-mislearn categories, null aux model returns valid-shape JSON
+for both prompt families.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+import pytest
+
+from control_plane.memory_consolidator import (
+    ConsolidatorLLMReply,
+    MemoryConsolidator,
+    _parse_cluster_reply,
+    _parse_single_reply,
+    make_null_consolidator_aux_model,
+)
+from control_plane.tenancy import TenantConfigService
+from helix_agent.persistence import InMemoryMemoryStore
+from helix_agent.persistence.audit_log import InMemoryAuditLogStore
+from helix_agent.persistence.memory.hash import hash_content
+from helix_agent.persistence.tenant_config import InMemoryTenantConfigStore
+from helix_agent.protocol import (
+    AuditAction,
+    AuditQuery,
+    MemoryItem,
+    TenantConfigPatch,
+)
+from helix_agent.runtime.audit.fallback import InMemoryAuditFallbackQueue
+from helix_agent.runtime.audit.logger import AuditLogger
+from helix_agent.runtime.audit.redactor import DefaultSecretRedactor
+
+_TENANT = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+_USER = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+_NOW = datetime.now(UTC)
+
+
+def _build_logger() -> tuple[AuditLogger, InMemoryAuditLogStore]:
+    store = InMemoryAuditLogStore()
+    return (
+        AuditLogger(
+            store=store,
+            redactor=DefaultSecretRedactor(),
+            fallback=InMemoryAuditFallbackQueue(),
+        ),
+        store,
+    )
+
+
+class _ScriptedAuxModel:
+    """Returns scripted replies. Tests inject the JSON they want."""
+
+    def __init__(self, replies: list[str]) -> None:
+        self._replies = list(replies)
+        self.calls: list[str] = []
+
+    async def __call__(self, *, prompt: str, model: str | None) -> ConsolidatorLLMReply:
+        self.calls.append(prompt)
+        text = self._replies.pop(0) if self._replies else "{}"
+        return ConsolidatorLLMReply(
+            text=text, model=model or "fake", input_tokens=10, output_tokens=5
+        )
+
+
+class _FakeEmbedder:
+    async def embed_one(self, text: str) -> tuple[float, ...]:
+        return (0.5, 0.5)
+
+
+def _seed_transient(
+    store: InMemoryMemoryStore,
+    *,
+    contents: Sequence[str],
+    embedding: tuple[float, ...] = (1.0, 0.0),
+    created_at: datetime | None = None,
+    last_used_at: datetime | None = None,
+    last_reviewed_at: datetime | None = None,
+) -> list[UUID]:
+    ids = []
+    for content in contents:
+        item = MemoryItem(
+            id=uuid4(),
+            tenant_id=_TENANT,
+            user_id=_USER,
+            kind="fact",
+            content=content,
+            embedding=embedding,
+            content_hash=hash_content(content),
+            created_at=created_at or _NOW,
+            last_used_at=last_used_at or (created_at or _NOW),
+            last_reviewed_at=last_reviewed_at,
+        )
+        store._rows.append(item)
+        ids.append(item.id)
+    return ids
+
+
+async def _seed_tenant_config(service: TenantConfigService) -> None:
+    await service.upsert(
+        tenant_id=_TENANT,
+        patch=TenantConfigPatch(display_name="Test Tenant"),
+        actor_id="seed",
+    )
+
+
+async def _build_worker(
+    aux_replies: list[str], *, interval_s: float = 60.0
+) -> tuple[MemoryConsolidator, InMemoryMemoryStore, _ScriptedAuxModel, InMemoryAuditLogStore]:
+    store = InMemoryMemoryStore()
+    audit_logger, audit_store = _build_logger()
+    config_service = TenantConfigService(
+        store=InMemoryTenantConfigStore(),
+        audit_logger=audit_logger,
+    )
+    aux = _ScriptedAuxModel(aux_replies)
+    worker = MemoryConsolidator(
+        memory_store=store,
+        tenant_config_service=config_service,
+        audit_logger=audit_logger,
+        aux_model=aux,
+        embedder=_FakeEmbedder(),
+        interval_s=interval_s,
+    )
+    await _seed_tenant_config(config_service)
+    return worker, store, aux, audit_store
+
+
+# ─── Parser robustness ─────────────────────────────────────────────────
+
+
+def test_parse_cluster_reply_keep_true() -> None:
+    v = _parse_cluster_reply(
+        '{"keep": true, "summary": "user likes dark mode", "reject_reason": null}'
+    )
+    assert v is not None
+    assert v.keep is True
+    assert v.summary == "user likes dark mode"
+
+
+def test_parse_cluster_reply_keep_false_anti_mislearn() -> None:
+    v = _parse_cluster_reply(
+        '{"keep": false, "summary": null, "reject_reason": "anti_mislearn:env_failure"}'
+    )
+    assert v is not None
+    assert v.keep is False
+    assert v.reject_reason == "anti_mislearn:env_failure"
+
+
+def test_parse_cluster_reply_invalid_reason_rejected() -> None:
+    v = _parse_cluster_reply('{"keep": false, "summary": null, "reject_reason": "made_up"}')
+    assert v is None
+
+
+def test_parse_cluster_reply_malformed_json() -> None:
+    assert _parse_cluster_reply("not json") is None
+    assert _parse_cluster_reply("[]") is None
+
+
+def test_parse_single_reply_durable() -> None:
+    v = _parse_single_reply('{"is_noise": false, "category": "durable"}')
+    assert v is not None
+    assert v.is_noise is False
+    assert v.category == "durable"
+
+
+def test_parse_single_reply_noise() -> None:
+    v = _parse_single_reply('{"is_noise": true, "category": "env_failure"}')
+    assert v is not None
+    assert v.is_noise is True
+    assert v.category == "env_failure"
+
+
+def test_parse_single_reply_invalid_category() -> None:
+    v = _parse_single_reply('{"is_noise": true, "category": "made_up"}')
+    assert v is None
+
+
+# ─── Null aux model returns valid-shape JSON for both families ────────
+
+
+@pytest.mark.asyncio
+async def test_null_aux_model_cluster_path_parses() -> None:
+    null = make_null_consolidator_aux_model()
+    reply = await null(prompt='{"items":[]}', model=None)
+    verdict = _parse_cluster_reply(reply.text)
+    assert verdict is not None
+    assert verdict.keep is False
+    assert verdict.reject_reason == "false_cluster"
+
+
+@pytest.mark.asyncio
+async def test_null_aux_model_single_path_parses() -> None:
+    null = make_null_consolidator_aux_model()
+    reply = await null(prompt='{"is_noise": true}', model=None)
+    verdict = _parse_single_reply(reply.text)
+    assert verdict is not None
+    assert verdict.is_noise is False
+    assert verdict.category == "durable"
+
+
+# ─── Worker 4 paths ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cluster_consolidate_writes_parent_and_links_sources() -> None:
+    worker, store, _aux, audit_store = await _build_worker(
+        aux_replies=[
+            # SUB-PASS 1 reply for the cluster
+            '{"keep": true, "summary": "user prefers dark mode", "reject_reason": null}'
+        ]
+    )
+    ids = _seed_transient(store, contents=["dark UI", "dark mode preference", "wants dark theme"])
+    summary = await worker.run_once()
+    assert summary.consolidated == 1
+    assert summary.cluster_rejected == 0
+    # Sources are now linked to a consolidated parent.
+    rows_by_id = {r.id: r for r in store._rows}
+    for sid in ids:
+        assert rows_by_id[sid].consolidated_into is not None
+    # Audit row emitted.
+    page = await audit_store.query(AuditQuery(tenant_id="*", limit=100))
+    actions = {entry.action for entry in page.entries}
+    assert AuditAction.MEMORY_CONSOLIDATED in actions
+    assert AuditAction.MEMORY_CONSOLIDATOR_RUN in actions
+
+
+@pytest.mark.asyncio
+async def test_cluster_reject_anti_mislearn_skips_write_and_audits() -> None:
+    worker, store, _aux, audit_store = await _build_worker(
+        aux_replies=[
+            '{"keep": false, "summary": null, "reject_reason": "anti_mislearn:env_failure"}'
+        ]
+    )
+    _seed_transient(store, contents=["GPG not installed", "missing GPG", "no gpg binary"])
+    summary = await worker.run_once()
+    assert summary.consolidated == 0
+    assert summary.cluster_rejected == 1
+    # No source is linked to a parent.
+    for row in store._rows:
+        assert row.consolidated_into is None
+    page = await audit_store.query(AuditQuery(tenant_id="*", limit=100))
+    actions = {entry.action for entry in page.entries}
+    assert AuditAction.MEMORY_CONSOLIDATION_REJECTED in actions
+    assert AuditAction.MEMORY_CONSOLIDATED not in actions
+
+
+@pytest.mark.asyncio
+async def test_lone_item_purge_classifies_noise_and_soft_deletes() -> None:
+    # SUB-PASS 1 returns no clusters (single item, can't form cluster of 3);
+    # SUB-PASS 2 reviews the lone item and classifies it noise.
+    worker, store, _aux, audit_store = await _build_worker(
+        aux_replies=[
+            # SUB-PASS 2 — single-review noise verdict
+            '{"is_noise": true, "category": "transient_error"}'
+        ]
+    )
+    _seed_transient(
+        store,
+        contents=["one-off timeout error from yesterday"],
+        created_at=_NOW - timedelta(days=60),
+    )
+    summary = await worker.run_once()
+    assert summary.purged == 1
+    assert summary.reviewed_durable == 0
+    # Item now soft-deleted.
+    assert store._rows[0].deleted_at is not None
+    page = await audit_store.query(AuditQuery(tenant_id="*", limit=100))
+    actions = {entry.action for entry in page.entries}
+    assert AuditAction.MEMORY_PURGED_AS_NOISE in actions
+
+
+@pytest.mark.asyncio
+async def test_lone_item_reviewed_durable_stamps_last_reviewed_at() -> None:
+    worker, store, _aux, audit_store = await _build_worker(
+        aux_replies=['{"is_noise": false, "category": "durable"}']
+    )
+    _seed_transient(
+        store,
+        contents=["user works at example.com"],
+        created_at=_NOW - timedelta(days=60),
+    )
+    summary = await worker.run_once()
+    assert summary.purged == 0
+    assert summary.reviewed_durable == 1
+    assert store._rows[0].deleted_at is None
+    assert store._rows[0].last_reviewed_at is not None
+    page = await audit_store.query(AuditQuery(tenant_id="*", limit=100))
+    actions = {entry.action for entry in page.entries}
+    assert AuditAction.MEMORY_REVIEWED_DURABLE in actions
+
+
+# ─── Idempotency ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_already_reviewed_item_skipped_next_tick() -> None:
+    # Pre-stamp last_reviewed_at so the second tick doesn't re-review.
+    worker, store, aux, _audit_store = await _build_worker(aux_replies=[])
+    _seed_transient(
+        store,
+        contents=["already reviewed"],
+        created_at=_NOW - timedelta(days=60),
+        last_reviewed_at=_NOW - timedelta(days=1),
+    )
+    summary = await worker.run_once()
+    # No LLM call, no purge.
+    assert aux.calls == []
+    assert summary.purged == 0
+    assert summary.reviewed_durable == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_disabled_by_tenant_config_skips_sub_pass_2() -> None:
+    store = InMemoryMemoryStore()
+    audit_logger, _ = _build_logger()
+    config_service = TenantConfigService(
+        store=InMemoryTenantConfigStore(),
+        audit_logger=audit_logger,
+    )
+    aux = _ScriptedAuxModel(replies=[])
+    worker = MemoryConsolidator(
+        memory_store=store,
+        tenant_config_service=config_service,
+        audit_logger=audit_logger,
+        aux_model=aux,
+        embedder=_FakeEmbedder(),
+        interval_s=60.0,
+    )
+    await config_service.upsert(
+        tenant_id=_TENANT,
+        patch=TenantConfigPatch(
+            display_name="Test",
+            memory_purge_enabled=False,
+        ),
+        actor_id="seed",
+    )
+    _seed_transient(
+        store,
+        contents=["aged lone fact"],
+        created_at=_NOW - timedelta(days=60),
+    )
+    summary = await worker.run_once()
+    # SUB-PASS 2 skipped entirely; aux not called.
+    assert aux.calls == []
+    assert summary.purged == 0

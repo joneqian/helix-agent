@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -40,11 +40,31 @@ def _row_to_item(row: MemoryItemRow) -> MemoryItem:
         created_at=row.created_at,
         last_used_at=row.last_used_at,
         deleted_at=row.deleted_at,
+        # Capability Uplift Sprint #7 (Mini-ADR U-33) — lifecycle fields.
+        status=row.status,  # type: ignore[arg-type]
+        consolidated_into=row.consolidated_into,
+        consolidated_from=tuple(UUID(str(uid)) for uid in row.consolidated_from),
+        last_reviewed_at=row.last_reviewed_at,
     )
     # Capability Uplift Sprint #2 (Mini-ADR U-4) — drift detection.
     if row.content_hash and hash_content(row.content) != row.content_hash:
         return item.model_copy(update={"drift": True})
     return item
+
+
+# Capability Uplift Sprint #7 (Mini-ADR U-33) — default retrieve filter
+# applied to every code path that returns "what the agent should see".
+# Skips ``archived`` outright and skips raw transient items that have
+# been superseded by a consolidated parent (the parent is returned in
+# their place when relevant).
+def _retrieve_filter() -> list[ColumnElement[bool]]:
+    return [
+        MemoryItemRow.status != "archived",
+        or_(
+            MemoryItemRow.status == "consolidated",
+            MemoryItemRow.consolidated_into.is_(None),
+        ),
+    ]
 
 
 class SqlMemoryStore(MemoryStore):
@@ -133,6 +153,7 @@ class SqlMemoryStore(MemoryStore):
             MemoryItemRow.tenant_id == tenant_id,
             MemoryItemRow.user_id == user_id,
             MemoryItemRow.deleted_at.is_(None),  # Stream K.K6 — exclude soft-deleted
+            *_retrieve_filter(),  # Sprint #7 lifecycle filter
         )
         if kind is not None:
             stmt = stmt.where(MemoryItemRow.kind == kind)
@@ -167,10 +188,11 @@ class SqlMemoryStore(MemoryStore):
         # in Python (cheaper than a SQL UNION + window function for the
         # small recall_limit window we work with).
         ts_query = func.plainto_tsquery(_TS_CONFIG, tokenized)
-        base_where = [
+        base_where: list[ColumnElement[bool]] = [
             MemoryItemRow.tenant_id == tenant_id,
             MemoryItemRow.user_id == user_id,
             MemoryItemRow.deleted_at.is_(None),
+            *_retrieve_filter(),  # Sprint #7 lifecycle filter
         ]
         if kind is not None:
             base_where.append(MemoryItemRow.kind == kind)
@@ -305,3 +327,219 @@ class SqlMemoryStore(MemoryStore):
                 )
             ).first()
         return exists is not None
+
+    # ------------------------------------------------------------------
+    # Capability Uplift Sprint #7 — MemoryConsolidator interface
+    # ------------------------------------------------------------------
+
+    async def consolidator_distinct_tenant_ids(self) -> list[UUID]:
+        stmt = (
+            select(MemoryItemRow.tenant_id)
+            .where(
+                MemoryItemRow.deleted_at.is_(None),
+                MemoryItemRow.status == "transient",
+            )
+            .distinct()
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return list(rows)
+
+    async def distinct_users(self, *, tenant_id: UUID) -> list[UUID]:
+        stmt = (
+            select(MemoryItemRow.user_id)
+            .where(
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.deleted_at.is_(None),
+                MemoryItemRow.status == "transient",
+            )
+            .distinct()
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return list(rows)
+
+    async def list_transient(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        max_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+        stmt = (
+            select(MemoryItemRow)
+            .where(
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.user_id == user_id,
+                MemoryItemRow.deleted_at.is_(None),
+                MemoryItemRow.status == "transient",
+                MemoryItemRow.consolidated_into.is_(None),
+                MemoryItemRow.created_at >= cutoff,
+            )
+            .order_by(MemoryItemRow.created_at.asc())
+            .limit(limit)
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_row_to_item(row) for row in rows]
+
+    async def vector_neighbors(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        embedding: Sequence[float],
+        cosine_max: float,
+        limit: int,
+    ) -> list[MemoryItem]:
+        # pgvector cosine distance via the existing HNSW index. We sort
+        # by distance ASC then filter to those within ``cosine_max``.
+        stmt = (
+            select(MemoryItemRow)
+            .where(
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.user_id == user_id,
+                MemoryItemRow.deleted_at.is_(None),
+                MemoryItemRow.status == "transient",
+                MemoryItemRow.consolidated_into.is_(None),
+                MemoryItemRow.embedding.cosine_distance(list(embedding)) <= cosine_max,
+            )
+            .order_by(MemoryItemRow.embedding.cosine_distance(list(embedding)))
+            .limit(limit)
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_row_to_item(row) for row in rows]
+
+    async def write_consolidated(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        content: str,
+        embedding: Sequence[float],
+        source_ids: Sequence[UUID],
+    ) -> MemoryItem:
+        now = datetime.now(UTC)
+        new_id = uuid4()
+        content_hash = hash_content(content)
+        async with self._sf() as session:
+            # Idempotency guard — if any source has consolidated_into set
+            # already, abort cleanly so the worker can skip on the next
+            # tick. The link-update below is a 2-statement transaction so
+            # this guard removes most of the practical race window.
+            already = (
+                await session.execute(
+                    select(MemoryItemRow.id, MemoryItemRow.consolidated_into).where(
+                        MemoryItemRow.id.in_(list(source_ids)),
+                        MemoryItemRow.consolidated_into.is_not(None),
+                    )
+                )
+            ).first()
+            if already is not None:
+                msg = (
+                    f"memory item {already[0]} already consolidated_into {already[1]}; "
+                    "skipping cluster"
+                )
+                raise RuntimeError(msg)
+            # Insert the consolidated parent.
+            new_row = MemoryItemRow(
+                id=new_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                kind="fact",
+                content=content,
+                content_hash=content_hash,
+                embedding=list(embedding),
+                created_at=now,
+                last_used_at=now,
+                content_tsv=func.to_tsvector(_TS_CONFIG, tokenize_for_search(content)),
+                status="consolidated",
+                consolidated_from=[str(sid) for sid in source_ids],
+            )
+            session.add(new_row)
+            # Atomically link sources back to the new parent.
+            await session.execute(
+                update(MemoryItemRow)
+                .where(MemoryItemRow.id.in_(list(source_ids)))
+                .values(consolidated_into=new_id)
+            )
+            await session.commit()
+            await session.refresh(new_row)
+            return _row_to_item(new_row)
+
+    async def list_purge_candidates(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        min_age_days: int,
+        limit: int,
+    ) -> list[MemoryItem]:
+        cutoff = datetime.now(UTC) - timedelta(days=min_age_days)
+        # "Never retrieved" approximated by
+        # ``last_used_at <= created_at + 1 minute`` — writeback bump
+        # can be ~ms after insert, the minute slack soaks up clock skew
+        # without admitting "actually used" rows (Mini-ADR U-37).
+        never_used = MemoryItemRow.last_used_at <= (
+            MemoryItemRow.created_at + text("INTERVAL '1 minute'")
+        )
+        stmt = (
+            select(MemoryItemRow)
+            .where(
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.user_id == user_id,
+                MemoryItemRow.deleted_at.is_(None),
+                MemoryItemRow.status == "transient",
+                MemoryItemRow.consolidated_into.is_(None),
+                MemoryItemRow.last_reviewed_at.is_(None),
+                MemoryItemRow.created_at < cutoff,
+                and_(never_used),
+            )
+            .order_by(MemoryItemRow.created_at.asc())
+            .limit(limit)
+        )
+        async with self._sf() as session:
+            rows = (await session.execute(stmt)).scalars().all()
+        return [_row_to_item(row) for row in rows]
+
+    async def mark_reviewed(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        now = datetime.now(UTC)
+        stmt = (
+            update(MemoryItemRow)
+            .where(
+                MemoryItemRow.id == memory_id,
+                MemoryItemRow.tenant_id == tenant_id,
+                MemoryItemRow.user_id == user_id,
+                MemoryItemRow.deleted_at.is_(None),
+            )
+            .values(last_reviewed_at=now)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            await session.commit()
+        return int(getattr(result, "rowcount", 0) or 0) > 0
+
+    async def archive(
+        self,
+        *,
+        tenant_id: UUID,
+        user_id: UUID,
+        memory_id: UUID,
+    ) -> bool:
+        # Capability Uplift Sprint #7 (Mini-ADR U-40) — reserved for
+        # M2-C archive pipeline. Raised loud rather than no-op so the
+        # M2-C implementer gets a clear "do me" signal.
+        msg = (
+            "MemoryStore.archive() is reserved for M2-C; Sprint #7 only "
+            "lands the interface + status='archived' retrieve filter."
+        )
+        raise NotImplementedError(msg)

@@ -437,6 +437,34 @@ class ContextCompressionPolicy(BaseModel):
     max_tokens: int = Field(default=8000, gt=0)
 
 
+class MemoryConsolidationPolicy(BaseModel):
+    """Stream Uplift Sprint #7 (Mini-ADR U-39) — per-agent
+    MemoryConsolidator knobs.
+
+    The consolidator is a control-plane background worker, not an
+    agent-runtime call, but the auxiliary model choice is per-agent
+    because different agents may want different durability bars for
+    their long-term memory (a customer-support agent may want stricter
+    anti-mislearn than a personal-assistant agent).
+
+    ``aux_model`` NULL ↔ consolidator falls back to the platform
+    default configured via
+    ``HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_MODEL`` (see
+    control-plane settings).
+
+    Independent of :class:`ContextCompressionPolicy.summariser_model`
+    because the two workloads have different cost / latency profiles:
+    context compression is hot-path per-turn (favours cheap+fast aux),
+    consolidation is cold-path every-4h (can afford a stronger model
+    for better anti-mislearn accuracy).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    aux_model: ModelSpec | None = None
+
+
 class PolicySpec(BaseModel):
     """Tightening to per-field types is deferred to the owning Streams
     (C.5 quota, D.2 PII, E.6 fallback). Permissive dicts now, schemas
@@ -448,6 +476,12 @@ class PolicySpec(BaseModel):
     pii: dict[str, Any] = Field(default_factory=dict)
     safety: dict[str, Any] = Field(default_factory=dict)
     context_compression: ContextCompressionPolicy = Field(default_factory=ContextCompressionPolicy)
+    # Capability Uplift Sprint #7 (Mini-ADR U-39) — per-agent
+    # MemoryConsolidator knobs. Defaults are equivalent to "use platform
+    # defaults" so existing manifests load unchanged.
+    memory_consolidation: MemoryConsolidationPolicy = Field(
+        default_factory=MemoryConsolidationPolicy
+    )
     trajectory_recording: bool = Field(
         default=True,
         description=(

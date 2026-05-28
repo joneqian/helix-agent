@@ -143,6 +143,26 @@ class AuditAction(StrEnum):
     MEMORY_INJECTION_BLOCKED = "memory:injection_blocked"
     MEMORY_INJECTION_REDACTED = "memory:injection_redacted"
     MEMORY_DRIFT_DETECTED = "memory:drift_detected"
+    # memory — Capability Uplift Sprint #7 MemoryConsolidator (Mini-ADRs
+    # U-34 / U-36 / U-37 / U-40 / U-42). Mirrors the control-plane
+    # ResourceType/Action Literal in services/control-plane/src/control_plane/
+    # audit_log.py (per [memory:audit-literal-drift] — both must stay in sync).
+    # MEMORY_CONSOLIDATED       — cluster verified + summary written
+    # MEMORY_CONSOLIDATION_REJECTED — cluster LLM returned keep=false
+    #                              with anti_mislearn:* reason
+    # MEMORY_PURGED_AS_NOISE    — lone-item review classified noise + soft-deleted
+    # MEMORY_REVIEWED_DURABLE   — lone-item review classified durable + marked
+    # MEMORY_DEMOTED            — explicit "consolidated_into set" event
+    #                             (M1-K Admin UI; Sprint #7 reserves)
+    # MEMORY_ARCHIVED           — M2-C archive pipeline (Sprint #7 reserves)
+    # MEMORY_CONSOLIDATOR_RUN   — per-sweep summary row (single audit per tick)
+    MEMORY_CONSOLIDATED = "memory:consolidated"
+    MEMORY_CONSOLIDATION_REJECTED = "memory:consolidation_rejected"
+    MEMORY_PURGED_AS_NOISE = "memory:purged_as_noise"
+    MEMORY_REVIEWED_DURABLE = "memory:reviewed_durable"
+    MEMORY_DEMOTED = "memory:demoted"
+    MEMORY_ARCHIVED = "memory:archived"
+    MEMORY_CONSOLIDATOR_RUN = "memory:consolidator_run"
     # service_account
     SERVICE_ACCOUNT_CREATE = "service_account:create"
     SERVICE_ACCOUNT_DELETE = "service_account:delete"

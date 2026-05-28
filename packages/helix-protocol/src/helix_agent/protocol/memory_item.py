@@ -14,6 +14,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Capability Uplift Sprint #7 — Mini-ADR U-33.
+# Lifecycle of a memory item:
+#   transient    — raw write from memory_writeback_node (default for new)
+#   consolidated — created by MemoryConsolidator; consolidated_from holds
+#                  the transient source UUIDs that this entry summarises
+#   archived     — reserved for M2-C cold-storage pipeline; Sprint #7
+#                  registers the state + retrieve() filter, M2-C wires
+#                  the archive() implementation
+MemoryStatus = Literal["transient", "consolidated", "archived"]
+
 
 class MemoryItem(BaseModel):
     """One row of ``memory_item`` — a cross-session memory."""
@@ -55,4 +65,31 @@ class MemoryItem(BaseModel):
         "``content_hash`` (DB-drift signal). Not persisted; defaults "
         "to ``False`` on all other paths so legacy callers are "
         "unaffected.",
+    )
+    # Capability Uplift Sprint #7 (Mini-ADR U-33) — lifecycle.
+    status: MemoryStatus = Field(
+        default="transient",
+        description="Lifecycle stage. Defaults to ``transient`` so existing "
+        "callers and the writeback path are unaffected. ``MemoryConsolidator`` "
+        "creates ``consolidated`` entries; M2-C archive pipeline sets ``archived``.",
+    )
+    consolidated_into: UUID | None = Field(
+        default=None,
+        description="When non-NULL, this transient item has been superseded "
+        "by a consolidated parent. ``MemoryStore.retrieve()`` default WHERE "
+        "skips items where this is set (prevents double-counting raw + summary).",
+    )
+    consolidated_from: tuple[UUID, ...] = Field(
+        default=(),
+        description="Only populated on consolidated items. Reverse index of "
+        "the transient source UUIDs that this consolidated fact summarises. "
+        "Persisted as JSONB array in ``memory_item.consolidated_from``.",
+    )
+    last_reviewed_at: datetime | None = Field(
+        default=None,
+        description="Capability Uplift Sprint #7 (Mini-ADR U-37) — set by "
+        "MemoryConsolidator's lone-item review sub-pass when the LLM "
+        "classifies an aged lone transient as durable. NULL ↔ never "
+        "reviewed; non-NULL ↔ skip re-review (prevents borderline-fact "
+        "thrash where repeated LLM rolls could eventually flag-and-purge).",
     )
