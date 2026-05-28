@@ -1,6 +1,6 @@
 """Capability Uplift Sprint #4 — per-tenant Curator threshold columns.
 
-Revision ID: 0044_tenant_config_curator_thresholds
+Revision ID: 0044_tenant_curator_days
 Revises: 0043_skill_curator_columns
 Create Date: 2026-05-28
 
@@ -32,7 +32,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0044_tenant_config_curator_thresholds"
+revision: str = "0044_tenant_curator_days"
 down_revision: str | Sequence[str] | None = "0043_skill_curator_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

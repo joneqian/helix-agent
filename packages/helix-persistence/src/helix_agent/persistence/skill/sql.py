@@ -386,7 +386,10 @@ class SqlSkillStore(SkillStore):
                 .values(status="stale", state_changed_at=now, updated_at=now)
             )
             await session.commit()
-        return result.rowcount or 0
+        # ``Result.rowcount`` is only typed on ``CursorResult``; the
+        # base ``Result`` mypy sees from ``session.execute(update(...))``
+        # exposes it at runtime but not at the type level. Cast through.
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def curator_promote_stale_to_archived(self, *, tenant_id: UUID, archive_days: int) -> int:
         from datetime import timedelta
@@ -405,7 +408,10 @@ class SqlSkillStore(SkillStore):
                 .values(status="archived", state_changed_at=now, updated_at=now)
             )
             await session.commit()
-        return result.rowcount or 0
+        # ``Result.rowcount`` is only typed on ``CursorResult``; the
+        # base ``Result`` mypy sees from ``session.execute(update(...))``
+        # exposes it at runtime but not at the type level. Cast through.
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def set_pinned(self, *, skill_id: UUID, tenant_id: UUID, pinned: bool) -> Skill:
         async with self._sf() as session:
