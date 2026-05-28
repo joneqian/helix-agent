@@ -127,7 +127,7 @@ class Settings(...):
             # 其他 provider 默认不启用,需 ops 显式加 env
         ]
     )
-    
+
     # 每个 enabled provider 必须有对应的平台 secret_ref。
     # 启动期校验:supported - keys(platform_provider_credentials) == empty。
     # 缺凭证的 provider 启动 fail fast。
@@ -135,12 +135,12 @@ class Settings(...):
         default_factory=dict,
         description="provider → secret:// URI,启动期校验全覆盖 supported_providers"
     )
-    
+
     # 平台启用的工具白名单。租户在 tenant mode 下只能给这些工具配凭证。
     supported_tools: list[Tool] = Field(
         default_factory=lambda: ["web_search"]
     )
-    
+
     platform_tool_credentials: dict[Tool, str] = Field(
         default_factory=dict
     )
@@ -202,7 +202,7 @@ class TenantConfigRecord(BaseModel):
     # 切换走 TenantConfigService.upsert_credentials_mode 专用 API,
     # 校验 all-or-nothing 完整性(Mini-ADR O-4)。
     credentials_mode: CredentialsMode = "platform"
-    
+
     # provider → KMS secret URI。覆盖范围:
     # - platform mode 下:忽略(但保留,可见可改)
     # - tenant mode 下:必须包含该租户所有"已用 provider"的凭证
@@ -210,7 +210,7 @@ class TenantConfigRecord(BaseModel):
     provider_credentials: dict[Provider, str] = Field(
         default_factory=dict
     )
-    
+
     # tool → KMS secret URI。同上规则。
     tool_credentials: dict[Tool, str] = Field(default_factory=dict)
 ```
@@ -240,15 +240,15 @@ class CredentialsResolverError(Exception):
 
 class CredentialsResolver:
     """Single source of truth for "which secret_ref do I use for X?"
-    
+
     Backed by:
     - Platform Catalog (settings) — read once at startup
     - TenantConfigService — read per tenant lookup, cached via existing TTL
-    
+
     Returns a ``secret://`` or ``kms://`` URI; the SecretStore (Stream F.6)
     resolves the URI to the actual value at LLM-call time.
     """
-    
+
     def __init__(
         self,
         *,
@@ -259,12 +259,12 @@ class CredentialsResolver:
         self._platform_providers = platform_provider_credentials
         self._platform_tools = platform_tool_credentials
         self._tenant_config = tenant_config_service
-    
+
     async def resolve_provider(
         self, *, tenant_id: UUID, provider: Provider,
     ) -> str:
         """Returns the secret_ref to use for this (tenant, provider) pair.
-        
+
         Raises CredentialsResolverError when tenant mode + missing creds.
         """
         cfg = await self._tenant_config.get(tenant_id=tenant_id)
@@ -284,7 +284,7 @@ class CredentialsResolver:
             )
             raise CredentialsResolverError(msg)
         return secret_ref
-    
+
     async def resolve_tool(
         self, *, tenant_id: UUID, tool: Tool,
     ) -> str:
@@ -325,7 +325,7 @@ class CredentialsResolver:
 ```python
 async def upsert(self, *, tenant_id, patch, actor_id) -> TenantConfigRecord:
     # 现有 upsert 逻辑 ...
-    
+
     # Stream O Mini-ADR O-4 — 切换到 tenant mode 时校验凭证完整性
     if (
         patch.credentials_mode == "tenant"
@@ -334,7 +334,7 @@ async def upsert(self, *, tenant_id, patch, actor_id) -> TenantConfigRecord:
         # 计算该租户"已用 provider 集合"+ "已用 tool 集合"
         used_providers = await self._list_used_providers(tenant_id)
         used_tools = await self._list_used_tools(tenant_id)
-        
+
         # patch 含的凭证 + 已有 record 的凭证 = 合并后必须覆盖 used
         merged_providers = set(
             (patch.provider_credentials or existing.provider_credentials or {})
@@ -342,7 +342,7 @@ async def upsert(self, *, tenant_id, patch, actor_id) -> TenantConfigRecord:
         merged_tools = set(
             (patch.tool_credentials or existing.tool_credentials or {})
         )
-        
+
         missing_p = used_providers - merged_providers
         missing_t = used_tools - merged_tools
         if missing_p or missing_t:
@@ -350,7 +350,7 @@ async def upsert(self, *, tenant_id, patch, actor_id) -> TenantConfigRecord:
                 missing_providers=sorted(missing_p),
                 missing_tools=sorted(missing_t),
             )
-    
+
     # 现有 commit ...
 ```
 
@@ -368,7 +368,7 @@ async def upsert(self, *, tenant_id, patch, actor_id) -> TenantConfigRecord:
 # control_plane/api/agents.py 现有 POST /v1/agents (publish manifest)
 async def publish_manifest(spec: AgentSpec, ...):
     # 现有校验 ...
-    
+
     # Stream O Mini-ADR O-4 — provider 白名单
     used = collect_providers_from_spec(spec)
     invalid = used - set(settings.supported_providers)
@@ -382,7 +382,7 @@ async def publish_manifest(spec: AgentSpec, ...):
 class CredentialsModeSwitchIncompleteError(ValueError):
     """Raised when switching to tenant mode but credentials don't cover
     all currently-used providers / tools."""
-    
+
     def __init__(
         self, *,
         missing_providers: list[Provider],
@@ -496,7 +496,7 @@ def resolve_legacy_api_key(*, role: str) -> str | None:
 1. **mode 切换器**(顶部):
    ```
    Credentials mode: [Platform v]  [Switch to Tenant →]
-   
+
    ⓘ Platform mode: 所有 LLM/工具调用使用平台凭证。
      租户自配凭证不生效(但保留,可见可改)。
    ```
