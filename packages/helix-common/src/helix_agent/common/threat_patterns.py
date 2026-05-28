@@ -516,15 +516,11 @@ def _normalize_for_scan(content: str) -> list[str]:
 
 # Variant label values mirror the order produced by _normalize_for_scan;
 # kept as a Literal so callers can pass through to record_threat_scan /
-# record_threat_pattern_hits without spelling errors.
+# record_threat_pattern_hits without spelling errors. The order
+# ``(original, nfkc, collapsed, base64)`` matches what variants() yields
+# but only the type alias is exported — the tuple form is documentation
+# in this comment, not a runtime constant.
 ScanVariant = Literal["original", "nfkc", "collapsed", "base64"]
-
-_VARIANT_TAGS: Final[tuple[ScanVariant, ScanVariant, ScanVariant, ScanVariant]] = (
-    "original",
-    "nfkc",
-    "collapsed",
-    "base64",
-)
 
 
 def scan_for_threats(content: str, *, scope: ScanScope) -> list[ThreatFinding]:
