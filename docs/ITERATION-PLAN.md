@@ -665,6 +665,42 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
+### Stream O — Credentials & Provider Catalog（~2 周；与 30 天稳定性观察期并行）
+
+参考：[streams/STREAM-O-DESIGN](./streams/STREAM-O-DESIGN.md)（设计先行）
+
+> **2026-05-28 用户提出**：Capability Uplift Sprint #7 凝结引擎 ship 后,发现"系统模块的 LLM 配置"分散在 4 层（env / tenant_config.model_credentials_ref / agent manifest / 各 caller 各自处理），没有统一面 + 没有"租户用自己模型"的合规通道。Sprint #7 aux 模型 wire 是 Stream O PR 1 的第一个 caller 落地点。
+>
+> **4 个不可逆决策**（2026-05-28 用户拍板）：(1) 平台只锁 provider，model 名 tenant/agent 可选；(2) credentials_mode 切换走 API gate（缺凭证 403 fail fast），不允许运行期 401；(3) mode 切换立即生效（无 caching）；(4) MCP servers 推到 PR 3，本 Stream 只覆盖 LLM provider + tool API key。
+>
+> **核心原则**：
+> 1. **凭证 vs 模型名分离** — `credentials_mode` 只决定凭证来源，不影响模型名选择
+> 2. **All-or-nothing 强制** — 没有"embedding 用平台 key、主模型用租户 key"的混搭
+> 3. **Provider/Tool 白名单** — 租户在 tenant mode 下只能给平台已支持的配凭证
+> 4. **凭证缺失硬失败** — tenant mode 缺凭证 → 401 fail-fast，不静默回退
+
+- [ ] **O.1 Platform Catalog** — settings 加 `supported_providers: list[Provider]` + `platform_provider_credentials` + `supported_tools` + `platform_tool_credentials`；启动期 fail-fast 校验。**Mini-ADR O-1**
+- [ ] **O.2 tenant_config schema 扩展** — 加 `credentials_mode: Literal["platform","tenant"]` + rename `model_credentials_ref` → `provider_credentials` + 新加 `tool_credentials`；migration 0047；DB CHECK + JSONB 校验。**Mini-ADR O-2**
+- [ ] **O.3 CredentialsResolver** — 新建 `helix-common.credentials.CredentialsResolver`；`resolve_provider(tenant_id, provider)` / `resolve_tool(tenant_id, tool)`；mode 决策 + tenant mode 缺凭证 raise。**Mini-ADR O-3**
+- [ ] **O.4 All-or-nothing 校验（2 gates）** — `TenantConfigService.upsert` 切换 mode 时校验已用 provider/tool 凭证完整性（403 + 缺失列表）+ agent manifest publish 时 provider 白名单校验（403）。**Mini-ADR O-4**
+- [ ] **O.5 Legacy settings 派生** — `embedding_api_key_ref` / `rerank_api_key_ref` / `tavily_api_key_ref` 改派生自 Platform Catalog，1 个 minor 版本作 fallback + deprecation warning。**Mini-ADR O-5**
+- [ ] **O.6 Caller 集成（PR 1 范围）** — consolidator aux model：新建 `LLMRouterAuxModelAdapter` 走 CredentialsResolver + LLMRouter，替换 Sprint #7 `_NullConsolidatorAuxModel`；embedder / reranker / web_search 推 PR 2（per-tenant 改造影响面大）。**Mini-ADR O-6**
+- [ ] **O.7 Admin UI Credentials 面板** — Settings 加 Credentials 子 tab：mode 切换（带 dry-run）+ Provider Credentials 表 + Tool Credentials 表；Playwright e2e。**Mini-ADR O-7**
+- [ ] **O.8 Audit + 可观测** — 4 audit actions（CREDENTIALS_MODE_CHANGED / PROVIDER_CREDENTIALS_UPDATED / TOOL_CREDENTIALS_UPDATED / CREDENTIALS_RESOLVE_FAILED）双 Literal 同步 + 5 metrics + 3 recording rules + 2 alerts。**Mini-ADR O-8**
+- [ ] **O.9 runbook** — `docs/runbooks/credentials.md`：平台凭证配置 / 租户 mode 切换流程 / 401 诊断 / Sprint #7 aux wire 步骤
+
+**Stream O Verification**：8 项按零债 6 条核验；Platform Catalog 启动校验在 fail-fast 路径上不绕过；CredentialsResolver 双 mode 4 路径 fixture 全过；mode 切换缺凭证返回 403 + 完整 missing 列表；agent manifest publish 引用未支持 provider 立刻 reject；Sprint #7 consolidator aux 在 dogfood 启动前真接 LLMRouter（M1 dogfood 凝结数据采集前提）。
+
+**PR 拆分**：
+- **PR A**（设计）：本 Stream § + ITERATION-PLAN 同步；无代码（~1 天）
+- **PR B**（实施）：migration 0047 + Platform Catalog + tenant_config schema + CredentialsResolver + all-or-nothing 2 gates + consolidator aux LLMRouter adapter + Admin UI Credentials 面板 + 4 audit + 5 metrics + 2 alerts + runbook + 单测 + e2e + Legacy 派生（~2 周）
+
+**后续 PR**（Stream O 范围内但 PR 1 不做）：
+- **PR 2**（~1 周）：embedder / reranker / web_search 全迁移到 resolver（per-tenant 改造，影响面大）+ Admin UI tool 面板细化
+- **PR 3**（~1 周）：MCP servers 纳入 mode + mcp_servers 字段 schema 迁移 + MCP-specific Admin UI
+
+---
+
 ## Phase M1 — 生产化（6-8 个月）
 
 ### 目标
