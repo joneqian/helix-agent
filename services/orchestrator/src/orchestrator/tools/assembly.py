@@ -69,6 +69,13 @@ class ToolEnv:
     web_search_client: TavilyClient | None = None
     allowlist_provider: AllowlistProvider | None = None
     mcp_pool: MCPServerPool | None = None
+    #: Stream O (Mini-ADR O-14) — per-tenant MCP server allowlist. Empty
+    #: (the default) means no restriction: the agent sees every server in
+    #: ``mcp_pool``. Non-empty restricts the agent to the listed server
+    #: names (others in the platform pool stay hidden from this tenant).
+    #: Set per-tenant by the control-plane's agent builder from
+    #: ``tenant_config.mcp_allowlist``; bypasses no platform-server cap.
+    mcp_allowlist: tuple[str, ...] = ()
     #: Sandbox Supervisor client backing the ``exec_python`` builtin (F.4).
     supervisor_client: SupervisorClient | None = None
     #: Artifact registry backing the ``save_artifact`` / ``list_artifacts``
@@ -309,7 +316,12 @@ async def _register_mcp(registry: ToolRegistry, entry: MCPToolSpec, env: ToolEnv
             "'mcp' tool declared but no MCP server pool is configured (ToolEnv.mcp_pool)"
         )
     allow = set(entry.allow_tools) or None
+    # Stream O (Mini-ADR O-14) — a non-empty tenant allowlist hides every
+    # platform server not on it; empty means no restriction.
+    server_allow = set(env.mcp_allowlist) or None
     for server_name in env.mcp_pool.names():
+        if server_allow is not None and server_name not in server_allow:
+            continue
         client = env.mcp_pool.get(server_name)
         if client is None:  # pragma: no cover - name came from names()
             continue

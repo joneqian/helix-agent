@@ -92,6 +92,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                     row_kwargs["credentials_mode"] = patch.credentials_mode
                 if patch.tool_credentials is not None:
                     row_kwargs["tool_credentials"] = dict(patch.tool_credentials)
+                if patch.mcp_credentials is not None:
+                    row_kwargs["mcp_credentials"] = dict(patch.mcp_credentials)
                 row = TenantConfigRecord(**row_kwargs)  # type: ignore[arg-type]
             else:
                 row = existing.model_copy(
@@ -124,6 +126,7 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                             # Stream O — credentials mode + tool credentials.
                             "credentials_mode": patch.credentials_mode,
                             "tool_credentials": patch.tool_credentials,
+                            "mcp_credentials": patch.mcp_credentials,
                         }.items()
                         if v is not None
                     }

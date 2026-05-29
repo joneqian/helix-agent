@@ -52,6 +52,7 @@ def _row_to_record(row: TenantConfigRow) -> TenantConfigRecord:
         # Stream O — credentials mode + tool credentials.
         credentials_mode=cast(CredentialsMode, row.credentials_mode),
         tool_credentials={cast(Tool, str(k)): str(v) for k, v in row.tool_credentials.items()},
+        mcp_credentials={str(k): str(v) for k, v in row.mcp_credentials.items()},
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -136,6 +137,10 @@ class SqlTenantConfigStore(TenantConfigStore):
                     values["tool_credentials"] = {
                         str(k): str(v) for k, v in patch.tool_credentials.items()
                     }
+                if patch.mcp_credentials is not None:
+                    values["mcp_credentials"] = {
+                        str(k): str(v) for k, v in patch.mcp_credentials.items()
+                    }
                 stmt = (
                     pg_insert(TenantConfigRow)
                     .values(**values)
@@ -212,6 +217,10 @@ class SqlTenantConfigStore(TenantConfigStore):
             if patch.tool_credentials is not None:
                 existing.tool_credentials = {
                     str(k): str(v) for k, v in patch.tool_credentials.items()
+                }
+            if patch.mcp_credentials is not None:
+                existing.mcp_credentials = {
+                    str(k): str(v) for k, v in patch.mcp_credentials.items()
                 }
             existing.updated_at = _utc_now()
             existing.updated_by = actor_id

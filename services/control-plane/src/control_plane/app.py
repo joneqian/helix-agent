@@ -107,6 +107,7 @@ from control_plane.runtime import (
     make_agent_runtime,
     make_image_resolver,
     make_knowledge_retriever,
+    make_mcp_allowlist_provider,
     resolve_embedder,
     resolve_object_store_config,
     resolve_reranker,
@@ -657,6 +658,10 @@ def create_app(
                     tool_env=replace(base_tool_env, child_agent_builder=child_agent_builder),
                     middleware_env=middleware_env,
                     memory_env=memory_env,
+                    # Stream O (Mini-ADR O-14) — per-tenant MCP server allowlist.
+                    mcp_allowlist_provider=make_mcp_allowlist_provider(
+                        resolved_tenant_config_service
+                    ),
                 )
                 # Stream J.5 — the ingestion runner needs the embedder;
                 # without one, knowledge document upload is unavailable.
