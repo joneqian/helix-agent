@@ -28,7 +28,7 @@ from typing import cast
 
 from fastapi import FastAPI
 from langgraph.checkpoint.memory import InMemorySaver
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from control_plane.api import (
     build_agents_router,
@@ -69,6 +69,10 @@ from control_plane.auth import (
 )
 from control_plane.aux_model_adapter import make_llm_router_aux_model
 from control_plane.curation_worker import CurationWorker
+from control_plane.encrypted_secret_store import (
+    SqlEncryptedSecretStore,
+    build_kek_from_b64,
+)
 from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
 from control_plane.manifest import ManifestLoader
 from control_plane.memory import MemoryDLQWorker
@@ -249,7 +253,7 @@ from helix_agent.runtime.runs import (
     SqlRunEventStore,
     SqlRunStore,
 )
-from helix_agent.runtime.secret_store import make_secret_store
+from helix_agent.runtime.secret_store import SecretStore, make_secret_store
 from helix_agent.runtime.storage import make_object_store
 from orchestrator import MemoryEnv
 from orchestrator.trajectory import TrajectoryReader
@@ -301,6 +305,7 @@ def create_app(
     tenant_config_repo: TenantConfigStore | None = None,
     tenant_config_service: TenantConfigService | None = None,
     platform_secret_store: PlatformSecretStore | None = None,
+    secret_store: SecretStore | None = None,
     agent_runtime: AgentRuntime | None = None,
     memory_repo: MemoryStore | None = None,
 ) -> FastAPI:
@@ -411,11 +416,9 @@ def create_app(
         sql_stores.token_usage if sql_stores else InMemoryTokenUsageStore()
     )
     # In-process agent runtime (RunManager + StreamBridge + manifest→agent
-    # build path). Default wires a local-dev SecretStore; tests inject a
-    # runtime whose builder returns a fake-LLM agent.
-    resolved_secret_store = make_secret_store(
-        "local_dev", env_file=resolved_settings.secret_store_env_file
-    )
+    # build path). Backend per ``secret_store_backend`` (Stream Q); tests
+    # inject a runtime whose builder returns a fake-LLM agent.
+    resolved_secret_store = secret_store or _build_secret_store(resolved_settings, sql_stores)
     resolved_agent_runtime = agent_runtime or make_agent_runtime(
         resolved_secret_store,
         run_store=resolved_run_store,
@@ -962,6 +965,9 @@ class _SqlStores:
     """
 
     engine: AsyncEngine
+    #: Stream Q — exposed so the app can build a SqlEncryptedSecretStore over
+    #: the same RLS-wrapped sessionmaker when ``secret_store_backend`` is set.
+    session_factory: async_sessionmaker[AsyncSession]
     agent_spec: AgentSpecStore
     thread_meta: ThreadMetaStore
     tenant_user: TenantUserStore
@@ -1067,6 +1073,32 @@ def _signal_legacy_credentials_derivation(settings: Settings) -> None:
         record_legacy_credentials_fallback(role="tavily")
 
 
+def _build_secret_store(settings: Settings, sql_stores: _SqlStores | None) -> SecretStore:
+    """Build the SecretStore for ``settings.secret_store_backend`` (Stream Q).
+
+    ``sql_encrypted`` needs a Postgres session + a 32-byte KEK; it fails loud
+    at boot if either is missing rather than silently degrading. Other backends
+    delegate to :func:`make_secret_store`.
+    """
+    backend = settings.secret_store_backend
+    if backend == "sql_encrypted":
+        if sql_stores is None:
+            msg = (
+                "secret_store_backend='sql_encrypted' requires store_backend='sql' "
+                "(it needs a Postgres session) — got in-memory mode"
+            )
+            raise RuntimeError(msg)
+        if settings.secret_encryption_key is None:
+            msg = (
+                "secret_store_backend='sql_encrypted' requires "
+                "HELIX_AGENT_SECRET_ENCRYPTION_KEY (base64 32-byte KEK)"
+            )
+            raise RuntimeError(msg)
+        kek = build_kek_from_b64(settings.secret_encryption_key.get_secret_value())
+        return SqlEncryptedSecretStore(sql_stores.session_factory, kek=kek)
+    return make_secret_store(backend, env_file=settings.secret_store_env_file)
+
+
 def _build_sql_stores(settings: Settings) -> _SqlStores:
     """Build the Postgres-backed store bundle from ``settings.db_*`` (ADR B-6).
 
@@ -1084,6 +1116,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
     session_factory = build_rls_sessionmaker(create_async_session_factory(engine))
     return _SqlStores(
         engine=engine,
+        session_factory=session_factory,
         agent_spec=SqlAgentSpecStore(session_factory),
         thread_meta=SqlThreadMetaStore(session_factory),
         tenant_user=SqlTenantUserStore(session_factory),

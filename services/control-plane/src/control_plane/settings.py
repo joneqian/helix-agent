@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from helix_agent.protocol import PROVIDER_CATALOG, Provider, Tool
@@ -89,6 +89,19 @@ class Settings(BaseSettings):
     #: (F.6 / ADR-0007). ``None`` → an empty store: agent runs fail at
     #: provider-key resolution with a clear error until a file is set.
     secret_store_env_file: str | None = None
+
+    #: Stream Q (Mini-ADR Q-1) — which SecretStore backend the app wires.
+    #: ``local_dev`` (default; reads ``secret_store_env_file``) /
+    #: ``sql_encrypted`` (envelope-encrypted values in Postgres — admins paste
+    #: keys via the web UI; requires ``store_backend == "sql"`` +
+    #: ``secret_encryption_key``) / ``aliyun_kms`` (deploy-time follow-up).
+    secret_store_backend: Literal["local_dev", "sql_encrypted", "aliyun_kms"] = "local_dev"  # noqa: S105 — backend selector enum value, not a password
+
+    #: Stream Q (Mini-ADR Q-2) — base64-encoded 32-byte AES-256 KEK for the
+    #: ``sql_encrypted`` backend. ``SecretStr`` so it never renders in logs /
+    #: repr. Required (and length-validated at boot) when
+    #: ``secret_store_backend == "sql_encrypted"``.
+    secret_encryption_key: SecretStr | None = None
 
     # ------------------------------------------------------------------ checkpointer (E.1)
     #: LangGraph checkpointer backend. ``memory`` (M0 dev / tests — run
