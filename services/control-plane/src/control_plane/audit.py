@@ -133,6 +133,7 @@ ResourceType = Literal[
     "system",  # Stream N — Mini-ADR N-5
     "run",  # Stream H.3 PR 1 — Mini-ADR H-6 (RUN_LIST_READ)
     "tenant",  # Stream P — Mini-ADR P-1 (POST /v1/tenants)
+    "platform_credential",  # Stream P — Mini-ADR P-11 (/v1/platform/credentials)
     # Capability Uplift Sprint #7 (Mini-ADR U-42) — MemoryConsolidator.
     # Mirrors the protocol-side ``resource_type`` Literal in
     # packages/helix-protocol/src/helix_agent/protocol/audit.py per
