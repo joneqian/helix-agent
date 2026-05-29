@@ -2,68 +2,99 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 
 from control_plane.runtime import (
+    ResolvingEmbedder,
+    ResolvingReranker,
     make_image_resolver,
     make_knowledge_retriever,
     resolve_embedder,
     resolve_object_store_config,
     resolve_reranker,
 )
+from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.persistence import InMemoryKnowledgeStore
+from helix_agent.protocol import TenantConfigRecord
 from helix_agent.runtime.secret_store import parse_secret_ref
 from helix_agent.runtime.storage import InMemoryObjectStore
 from helix_agent.testing import InMemorySecretStore
-from orchestrator.llm import FakeEmbedder, OpenAICompatibleEmbedder
+from orchestrator.llm import FakeEmbedder
 from orchestrator.multimodal import ObjectStoreImageResolver
-from orchestrator.tools import KnowledgeRetriever, LLMReranker
+from orchestrator.tools import KnowledgeRetriever
+
+
+class _NeverCalledTenantConfig:
+    """``resolve_embedder`` / ``resolve_reranker`` are pure factories — they
+    never touch the tenant config, so this getter is never invoked."""
+
+    async def get(self, *, tenant_id: UUID) -> TenantConfigRecord:  # pragma: no cover
+        raise AssertionError("factory must not resolve tenant config")
+
+
+def _resolver() -> CredentialsResolver:
+    return CredentialsResolver(
+        platform_provider_credentials={},  # type: ignore[arg-type]
+        platform_tool_credentials={},  # type: ignore[arg-type]
+        tenant_config_getter=_NeverCalledTenantConfig(),
+    )
 
 
 @pytest.mark.asyncio
-async def test_resolve_embedder_none_ref_returns_none() -> None:
-    """No embedding key → no embedder → long-term memory unavailable."""
+async def test_resolve_embedder_unsupported_provider_returns_none() -> None:
+    """Embedding provider absent from the catalog → no embedder → long-term
+    memory globally unavailable (build-time gate preserved, Mini-ADR O-11)."""
     embedder = await resolve_embedder(
-        api_key_ref=None, model="text-embedding-v4", secret_store=InMemorySecretStore()
+        resolver=_resolver(),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="text-embedding-v4",
+        supported_providers=[],
     )
     assert embedder is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_embedder_builds_from_secret() -> None:
-    store = InMemorySecretStore()
-    ref = "secret://helix-agent/dev/embedding"
-    await store.put(parse_secret_ref(ref), "sk-embed-test")
-
+async def test_resolve_embedder_builds_resolving_embedder() -> None:
     embedder = await resolve_embedder(
-        api_key_ref=ref, model="text-embedding-v4", secret_store=store
+        resolver=_resolver(),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="text-embedding-v4",
+        supported_providers=["qwen"],
     )
-    assert isinstance(embedder, OpenAICompatibleEmbedder)
+    assert isinstance(embedder, ResolvingEmbedder)
     assert embedder.model == "text-embedding-v4"
+    assert embedder.provider == "qwen"
 
 
 @pytest.mark.asyncio
-async def test_resolve_reranker_none_ref_returns_none() -> None:
-    """No rerank key → no reranker → hybrid search returns the fused order."""
+async def test_resolve_reranker_unsupported_provider_returns_none() -> None:
+    """Rerank provider absent from the catalog → no reranker → hybrid search
+    returns the fused order."""
     reranker = await resolve_reranker(
-        api_key_ref=None,
+        resolver=_resolver(),
+        secret_store=InMemorySecretStore(),
         provider="qwen",
         model="qwen-plus",
-        secret_store=InMemorySecretStore(),
+        supported_providers=[],
     )
     assert reranker is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_reranker_builds_llm_reranker() -> None:
-    store = InMemorySecretStore()
-    ref = "secret://helix-agent/dev/rerank"
-    await store.put(parse_secret_ref(ref), "sk-rerank-test")
-
+async def test_resolve_reranker_builds_resolving_reranker() -> None:
     reranker = await resolve_reranker(
-        api_key_ref=ref, provider="qwen", model="qwen-plus", secret_store=store
+        resolver=_resolver(),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="qwen-plus",
+        supported_providers=["qwen"],
     )
-    assert isinstance(reranker, LLMReranker)
+    assert isinstance(reranker, ResolvingReranker)
+    assert reranker.provider == "qwen"
 
 
 def test_make_knowledge_retriever_none_without_embedder() -> None:

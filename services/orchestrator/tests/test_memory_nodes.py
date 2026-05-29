@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -43,7 +43,7 @@ class _RecordingLLM:
 
 
 async def _seed(store: InMemoryMemoryStore, *, tenant: object, user: object, content: str) -> None:
-    [vec] = await FakeEmbedder(dim=_DIM).embed([content])
+    [vec] = await FakeEmbedder(dim=_DIM).embed([content], tenant_id=tenant)  # type: ignore[arg-type]
     await store.write(
         [
             MemoryItem(
@@ -133,7 +133,7 @@ async def _seed_raw(
 ) -> MemoryItem:
     """Bypass MemoryStore.write() scan — simulate a row that landed
     before the strict scanner shipped (or via a DB-drift path)."""
-    [vec] = await FakeEmbedder(dim=_DIM).embed([content])
+    [vec] = await FakeEmbedder(dim=_DIM).embed([content], tenant_id=tenant)  # type: ignore[arg-type]
     item = MemoryItem(
         id=uuid4(),
         tenant_id=tenant,  # type: ignore[arg-type]
@@ -176,7 +176,7 @@ async def test_recall_redacts_drift_items_regardless_of_content() -> None:
     store = InMemoryMemoryStore()
     tenant, user = uuid4(), uuid4()
     # Seed via the normal scanned path so content_hash is set.
-    [vec] = await FakeEmbedder(dim=_DIM).embed(["user likes tea"])
+    [vec] = await FakeEmbedder(dim=_DIM).embed(["user likes tea"], tenant_id=tenant)
     item = MemoryItem(
         id=uuid4(),
         tenant_id=tenant,  # type: ignore[arg-type]
@@ -420,7 +420,8 @@ async def test_memory_writeback_node_enqueues_dlq_on_embed_failure() -> None:
 
     @dataclass
     class _FailingEmbedder:
-        async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+            del tenant_id
             del texts
             raise RuntimeError("embed-down")
 

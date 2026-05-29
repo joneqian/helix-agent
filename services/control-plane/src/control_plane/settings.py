@@ -17,7 +17,7 @@ from uuid import UUID
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from helix_agent.protocol import Provider, Tool
+from helix_agent.protocol import PROVIDER_CATALOG, Provider, Tool
 
 #: Default tenant UUID assigned to header-less dev requests. ``00...00`` is
 #: deliberately the nil UUID so it sticks out in audit_log dumps.
@@ -140,6 +140,13 @@ class Settings(BaseSettings):
     #: is qwen DashScope's ``text-embedding-v4`` (1024-dim — matches
     #: ``HELIX_AGENT_EMBEDDING_DIM``).
     embedding_model: str = "text-embedding-v4"
+
+    #: Stream O (Mini-ADR O-9) — the catalog provider whose credential the
+    #: embedder resolves through :class:`CredentialsResolver`. The embedder
+    #: previously carried only a model name + a hardcoded base URL; the
+    #: provider id is what keys the per-tenant credential lookup. Default
+    #: ``qwen`` matches the default ``embedding_model``.
+    embedding_provider: Provider = "qwen"
 
     #: Knowledge-retrieval reranker (Stream J.5). ``rerank_api_key_ref``
     #: ``None`` → no reranker; hybrid search then returns the RRF-fused
@@ -368,6 +375,62 @@ class Settings(BaseSettings):
     #: Stream O (Mini-ADR O-1) — platform-level secret_ref per supported
     #: tool.
     platform_tool_credentials: dict[Tool, str] = Field(default_factory=dict)
+
+    # --- Stream O Mini-ADR O-10: legacy → effective catalog derivation ---
+    # The embedder / reranker / web_search callers migrate to
+    # CredentialsResolver in PR 2a. A deployment that has not opted into
+    # Stream O (empty ``platform_provider_credentials``) but still sets the
+    # legacy ``embedding_api_key_ref`` / ``rerank_api_key_ref`` /
+    # ``tavily_api_key_ref`` keeps working: these properties gap-fill the
+    # catalog from the legacy fields. Explicit Stream O config always wins;
+    # legacy only fills providers/tools not already present. The resolver
+    # is built from the ``effective_*`` view, the startup validator still
+    # checks only the explicit fields.
+
+    @property
+    def effective_platform_provider_credentials(self) -> dict[Provider, str]:
+        """Explicit ``platform_provider_credentials`` plus legacy
+        embedding / rerank refs gap-filling absent providers."""
+        merged = dict(self.platform_provider_credentials)
+        if self.embedding_api_key_ref and self.embedding_provider not in merged:
+            merged[self.embedding_provider] = self.embedding_api_key_ref
+        if (
+            self.rerank_api_key_ref
+            and self.rerank_provider in PROVIDER_CATALOG
+            and self.rerank_provider not in merged
+        ):
+            # ``rerank_provider in PROVIDER_CATALOG`` narrows str → Provider.
+            merged[self.rerank_provider] = self.rerank_api_key_ref
+        return merged
+
+    @property
+    def effective_supported_providers(self) -> list[Provider]:
+        """Union of explicit ``supported_providers`` and any provider the
+        legacy derivation added — order: explicit first, then derived."""
+        derived = list(self.supported_providers)
+        for provider in self.effective_platform_provider_credentials:
+            if provider not in derived:
+                derived.append(provider)
+        return derived
+
+    @property
+    def effective_platform_tool_credentials(self) -> dict[Tool, str]:
+        """Explicit ``platform_tool_credentials`` plus the legacy Tavily
+        ref gap-filling ``web_search``."""
+        merged = dict(self.platform_tool_credentials)
+        if self.tavily_api_key_ref and "web_search" not in merged:
+            merged["web_search"] = self.tavily_api_key_ref
+        return merged
+
+    @property
+    def effective_supported_tools(self) -> list[Tool]:
+        """Union of explicit ``supported_tools`` and any tool the legacy
+        derivation added."""
+        derived = list(self.supported_tools)
+        for tool in self.effective_platform_tool_credentials:
+            if tool not in derived:
+                derived.append(tool)
+        return derived
 
     # ------------------------------------------------------------------ tenant rate limit (C.6)
     #: Per-tenant request bucket capacity (tokens). Drained one token

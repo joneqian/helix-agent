@@ -31,6 +31,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
+from uuid import UUID
 
 import tiktoken
 from markdown_it import MarkdownIt
@@ -97,6 +98,7 @@ async def chunk_markdown_semantic(
     max_tokens: int,
     overlap_tokens: int,
     embedder: Embedder,
+    tenant_id: UUID,
 ) -> list[str]:
     """Like :func:`chunk_markdown`, but additionally splits a section at
     *topic shifts* — adjacent blocks whose embeddings are far apart.
@@ -108,7 +110,7 @@ async def chunk_markdown_semantic(
     blocks = _parse_blocks(markdown)
     semantic_breaks: frozenset[int] = frozenset()
     if len(blocks) >= 2:
-        embeddings = await embedder.embed([block.text for block in blocks])
+        embeddings = await embedder.embed([block.text for block in blocks], tenant_id=tenant_id)
         semantic_breaks = _semantic_breaks(blocks, embeddings)
     return _pack_blocks(
         blocks,

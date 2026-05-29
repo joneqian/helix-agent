@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -20,7 +21,8 @@ class _ScriptedEmbedder:
     def __init__(self, markers: dict[str, tuple[float, ...]]) -> None:
         self._markers = markers
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id
         return [self._vector(text) for text in texts]
 
     def _vector(self, text: str) -> tuple[float, ...]:
@@ -33,7 +35,8 @@ class _ScriptedEmbedder:
 class _FailEmbedder:
     """Embedder that raises if used — proves a code path skips embedding."""
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id
         raise AssertionError("embedder must not be called")
 
 
@@ -145,7 +148,9 @@ def test_cosine_distance() -> None:
 async def test_semantic_split_at_topic_shift() -> None:
     src = "TOPICA first.\n\nTOPICA second.\n\nTOPICB third.\n\nTOPICB fourth."
     embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0), "TOPICB": (0.0, 1.0)})
-    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    chunks = await chunk_markdown_semantic(
+        src, max_tokens=512, overlap_tokens=0, embedder=embedder, tenant_id=uuid4()
+    )
     # The A→B topic shift splits a section structural chunking keeps whole.
     assert len(chunks) == 2
     assert "TOPICA first" in chunks[0]
@@ -159,7 +164,9 @@ async def test_semantic_split_at_topic_shift() -> None:
 async def test_semantic_no_split_when_section_is_coherent() -> None:
     src = "TOPICA one.\n\nTOPICA two.\n\nTOPICA three."
     embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0)})
-    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    chunks = await chunk_markdown_semantic(
+        src, max_tokens=512, overlap_tokens=0, embedder=embedder, tenant_id=uuid4()
+    )
     assert len(chunks) == 1
 
 
@@ -168,7 +175,9 @@ async def test_semantic_still_flushes_on_heading_change() -> None:
     # Same topic marker → no semantic break, but the heading change flushes.
     src = "# A\n\nTOPICA content.\n\n# B\n\nTOPICA other."
     embedder = _ScriptedEmbedder({"TOPICA": (1.0, 0.0)})
-    chunks = await chunk_markdown_semantic(src, max_tokens=512, overlap_tokens=0, embedder=embedder)
+    chunks = await chunk_markdown_semantic(
+        src, max_tokens=512, overlap_tokens=0, embedder=embedder, tenant_id=uuid4()
+    )
     assert len(chunks) == 2
 
 
@@ -176,7 +185,11 @@ async def test_semantic_still_flushes_on_heading_change() -> None:
 async def test_semantic_skips_embedding_for_single_block() -> None:
     # < 2 blocks → no topic shift possible → embedder is never called.
     chunks = await chunk_markdown_semantic(
-        "just one paragraph.", max_tokens=512, overlap_tokens=0, embedder=_FailEmbedder()
+        "just one paragraph.",
+        max_tokens=512,
+        overlap_tokens=0,
+        embedder=_FailEmbedder(),
+        tenant_id=uuid4(),
     )
     assert len(chunks) == 1
 
@@ -184,6 +197,6 @@ async def test_semantic_skips_embedding_for_single_block() -> None:
 @pytest.mark.asyncio
 async def test_semantic_empty_input() -> None:
     chunks = await chunk_markdown_semantic(
-        "", max_tokens=512, overlap_tokens=64, embedder=_FailEmbedder()
+        "", max_tokens=512, overlap_tokens=64, embedder=_FailEmbedder(), tenant_id=uuid4()
     )
     assert chunks == []

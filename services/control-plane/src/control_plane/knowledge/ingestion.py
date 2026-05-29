@@ -147,13 +147,14 @@ class KnowledgeIngestionRunner:
             max_tokens=chunk_max_tokens,
             overlap_tokens=chunk_overlap_tokens,
             embedder=self._embedder,
+            tenant_id=tenant_id,
         )
         if not chunk_texts:
             await self._store.replace_chunks(
                 tenant_id=tenant_id, document_id=document_id, chunks=[]
             )
             return 0
-        embeddings = await self._embedder.embed(chunk_texts)
+        embeddings = await self._embedder.embed(chunk_texts, tenant_id=tenant_id)
         chunks = [
             KnowledgeChunk(
                 id=uuid4(),

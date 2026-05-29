@@ -52,12 +52,33 @@ def _get_agent_spec_store(request: Request) -> AgentSpecStore | None:
     return getattr(request.app.state, "agent_spec_repo", None)
 
 
-def _collect_used_providers(specs: Iterable[AgentSpecRecord]) -> set[Provider]:
+def _embedding_provider(request: Request) -> Provider:
+    """Stream O Mini-ADR O-12 — the platform embedding provider whose
+    credential long-term memory needs. Read from settings on app.state;
+    test apps that don't wire settings fall back to the ``qwen`` default
+    (matching :class:`Settings.embedding_provider`)."""
+    settings = getattr(request.app.state, "settings", None)
+    provider: Provider = getattr(settings, "embedding_provider", "qwen")
+    return provider
+
+
+def _collect_used_providers(
+    specs: Iterable[AgentSpecRecord], *, embedding_provider: Provider
+) -> set[Provider]:
     """Stream O Mini-ADR O-4 — Walk every agent manifest in the tenant
     and collect every provider it transitively references. Sub-agents
     + vision + memory_consolidation.aux_model are all included; the
-    primary model's fallback chain too."""
+    primary model's fallback chain too.
+
+    Mini-ADR O-12 — long-term memory uses the platform ``embedding_provider``
+    (a platform-infra provider, not declared in any manifest model field).
+    Any agent declaring ``memory.long_term`` therefore needs that provider's
+    credential, so it is added to the gate; a tenant-mode switch missing it
+    is rejected up front rather than failing at the first memory recall.
+    Rerank is NOT added — a missing rerank credential degrades gracefully
+    to the fused order (Mini-ADR O-9)."""
     used: set[Provider] = set()
+    needs_embedding = False
     for record in specs:
         agent_spec = record.spec
         stack = [agent_spec.spec.model]
@@ -67,10 +88,15 @@ def _collect_used_providers(specs: Iterable[AgentSpecRecord]) -> set[Provider]:
         consolidation = agent_spec.spec.policies.memory_consolidation
         if consolidation.aux_model is not None:
             stack.append(consolidation.aux_model)
+        memory = agent_spec.spec.memory
+        if memory is not None and memory.long_term is not None:
+            needs_embedding = True
         while stack:
             current = stack.pop()
             used.add(current.provider)
             stack.extend(current.fallback)
+    if needs_embedding:
+        used.add(embedding_provider)
     return used
 
 
@@ -192,7 +218,9 @@ def build_tenant_config_router() -> APIRouter:
                 specs = await agent_store.list_by_tenant(
                     tenant_id=tenant_id, status=None, limit=1000
                 )
-                used_provs = _collect_used_providers(specs)
+                used_provs = _collect_used_providers(
+                    specs, embedding_provider=_embedding_provider(request)
+                )
                 used_tools = _collect_used_tools(specs)
             try:
                 _validate_credentials_mode_switch(

@@ -13,7 +13,8 @@ manifest→agent build path — behind one object held on ``app.state``.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,9 +25,10 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
+from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
 from helix_agent.persistence import ArtifactStore, KnowledgeStore
 from helix_agent.persistence.token_usage_store import TokenUsageStore
-from helix_agent.protocol import AgentSpec, ModelSpec
+from helix_agent.protocol import AgentSpec, ModelSpec, Provider, Tool
 from helix_agent.runtime.audit import DefaultSecretRedactor
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
@@ -68,6 +70,8 @@ from orchestrator.tools import (
 #: stub returning a :class:`BuiltAgent` over a fake-LLM graph — the
 #: real builder wires HTTP provider clients, which a test must not hit.
 AgentBuilder = Callable[[AgentSpec], Awaitable[BuiltAgent]]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -156,45 +160,145 @@ def make_agent_builder(
     return _build
 
 
+# ---------------------------------------------------------------------------
+# Stream O Mini-ADR O-9 — per-tenant credential-resolving callers
+#
+# embedder / reranker / web_search were platform singletons with the API key
+# baked in at boot. These wrappers resolve the per-tenant secret_ref via
+# :class:`CredentialsResolver` at call time (platform vs tenant mode), then
+# build the concrete client. Resolution runs once per ``embed`` batch / once
+# per rerank / once per search — frequency is low, so no caching is needed.
+# The wrappers live here (control-plane glue) so the orchestrator package
+# never imports helix-common.credentials; they implement the orchestrator
+# protocols structurally.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvingEmbedder:
+    """Per-tenant credential-resolving :class:`Embedder` (Mini-ADR O-9)."""
+
+    resolver: CredentialsResolver
+    secret_store: SecretStore
+    provider: Provider
+    model: str
+
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        if not texts:
+            return []
+        secret_ref = await self.resolver.resolve_provider(
+            tenant_id=tenant_id, provider=self.provider
+        )
+        api_key = await self.secret_store.get(parse_secret_ref(secret_ref))
+        delegate = OpenAICompatibleEmbedder(
+            client=HTTPEmbeddingClient(api_key=api_key), model=self.model
+        )
+        return await delegate.embed(texts, tenant_id=tenant_id)
+
+
+@dataclass(frozen=True)
+class ResolvingReranker:
+    """Per-tenant credential-resolving :class:`Reranker` (Mini-ADR O-9).
+
+    Rerank is an optional quality pass — if the tenant has no credential
+    for the rerank provider (tenant mode, not configured), degrade to the
+    RRF-fused order rather than failing. This is why rerank is *not* gated
+    at credentials-mode switch time (Mini-ADR O-12)."""
+
+    resolver: CredentialsResolver
+    secret_store: SecretStore
+    provider: Provider
+    model: str
+
+    async def rerank(
+        self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+    ) -> list[int]:
+        if not documents:
+            return []
+        try:
+            secret_ref = await self.resolver.resolve_provider(
+                tenant_id=tenant_id, provider=self.provider
+            )
+        except CredentialsResolverError:
+            logger.info(
+                "knowledge.rerank_skipped — no credential for provider=%s tenant=%s",
+                self.provider,
+                tenant_id,
+            )
+            return list(range(len(documents)))[:top_k]
+        model_spec = ModelSpec.model_validate(
+            {"provider": self.provider, "name": self.model, "api_key_ref": secret_ref}
+        )
+        router = await build_llm_router(model_spec, secret_store=self.secret_store)
+        return await LLMReranker(llm_caller=router).rerank(
+            query=query, documents=documents, top_k=top_k, tenant_id=tenant_id
+        )
+
+
+@dataclass(frozen=True)
+class ResolvingTavilyClient:
+    """Per-tenant credential-resolving :class:`TavilyClient` (Mini-ADR O-9).
+
+    A missing credential raises :class:`CredentialsResolverError` (a
+    fail-fast, mirrored to a ``ToolMessage(status="error")`` by the ReAct
+    tools node, Mini-ADR E-12) — web_search has no graceful degradation."""
+
+    resolver: CredentialsResolver
+    secret_store: SecretStore
+
+    async def search(
+        self, *, query: str, max_results: int, tenant_id: UUID | None
+    ) -> Mapping[str, Any]:
+        if tenant_id is None:
+            msg = "web_search requires a tenant context to resolve its credential"
+            raise CredentialsResolverError(msg, mode="platform", kind="tool", key="web_search")
+        secret_ref = await self.resolver.resolve_tool(tenant_id=tenant_id, tool="web_search")
+        api_key = await self.secret_store.get(parse_secret_ref(secret_ref))
+        return await HTTPTavilyClient(api_key=api_key).search(
+            query=query, max_results=max_results, tenant_id=tenant_id
+        )
+
+
 async def resolve_embedder(
     *,
-    api_key_ref: str | None,
-    model: str,
+    resolver: CredentialsResolver,
     secret_store: SecretStore,
+    provider: Provider,
+    model: str,
+    supported_providers: Sequence[Provider],
 ) -> Embedder | None:
-    """Resolve the embedding API key behind ``api_key_ref`` into an
-    :class:`Embedder` for long-term memory (Stream J.3).
+    """Build the per-tenant credential-resolving embedder for long-term
+    memory (Stream J.3 + Mini-ADR O-9).
 
-    ``None`` ref → ``None`` — long-term memory is then unavailable and
-    an agent declaring ``memory.long_term`` fails at build time.
-    """
-    if api_key_ref is None:
+    ``provider`` not in ``supported_providers`` → ``None``: the deployment
+    has no embedding credential at all (legacy or Stream O), so long-term
+    memory is globally unavailable and an agent declaring
+    ``memory.long_term`` fails at build time (the build-time gate is
+    preserved). Per-tenant failures (tenant mode, missing key) surface at
+    ``embed`` time instead (Mini-ADR O-11)."""
+    if provider not in supported_providers:
         return None
-    api_key = await secret_store.get(parse_secret_ref(api_key_ref))
-    return OpenAICompatibleEmbedder(client=HTTPEmbeddingClient(api_key=api_key), model=model)
+    return ResolvingEmbedder(
+        resolver=resolver, secret_store=secret_store, provider=provider, model=model
+    )
 
 
 async def resolve_reranker(
     *,
-    api_key_ref: str | None,
-    provider: str,
-    model: str,
+    resolver: CredentialsResolver,
     secret_store: SecretStore,
+    provider: Provider,
+    model: str,
+    supported_providers: Sequence[Provider],
 ) -> Reranker | None:
-    """Resolve the knowledge-retrieval reranker (Stream J.5).
-
-    ``None`` ref → ``None`` — hybrid search then returns the RRF-fused
-    order without an LLM rerank pass (a graceful degradation, not a
-    failure). Otherwise an :class:`LLMReranker` over an OpenAI-compatible
-    chat model resolved from ``api_key_ref``.
-    """
-    if api_key_ref is None:
+    """Build the per-tenant credential-resolving reranker (Stream J.5 +
+    Mini-ADR O-9). ``provider`` not in ``supported_providers`` → ``None``
+    (no rerank pass; hybrid search returns the RRF-fused order)."""
+    if provider not in supported_providers:
         return None
-    model_spec = ModelSpec.model_validate(
-        {"provider": provider, "name": model, "api_key_ref": api_key_ref}
+    return ResolvingReranker(
+        resolver=resolver, secret_store=secret_store, provider=provider, model=model
     )
-    router = await build_llm_router(model_spec, secret_store=secret_store)
-    return LLMReranker(llm_caller=router)
 
 
 def _tenant_allowlist_provider(service: TenantConfigService) -> AllowlistProvider:
@@ -216,16 +320,17 @@ def _tenant_allowlist_provider(service: TenantConfigService) -> AllowlistProvide
 
 async def resolve_web_search_client(
     *,
-    api_key_ref: str | None,
+    resolver: CredentialsResolver,
     secret_store: SecretStore,
+    supported_tools: Sequence[Tool],
 ) -> TavilyClient | None:
-    """Resolve the Tavily API key behind ``api_key_ref`` into a web-search
-    client. ``None`` ref → ``None`` — ``web_search`` is then unavailable
-    and an agent declaring it fails at build time."""
-    if api_key_ref is None:
+    """Build the per-tenant credential-resolving web-search client (Stream
+    E.7 + Mini-ADR O-9). ``web_search`` not in ``supported_tools`` →
+    ``None``: the deployment has no Tavily credential at all, so an agent
+    declaring ``web_search`` fails at build time (gate preserved)."""
+    if "web_search" not in supported_tools:
         return None
-    api_key = await secret_store.get(parse_secret_ref(api_key_ref))
-    return HTTPTavilyClient(api_key=api_key)
+    return ResolvingTavilyClient(resolver=resolver, secret_store=secret_store)
 
 
 #: Builds an :class:`MCPClient` from a server config. The default

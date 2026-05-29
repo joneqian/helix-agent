@@ -23,6 +23,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+from uuid import UUID
 
 import httpx
 
@@ -48,12 +49,18 @@ class TavilyClient(Protocol):
     """Tavily REST surface this tool depends on. Sized to the one
     endpoint we use so tests can fake it without mocking httpx."""
 
-    async def search(self, *, query: str, max_results: int) -> Mapping[str, Any]:
+    async def search(
+        self, *, query: str, max_results: int, tenant_id: UUID | None
+    ) -> Mapping[str, Any]:
         """POST ``/search`` and return the parsed JSON body.
 
         Expected shape: ``{"results": [{"title": str, "url": str, "content": str}, ...]}``.
         Other keys (``answer``, ``response_time``) are tolerated and
         ignored by :class:`WebSearchTool`.
+
+        Stream O (Mini-ADR O-9) — ``tenant_id`` lets a credential-resolving
+        client pick the per-tenant Tavily key. Fixed-key / test clients
+        accept and ignore it.
         """
 
 
@@ -72,7 +79,10 @@ class HTTPTavilyClient:
     base_url: str = _DEFAULT_BASE_URL
     timeout_s: float = _DEFAULT_TIMEOUT_S
 
-    async def search(self, *, query: str, max_results: int) -> Mapping[str, Any]:
+    async def search(
+        self, *, query: str, max_results: int, tenant_id: UUID | None = None
+    ) -> Mapping[str, Any]:
+        del tenant_id  # fixed-key client — credential baked into ``api_key``
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
             response = await client.post(
                 f"{self.base_url}/search",
@@ -107,7 +117,10 @@ class RecordingTavilyClient:
     last_query: str | None = None
     last_max_results: int | None = None
 
-    async def search(self, *, query: str, max_results: int) -> Mapping[str, Any]:
+    async def search(
+        self, *, query: str, max_results: int, tenant_id: UUID | None = None
+    ) -> Mapping[str, Any]:
+        del tenant_id  # test double — no per-tenant key
         self.last_query = query
         self.last_max_results = max_results
         if self.raise_on_search is not None:
@@ -166,12 +179,14 @@ class WebSearchTool:
         )
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
-        # ``ctx`` is unused — web_search has no per-tenant policy in M0.
-        # Future per-tenant API-key resolution (F.6) reads ``ctx.tenant_id`` here.
-        del ctx
+        # Stream O (Mini-ADR O-9) — ``ctx.tenant_id`` selects the per-tenant
+        # Tavily credential for a credential-resolving client; fixed-key /
+        # test clients ignore it.
         query = self._require_query(args)
         max_results = self._coerce_max_results(args.get("max_results"))
-        raw = await self.client.search(query=query, max_results=max_results)
+        raw = await self.client.search(
+            query=query, max_results=max_results, tenant_id=ctx.tenant_id
+        )
         return self._format(raw, max_results=max_results)
 
     # ------------------------------------------------------------------

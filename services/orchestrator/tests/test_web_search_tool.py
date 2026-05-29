@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 
 from orchestrator import Tool, ToolContext
@@ -150,7 +152,9 @@ async def test_empty_results_returns_no_results_marker() -> None:
 @pytest.mark.asyncio
 async def test_payload_without_results_key_handled_safely() -> None:
     class _BareClient:
-        async def search(self, *, query: str, max_results: int) -> dict:
+        async def search(
+            self, *, query: str, max_results: int, tenant_id: UUID | None = None
+        ) -> dict:
             return {}
 
     tool = WebSearchTool(client=_BareClient())
@@ -164,7 +168,9 @@ async def test_non_mapping_entries_skipped() -> None:
     """Tavily occasionally returns malformed rows; tolerate them."""
 
     class _MalformedClient:
-        async def search(self, *, query: str, max_results: int) -> dict:
+        async def search(
+            self, *, query: str, max_results: int, tenant_id: UUID | None = None
+        ) -> dict:
             return {
                 "results": [
                     _result(content="ok"),

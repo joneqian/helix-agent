@@ -24,6 +24,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
+from typing import cast
 
 from fastapi import FastAPI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -121,6 +122,7 @@ from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
 from helix_agent.common.observability import init_logging, init_tracing
+from helix_agent.common.uplift_metrics import record_legacy_credentials_fallback
 from helix_agent.persistence.agent_spec import (
     AgentSpecStore,
     InMemoryAgentSpecStore,
@@ -226,6 +228,7 @@ from helix_agent.persistence.trigger import (
     TriggerRunStore,
     TriggerStore,
 )
+from helix_agent.protocol import PROVIDER_CATALOG, Provider
 from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.checkpointer import make_checkpointer
 from helix_agent.runtime.runs import (
@@ -307,6 +310,9 @@ def create_app(
     # Fail fast at create_app rather than at first LLM call so a
     # mis-configured deployment crashes the pipeline at boot.
     _validate_platform_catalog(resolved_settings)
+    # Stream O (Mini-ADR O-10) — warn + meter when the effective catalog
+    # is still gap-filled from a legacy ``*_api_key_ref`` field.
+    _signal_legacy_credentials_derivation(resolved_settings)
     # ADR B-6: in ``sql`` mode every store is Postgres-backed off one
     # RLS-wrapped sessionmaker; the engine is disposed in ``lifespan``.
     # Injected repos still win, so unit tests keep their in-memory
@@ -532,9 +538,24 @@ def create_app(
                     logger.info("control_plane.checkpointer.postgres_ready")
                 else:
                     checkpointer = InMemorySaver()
+                # Stream O Mini-ADR O-9/O-10 — one CredentialsResolver over
+                # the effective (legacy-derived) catalog. The web_search /
+                # embedder / reranker callers and the consolidator aux model
+                # all resolve per-tenant credentials through it.
+                credentials_resolver = CredentialsResolver(
+                    platform_provider_credentials=(
+                        resolved_settings.effective_platform_provider_credentials
+                    ),
+                    platform_tool_credentials=(
+                        resolved_settings.effective_platform_tool_credentials
+                    ),
+                    tenant_config_getter=resolved_tenant_config_service,
+                )
+                _app.state.credentials_resolver = credentials_resolver
                 web_search_client = await resolve_web_search_client(
-                    api_key_ref=resolved_settings.tavily_api_key_ref,
+                    resolver=credentials_resolver,
                     secret_store=resolved_secret_store,
+                    supported_tools=resolved_settings.effective_supported_tools,
                 )
                 mcp_pool = await stack.enter_async_context(
                     build_mcp_pool(
@@ -575,9 +596,11 @@ def create_app(
                 image_resolver = make_image_resolver(object_store)
                 # Stream J.3 — long-term memory backend for the agent.
                 embedder = await resolve_embedder(
-                    api_key_ref=resolved_settings.embedding_api_key_ref,
-                    model=resolved_settings.embedding_model,
+                    resolver=credentials_resolver,
                     secret_store=resolved_secret_store,
+                    provider=resolved_settings.embedding_provider,
+                    model=resolved_settings.embedding_model,
+                    supported_providers=resolved_settings.effective_supported_providers,
                 )
                 # Stream K.K6 — memory CRUD endpoint needs the embedder
                 # for the PATCH path (re-embed on content change). GET /
@@ -587,10 +610,11 @@ def create_app(
                 # Stream J.5 — the knowledge retriever backing knowledge_search:
                 # hybrid recall + an optional (deployment-configured) LLM rerank.
                 reranker = await resolve_reranker(
-                    api_key_ref=resolved_settings.rerank_api_key_ref,
-                    provider=resolved_settings.rerank_provider,
-                    model=resolved_settings.rerank_model,
+                    resolver=credentials_resolver,
                     secret_store=resolved_secret_store,
+                    provider=cast(Provider, resolved_settings.rerank_provider),
+                    model=resolved_settings.rerank_model,
+                    supported_providers=resolved_settings.effective_supported_providers,
                 )
                 knowledge_retriever = make_knowledge_retriever(
                     store=resolved_knowledge_store, embedder=embedder, reranker=reranker
@@ -680,14 +704,9 @@ def create_app(
             memory_consolidator: MemoryConsolidator | None = None
             if enable_scheduler and embedder is not None:
                 default_provider = resolved_settings.memory_consolidator_default_aux_provider
-                credentials_resolver = CredentialsResolver(
-                    platform_provider_credentials=(resolved_settings.platform_provider_credentials),
-                    platform_tool_credentials=(resolved_settings.platform_tool_credentials),
-                    tenant_config_getter=resolved_tenant_config_service,
-                )
-                _app.state.credentials_resolver = credentials_resolver
+                # Reuse the CredentialsResolver built above (Mini-ADR O-9).
                 aux_model: ConsolidatorAuxModel
-                if default_provider in resolved_settings.platform_provider_credentials:
+                if default_provider in resolved_settings.effective_platform_provider_credentials:
                     aux_model = make_llm_router_aux_model(
                         resolver=credentials_resolver,
                         secret_store=resolved_secret_store,
@@ -969,6 +988,40 @@ def _validate_platform_catalog(settings: Settings) -> None:
             )
         msg = "Platform Catalog mismatch — " + "; ".join(details)
         raise RuntimeError(msg)
+
+
+def _signal_legacy_credentials_derivation(settings: Settings) -> None:
+    """Stream O (Mini-ADR O-10) — emit a deprecation signal when the
+    effective credentials catalog is gap-filled from a legacy
+    ``*_api_key_ref`` field. A deployment that has fully migrated to
+    ``platform_provider_credentials`` / ``platform_tool_credentials``
+    triggers nothing here; the P3 ``LegacyCredentialsFallbackPresent``
+    alert (Mini-ADR O-8) flags any that remain."""
+    explicit_provs = set(settings.platform_provider_credentials)
+    if settings.embedding_api_key_ref and settings.embedding_provider not in explicit_provs:
+        logger.warning(
+            "credentials.legacy_derivation role=embedding provider=%s — migrate to "
+            "platform_provider_credentials",
+            settings.embedding_provider,
+        )
+        record_legacy_credentials_fallback(role="embedding")
+    if (
+        settings.rerank_api_key_ref
+        and settings.rerank_provider not in explicit_provs
+        and settings.rerank_provider in PROVIDER_CATALOG
+    ):
+        logger.warning(
+            "credentials.legacy_derivation role=rerank provider=%s — migrate to "
+            "platform_provider_credentials",
+            settings.rerank_provider,
+        )
+        record_legacy_credentials_fallback(role="rerank")
+    if settings.tavily_api_key_ref and "web_search" not in settings.platform_tool_credentials:
+        logger.warning(
+            "credentials.legacy_derivation role=tavily — migrate to "
+            "platform_tool_credentials[web_search]"
+        )
+        record_legacy_credentials_fallback(role="tavily")
 
 
 def _build_sql_stores(settings: Settings) -> _SqlStores:

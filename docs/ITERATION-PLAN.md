@@ -688,6 +688,9 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] **O.7 Admin UI Credentials 面板** — **推到 Stream O PR 2**（PR B 范围聚焦 backend；Admin UI 留到 callers 全迁移完一起做，避免 UI 反复迭代）。**Mini-ADR O-7**
 - [x] **O.8 Audit + 可观测** — 4 audit actions（CREDENTIALS_MODE_CHANGED / PROVIDER_CREDENTIALS_UPDATED / TOOL_CREDENTIALS_UPDATED / CREDENTIALS_RESOLVE_FAILED）；5 metrics + gauge；3 recording rules（resolve_failure_rate + tenant_mode_adoption_ratio + legacy_fallback_rate）+ 2 alerts（CredentialsResolveFailureSpike P1 + LegacyCredentialsFallbackPresent P3）。**Mini-ADR O-8**。**2026-05-28 完成**
 - [x] **O.9 runbook** — `docs/runbooks/credentials.md` 7 节（概念 / 平台 setup / 2 alert 诊断 / mode 切换流程 / Sprint #7 aux wire / M1 follow-ups）。**2026-05-28 完成**
+- [x] **O.10 Per-tenant resolving callers（PR 2a）** — embedder / reranker / web_search 迁到 `CredentialsResolver`：`Embedder.embed(*, tenant_id)` / `Reranker.rerank(*, tenant_id)` / `TavilyClient.search(*, tenant_id)` 协议签名扩展 + `ResolvingEmbedder` / `ResolvingReranker` / `ResolvingTavilyClient` 包装类（control-plane glue，结构化实现 orchestrator 协议）；全 call site 透传 tenant_id（memory recall/writeback / knowledge tool / ingestion+chunking / DLQ worker / consolidator adapter）。reranker 缺凭证优雅降级到 RRF-fused。**Mini-ADR O-9**。**2026-05-29 完成**
+- [x] **O.11 Legacy → effective catalog 派生（PR 2a）** — `Settings.effective_*` gap-fill：legacy `embedding_api_key_ref` / `rerank_api_key_ref` / `tavily_api_key_ref` 并进 catalog，未 opt-in Stream O 的部署透明走 platform mode（零回归）；显式 Stream O 配置优先，legacy 只补缺；startup `_signal_legacy_credentials_derivation` warn + meter（per-role `record_legacy_credentials_fallback`）。**Mini-ADR O-10/O-11**。**2026-05-29 完成**
+- [x] **O.12 Mode-switch gate 完整性（PR 2a）** — `_collect_used_providers` 在任一 agent 声明 `memory.long_term` 时把 `settings.embedding_provider` 计入 used（infra provider 缺凭证必崩，必须 gate）；rerank 不进 gate（优雅降级）。**Mini-ADR O-12**。**2026-05-29 完成**
 
 **Stream O Verification**：8 项按零债 6 条核验；Platform Catalog 启动校验在 fail-fast 路径上不绕过；CredentialsResolver 双 mode 4 路径 fixture 全过；mode 切换缺凭证返回 403 + 完整 missing 列表；agent manifest publish 引用未支持 provider 立刻 reject；Sprint #7 consolidator aux 在 dogfood 启动前真接 LLMRouter（M1 dogfood 凝结数据采集前提）。
 
@@ -696,7 +699,8 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - **PR B**（实施）：migration 0047 + Platform Catalog + tenant_config schema + CredentialsResolver + all-or-nothing 2 gates + consolidator aux LLMRouter adapter + Admin UI Credentials 面板 + 4 audit + 5 metrics + 2 alerts + runbook + 单测 + e2e + Legacy 派生（~2 周）
 
 **后续 PR**（Stream O 范围内但 PR 1 不做）：
-- **PR 2**（~1 周）：embedder / reranker / web_search 全迁移到 resolver（per-tenant 改造，影响面大）+ Admin UI tool 面板细化
+- **PR 2a**（~3-4 天）✅ **2026-05-29 完成**：embedder / reranker / web_search 迁到 resolver（per-tenant 改造）+ legacy effective-catalog 派生 + mode-switch gate 补 embedding_provider（O.10/O.11/O.12）
+- **PR 2b**（~3-4 天）：Admin UI Credentials 面板（mode 切换器 + dry-run + provider/tool 凭证表）— O-7 设计落地
 - **PR 3**（~1 周）：MCP servers 纳入 mode + mcp_servers 字段 schema 迁移 + MCP-specific Admin UI
 
 ---

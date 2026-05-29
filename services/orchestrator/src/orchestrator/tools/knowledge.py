@@ -53,9 +53,17 @@ _MAX_LIMIT = 20
 
 @runtime_checkable
 class Reranker(Protocol):
-    """Reorders retrieval candidates by judged relevance to a query."""
+    """Reorders retrieval candidates by judged relevance to a query.
 
-    async def rerank(self, *, query: str, documents: Sequence[str], top_k: int) -> list[int]:
+    Stream O (Mini-ADR O-9) — ``tenant_id`` lets a credential-resolving
+    reranker pick the per-tenant API key at call time. Implementations
+    without per-tenant keys accept and ignore it. A resolving reranker
+    that finds no credential degrades to the fused order (rerank is
+    optional), so it is *not* gated at mode-switch time."""
+
+    async def rerank(
+        self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+    ) -> list[int]:
         """Return the indices of the ``top_k`` most relevant ``documents``,
         most relevant first. Indices are positions in ``documents``."""
 
@@ -80,7 +88,10 @@ class LLMReranker:
 
     llm_caller: LLMCaller
 
-    async def rerank(self, *, query: str, documents: Sequence[str], top_k: int) -> list[int]:
+    async def rerank(
+        self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+    ) -> list[int]:
+        del tenant_id  # fixed-key reranker — credential baked into llm_caller
         if not documents:
             return []
         listing = "\n\n".join(
@@ -137,7 +148,7 @@ class KnowledgeRetriever:
         kb_ids = await self._resolve_base_ids(tenant_id, base_names)
         if not kb_ids:
             return []
-        query_embedding = (await self.embedder.embed([query]))[0]
+        query_embedding = (await self.embedder.embed([query], tenant_id=tenant_id))[0]
         vector_hits = await self.store.search(
             tenant_id=tenant_id,
             kb_ids=kb_ids,
@@ -150,7 +161,7 @@ class KnowledgeRetriever:
         fused = rrf_fuse([vector_hits, keyword_hits])
         if not fused:
             return []
-        chunks = await self._rerank(query, fused, limit)
+        chunks = await self._rerank(query, fused, limit, tenant_id=tenant_id)
         return await self._attribute(tenant_id, chunks)
 
     async def _resolve_base_ids(self, tenant_id: UUID, base_names: Sequence[str]) -> list[UUID]:
@@ -162,13 +173,16 @@ class KnowledgeRetriever:
         return ids
 
     async def _rerank(
-        self, query: str, fused: list[KnowledgeChunk], limit: int
+        self, query: str, fused: list[KnowledgeChunk], limit: int, *, tenant_id: UUID
     ) -> list[KnowledgeChunk]:
         if self.reranker is None:
             return fused[:limit]
         candidates = fused[: self.recall_limit]
         order = await self.reranker.rerank(
-            query=query, documents=[chunk.content for chunk in candidates], top_k=limit
+            query=query,
+            documents=[chunk.content for chunk in candidates],
+            top_k=limit,
+            tenant_id=tenant_id,
         )
         return [candidates[i] for i in order]
 

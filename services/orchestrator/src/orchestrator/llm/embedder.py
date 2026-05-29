@@ -19,6 +19,7 @@ import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+from uuid import UUID
 
 import httpx
 
@@ -36,9 +37,15 @@ _UINT32_MAX = 0xFFFFFFFF
 
 @runtime_checkable
 class Embedder(Protocol):
-    """Async callable that embeds text into vectors."""
+    """Async callable that embeds text into vectors.
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    Stream O (Mini-ADR O-9) — ``tenant_id`` lets a credential-resolving
+    embedder pick the per-tenant API key at call time (platform vs tenant
+    mode). Implementations without per-tenant keys (test doubles, the
+    fixed-key :class:`OpenAICompatibleEmbedder`) accept and ignore it.
+    """
+
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
         """Return one embedding vector per input text, in input order."""
 
 
@@ -84,7 +91,10 @@ class OpenAICompatibleEmbedder:
     client: EmbeddingClient
     model: str
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        # Fixed-key embedder — the credential is baked into ``client``;
+        # ``tenant_id`` is accepted for protocol conformance and ignored.
+        del tenant_id
         if not texts:
             return []
         body = await self.client.embeddings(model=self.model, texts=texts)
@@ -104,7 +114,8 @@ class FakeEmbedder:
 
     dim: int = 1024
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id  # deterministic test double — no per-tenant key
         return [self._vector(text) for text in texts]
 
     def _vector(self, text: str) -> tuple[float, ...]:
