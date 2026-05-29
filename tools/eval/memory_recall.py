@@ -178,9 +178,7 @@ def _parse_case(entry: Any) -> RecallCase:
 
 
 class _EmbedderLike(Protocol):
-    async def embed(
-        self, texts: Sequence[str], *, tenant_id: UUID
-    ) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
         """Embed each text and return one vector per input."""
 
 
