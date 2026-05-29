@@ -20,6 +20,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from control_plane.app import create_app
 from control_plane.runtime import (
     AgentRuntime,
+    ResolvingTavilyClient,
     _load_mcp_server_configs,
     build_mcp_pool,
     build_middleware_env,
@@ -31,6 +32,7 @@ from control_plane.runtime import (
 )
 from control_plane.settings import Settings
 from control_plane.tenancy import TenantConfigNotConfiguredError
+from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.persistence import InMemoryKnowledgeStore
 from helix_agent.runtime.secret_store import LocalDevSecretStore
 from helix_agent.runtime.storage import InMemoryObjectStore
@@ -38,7 +40,6 @@ from orchestrator.llm import FakeEmbedder
 from orchestrator.multimodal import ObjectStoreImageResolver
 from orchestrator.tools import (
     HTTPSupervisorClient,
-    HTTPTavilyClient,
     KnowledgeRetriever,
     MCPClient,
     MCPServerConfig,
@@ -167,30 +168,43 @@ async def test_allowlist_provider_empty_when_tenant_unconfigured() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _web_search_resolver() -> CredentialsResolver:
+    # Factory test only — resolve_web_search_client never touches the
+    # tenant config, so an empty resolver suffices.
+    return CredentialsResolver(
+        platform_provider_credentials={},  # type: ignore[arg-type]
+        platform_tool_credentials={},  # type: ignore[arg-type]
+        tenant_config_getter=_FakeTenantConfigService(allowlist=[]),  # type: ignore[arg-type]
+    )
+
+
 @pytest.mark.asyncio
-async def test_resolve_web_search_client_none_ref_yields_none() -> None:
+async def test_resolve_web_search_client_tool_unsupported_yields_none() -> None:
     client = await resolve_web_search_client(
-        api_key_ref=None,
+        resolver=_web_search_resolver(),
         secret_store=LocalDevSecretStore.from_mapping({}),
+        supported_tools=[],
     )
     assert client is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_web_search_client_resolves_key() -> None:
-    store = LocalDevSecretStore.from_mapping({"tavily/key": "tvly-test"})
+async def test_resolve_web_search_client_builds_resolving_client() -> None:
     client = await resolve_web_search_client(
-        api_key_ref="secret://tavily/key",
-        secret_store=store,
+        resolver=_web_search_resolver(),
+        secret_store=LocalDevSecretStore.from_mapping({}),
+        supported_tools=["web_search"],
     )
-    assert isinstance(client, HTTPTavilyClient)
-    assert client.api_key == "tvly-test"
+    assert isinstance(client, ResolvingTavilyClient)
 
 
 @pytest.mark.asyncio
 async def test_build_tool_env_carries_web_search_client() -> None:
-    store = LocalDevSecretStore.from_mapping({"tavily/key": "tvly-test"})
-    client = await resolve_web_search_client(api_key_ref="secret://tavily/key", secret_store=store)
+    client = await resolve_web_search_client(
+        resolver=_web_search_resolver(),
+        secret_store=LocalDevSecretStore.from_mapping({}),
+        supported_tools=["web_search"],
+    )
     env = build_tool_env(_FakeTenantConfigService(allowlist=[]), web_search_client=client)
     assert env.web_search_client is client
 

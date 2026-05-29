@@ -1,0 +1,198 @@
+"""Stream O Mini-ADR O-9 — per-tenant credential-resolving callers.
+
+The embedder / reranker / web_search wrappers resolve a secret_ref via
+:class:`CredentialsResolver` at call time, then read the actual key from the
+:class:`SecretStore`. These tests assert the per-tenant resolution path and
+the graceful-degrade behaviour for the (optional) reranker.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+from uuid import UUID, uuid4
+
+import pytest
+
+from control_plane.runtime import (
+    ResolvingEmbedder,
+    ResolvingReranker,
+    ResolvingTavilyClient,
+)
+from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
+from helix_agent.protocol import TenantConfigRecord, TenantPlan
+from helix_agent.runtime.secret_store import parse_secret_ref
+from helix_agent.testing import InMemorySecretStore
+
+_NOW_DISPLAY = "Acme"
+
+
+class _TenantConfig:
+    def __init__(self, record: TenantConfigRecord) -> None:
+        self._record = record
+
+    async def get(self, *, tenant_id: UUID) -> TenantConfigRecord:
+        return self._record
+
+
+def _record(
+    *,
+    mode: str,
+    model_creds: dict[str, str] | None = None,
+) -> TenantConfigRecord:
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    return TenantConfigRecord(
+        tenant_id=uuid4(),
+        display_name=_NOW_DISPLAY,
+        plan=TenantPlan.FREE,
+        credentials_mode=mode,  # type: ignore[arg-type]
+        model_credentials_ref=model_creds or {},
+        tool_credentials={},
+        created_at=now,
+        updated_at=now,
+        updated_by="tester",
+    )
+
+
+def _resolver(
+    *,
+    record: TenantConfigRecord,
+    platform_provs: dict[str, str] | None = None,
+) -> CredentialsResolver:
+    return CredentialsResolver(
+        platform_provider_credentials=platform_provs or {},  # type: ignore[arg-type]
+        platform_tool_credentials={},  # type: ignore[arg-type]
+        tenant_config_getter=_TenantConfig(record),
+    )
+
+
+# ─── ResolvingEmbedder ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_embedder_empty_input_skips_resolution() -> None:
+    # No texts → no resolution, no error even with an empty catalog.
+    embedder = ResolvingEmbedder(
+        resolver=_resolver(record=_record(mode="platform")),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="text-embedding-v4",
+    )
+    assert await embedder.embed([], tenant_id=uuid4()) == []
+
+
+@pytest.mark.asyncio
+async def test_embedder_tenant_mode_missing_credential_raises() -> None:
+    # Tenant mode without the provider's key → fail fast (no platform
+    # fallback, Mini-ADR O-3).
+    embedder = ResolvingEmbedder(
+        resolver=_resolver(
+            record=_record(mode="tenant", model_creds={}),
+            platform_provs={"qwen": "secret://platform/qwen"},
+        ),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="text-embedding-v4",
+    )
+    with pytest.raises(CredentialsResolverError):
+        await embedder.embed(["hi"], tenant_id=uuid4())
+
+
+# ─── ResolvingReranker ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reranker_empty_documents_returns_empty() -> None:
+    reranker = ResolvingReranker(
+        resolver=_resolver(record=_record(mode="platform")),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="qwen-plus",
+    )
+    assert await reranker.rerank(query="q", documents=[], top_k=3, tenant_id=uuid4()) == []
+
+
+@pytest.mark.asyncio
+async def test_reranker_missing_credential_degrades_to_fused_order() -> None:
+    # Tenant mode, no rerank key → the wrapper swallows the resolver error
+    # and returns the input order (truncated to top_k) — rerank is optional.
+    reranker = ResolvingReranker(
+        resolver=_resolver(
+            record=_record(mode="tenant", model_creds={}),
+            platform_provs={"qwen": "secret://platform/qwen"},
+        ),
+        secret_store=InMemorySecretStore(),
+        provider="qwen",
+        model="qwen-plus",
+    )
+    order = await reranker.rerank(query="q", documents=["a", "b", "c"], top_k=2, tenant_id=uuid4())
+    assert order == [0, 1]
+
+
+# ─── ResolvingTavilyClient ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_web_search_none_tenant_raises() -> None:
+    client = ResolvingTavilyClient(
+        resolver=_resolver(record=_record(mode="platform")),
+        secret_store=InMemorySecretStore(),
+    )
+    with pytest.raises(CredentialsResolverError):
+        await client.search(query="q", max_results=3, tenant_id=None)
+
+
+@pytest.mark.asyncio
+async def test_web_search_tenant_mode_missing_credential_raises() -> None:
+    record = _record(mode="tenant")
+    client = ResolvingTavilyClient(
+        resolver=CredentialsResolver(
+            platform_provider_credentials={},  # type: ignore[arg-type]
+            platform_tool_credentials={"web_search": "secret://platform/tavily"},  # type: ignore[arg-type]
+            tenant_config_getter=_TenantConfig(record),
+        ),
+        secret_store=InMemorySecretStore(),
+    )
+    with pytest.raises(CredentialsResolverError):
+        await client.search(query="q", max_results=3, tenant_id=uuid4())
+
+
+# A small structural check that the wrapper actually reaches the secret
+# store with the resolved ref (platform mode happy path is exercised via
+# the embedder, which is simplest to assert end to end).
+
+
+@pytest.mark.asyncio
+async def test_embedder_platform_mode_resolves_and_reads_key() -> None:
+    captured: dict[str, Any] = {}
+
+    class _CapturingSecretStore:
+        async def get(self, ref: object) -> str:
+            captured["ref"] = ref
+            return "sk-embed"
+
+        async def put(self, ref: object, value: str) -> None:  # pragma: no cover
+            raise NotImplementedError
+
+    class _NoNetworkEmbedder(ResolvingEmbedder):
+        async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+            secret_ref = await self.resolver.resolve_provider(
+                tenant_id=tenant_id, provider=self.provider
+            )
+            await self.secret_store.get(parse_secret_ref(secret_ref))
+            return [(1.0,)]
+
+    embedder = _NoNetworkEmbedder(
+        resolver=_resolver(
+            record=_record(mode="platform"),
+            platform_provs={"qwen": "secret://platform/qwen"},
+        ),
+        secret_store=_CapturingSecretStore(),  # type: ignore[arg-type]
+        provider="qwen",
+        model="text-embedding-v4",
+    )
+    out = await embedder.embed(["hi"], tenant_id=uuid4())
+    assert out == [(1.0,)]
+    assert captured["ref"] == parse_secret_ref("secret://platform/qwen")

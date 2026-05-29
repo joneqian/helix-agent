@@ -199,7 +199,7 @@ def make_memory_recall_node(
             tenant_id=tenant_id, tenant_config_store=tenant_config_store
         )
         try:
-            vectors = await token.run_cancellable(embedder.embed([task]))
+            vectors = await token.run_cancellable(embedder.embed([task], tenant_id=tenant_id))
             memories = await memory_store.retrieve(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -258,7 +258,7 @@ def make_memory_writeback_node(
             if not extracted:
                 return {}
             vectors = await token.run_cancellable(
-                embedder.embed([content for _, content in extracted])
+                embedder.embed([content for _, content in extracted], tenant_id=tenant_id)
             )
             items = [
                 MemoryItem(

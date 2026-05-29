@@ -235,7 +235,7 @@ def build_memory_router() -> APIRouter:
                 },
             )
 
-        vectors = await embedder.embed([payload.content])
+        vectors = await embedder.embed([payload.content], tenant_id=tenant_id)
         updated = await store.update_content(
             tenant_id=tenant_id,
             user_id=user_id,

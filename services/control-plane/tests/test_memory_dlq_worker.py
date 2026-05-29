@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -36,7 +36,8 @@ class _ScriptedEmbedder:
         self._outputs = list(outputs)
         self.calls = 0
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id
         idx = self.calls
         self.calls += 1
         if idx >= len(self._outputs):

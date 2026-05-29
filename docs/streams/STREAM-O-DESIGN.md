@@ -604,6 +604,113 @@ def record_legacy_credentials_fallback(*, role: str) -> None:
 
 ---
 
+## 2bis. PR 2a — Caller 迁移(embedder / reranker / web_search per-tenant)
+
+> PR B(#324)只接通了 consolidator aux 这一个 caller,并把 embedder / reranker /
+> web_search 的 legacy settings 字段打了 deprecation 注释(callers 仍读 legacy)。
+> PR 2a 把这三个**平台基础设施 caller** 迁到 `CredentialsResolver`,实现 per-tenant
+> 凭证解析,同时保证 legacy 部署零回归。Admin UI 面板拆到 PR 2b。
+
+### 2bis.1 Mini-ADR O-9 — Per-tenant resolving callers
+
+**问题**:embedder / reranker / web_search 当前在 app.py lifespan 里**一次性构造成平台单例**
+(api_key 在构造时烧死),没有 tenant_id 上下文。Stream O 要求按租户解析凭证。
+
+**决策**(沿用 O-6 锁定的 `embed(texts, *, tenant_id)` 方向):
+
+| Caller | 协议签名变更 | tenant_id 来源 |
+|--------|-------------|----------------|
+| Embedder | `Embedder.embed(texts, *, tenant_id: UUID)` | 全部 call site 透传(见下表) |
+| Reranker | `Reranker.rerank(*, query, documents, top_k, tenant_id: UUID)` | `KnowledgeRetriever.search` 已有 tenant_id |
+| web_search | 不改协议;`WebSearchTool.call` 读 `ctx.tenant_id`(已就位) | `ToolContext.tenant_id` |
+
+**Resolving 包装类**(放 control-plane,结构化实现 orchestrator 协议,**避免 orchestrator 依赖
+helix-common.credentials**):
+
+- `ResolvingEmbedder(resolver, secret_store, provider, model, base_url)`:
+  `embed` 内 `secret_ref = await resolver.resolve_provider(tenant_id, provider)` →
+  `api_key = secret_store.get(secret_ref)` → 委托现有 `OpenAICompatibleEmbedder` 逻辑。
+  解析在每次 `embed()`(= 每 batch)发生一次,频率低,无需 caching。
+- `ResolvingReranker(resolver, secret_store, provider, model)`:解析放在 `LLMReranker`
+  **已有的 try/except 内** —— 租户缺 rerank 凭证 → `CredentialsResolverError` 被现有兜底
+  捕获 → 退化成 RRF-fused order。**rerank 是可选能力(优雅降级),所以不进 mode-switch gate。**
+- `ResolvingTavilyClient(resolver, secret_store)`:`search` 内 `resolve_tool(tenant_id, "web_search")`。
+  缺凭证 → raise → ReAct tools 节点包成 `ToolMessage(status="error")`(E-12,本就是 fail-fast)。
+
+**call site tenant_id 透传清单**(全部已验证有 tenant_id 在 scope):
+
+| call site | file | tenant_id 来源 |
+|-----------|------|----------------|
+| memory recall node | `orchestrator/graph_builder/memory.py` | `configurable_uuid(config, "tenant_id")` |
+| memory writeback node | 同上 | 同上 |
+| knowledge tool 检索 | `orchestrator/tools/knowledge.py` `search()` | 入参 `tenant_id` |
+| knowledge ingestion | `control_plane/knowledge/ingestion.py` | 入参 `tenant_id` |
+| semantic chunking | `control_plane/knowledge/chunking.py` | 加 `tenant_id` 入参,由 ingestion 透传 |
+| memory CRUD PATCH | `control_plane/api/memory.py` | `_require_caller_user()` |
+| DLQ worker 重试 | `control_plane/memory/dlq_worker.py` | `row.tenant_id` |
+| consolidator embedder adapter | `control_plane/memory_consolidator.py` | sweep loop 已按 tenant 遍历 |
+
+### 2bis.2 Mini-ADR O-10 — Legacy → effective catalog 派生(零回归)
+
+**问题**:把三个 caller 一律改走 resolver 后,**未 opt-in Stream O 的部署**
+(`platform_provider_credentials` 空)会在 platform mode 下 resolve 失败 → embedder 崩。
+
+**决策**(实现 O-5 承诺的 derivation path):`Settings` 加 4 个 `effective_*`
+**gap-fill** 计算属性,把 legacy 字段并进 catalog:
+
+```python
+embedding_provider: Provider = "qwen"   # 新增:embedder 之前只有 model 名 + 烧死 base_url
+
+@property
+def effective_platform_provider_credentials(self) -> dict[Provider, str]:
+    merged = dict(self.platform_provider_credentials)         # 显式 Stream O 优先
+    if self.embedding_api_key_ref and self.embedding_provider not in merged:
+        merged[self.embedding_provider] = self.embedding_api_key_ref
+    if self.rerank_api_key_ref and self.rerank_provider not in merged:
+        merged[self.rerank_provider] = self.rerank_api_key_ref  # type: ignore[index]
+    return merged
+# effective_supported_providers = keys(effective_platform_provider_credentials) ∪ supported_providers
+# effective_platform_tool_credentials: 同款,tavily_api_key_ref → ["web_search"]
+# effective_supported_tools: 同款
+```
+
+- **gap-fill 语义**:显式 Stream O 配置永远优先;legacy 只补未显式声明的 provider/tool。
+- `_validate_platform_catalog` 仍只校验**显式**字段(不变);derivation 是给 resolver 用的附加视图。
+- `CredentialsResolver` 用 `effective_*` 构造 → legacy 部署透明地走 platform mode,**零回归**。
+- 触发 derivation 时记 `record_legacy_credentials_fallback(role=...)` —— P3 alert 已在 O-8 就位,M1 移除 legacy 后该计数应归零。
+
+### 2bis.3 Mini-ADR O-11 — Build-gate → runtime-resolution 语义迁移
+
+**现状**:`api_key_ref is None → resolve_embedder 返回 None → 声明 `memory.long_term`
+的 agent 在 build 期失败`(平台级 gate)。
+
+**迁移后**:embedder 是 per-tenant resolving,**不能在 build 期判断 THIS 租户是否有 key**。
+
+**决策**:
+- **全局可用性 gate 保留**:`embedder = ResolvingEmbedder(...)` iff
+  `embedding_provider ∈ effective_supported_providers`,否则 `None`。
+  → 完全没配 embedding(legacy + Stream O 都没)的部署,行为不变(build 期失败)。
+- **per-tenant 失败移到 runtime**:已 opt-in 的部署,某租户(tenant mode)缺 embedding 凭证 →
+  `embed()` raise `CredentialsResolverError`(401-style fail fast,O-3)。这是**多租户的必然**:
+  一个租户没配 key 不该让 agent build 全局失败。
+- reranker / web_search 的 None-when-unconfigured 同款保留(各自 tool 的 catalog 成员判断)。
+
+### 2bis.4 Mini-ADR O-12 — Mode-switch gate 完整性(infra provider)
+
+**问题**:O-4 的 `_collect_used_providers` 只走 agent manifest 的 model 链(primary +
+fallback + vision + consolidation aux),**漏了平台基础设施 provider**:租户切 tenant mode 时,
+即使补齐了所有 agent 的 chat provider,仍可能缺 embedding provider → 运行期 memory recall 崩。
+
+**决策**:gate 补 infra provider 判定:
+- 任一 agent 声明 `spec.memory.long_term` → `used_providers` 加 `settings.embedding_provider`
+  (memory.long_term 是硬能力,缺凭证必崩,必须 gate)。
+- rerank **不进 gate**(O-9:缺凭证优雅降级,非硬失败)。
+- web_search 已由 `_collect_used_tools` 覆盖(不变)。
+
+`embedding_provider` 经 endpoint 从 `app.state` settings 读入并传给 `_collect_used_providers`。
+
+---
+
 ## 3. 数据流(综合)
 
 ```
@@ -650,7 +757,8 @@ Web search tool call:
 |----|------|------|
 | **PR A — `stream-o/1-credentials-design`**(本 PR) | 仅本 § 0 ~ § 6 + ITERATION-PLAN backlog;无代码 | 1 天 |
 | **PR B — `stream-o/1-credentials-impl`** | migration 0047 + Platform Catalog + tenant_config schema + CredentialsResolver + all-or-nothing 2 gates + consolidator aux LLMRouter adapter + Admin UI Credentials 面板 + 4 audit actions + 5 metrics + 2 alerts + runbook + 单测 + 集成测 + e2e + Legacy settings 派生 | ~2 周 |
-| **PR 2(Stream O 后续)** | embedder / reranker / web_search 全迁移到 resolver(per-tenant 改造)+ Admin UI tool 面板细化 | ~1 周 |
+| **PR 2a — `stream-o/2a-caller-migration`**(本 PR) | embedder / reranker / web_search 迁到 resolver(per-tenant);O-9 resolving 包装类 + O-10 legacy effective-catalog 派生 + O-11 build→runtime gate 迁移 + O-12 mode-switch gate 补 embedding_provider;协议签名变更 + 全 call site tenant_id 透传;单测 + 集成测 | ~3-4 天 |
+| **PR 2b(Stream O 后续)** | Admin UI Credentials 面板(mode 切换器 + dry-run + provider/tool 凭证表)— O-7 设计落地 | ~3-4 天 |
 | **PR 3(Stream O 后续)** | MCP servers 纳入 mode + 现有 mcp_servers 字段 schema 迁移 + MCP-specific Admin UI | ~1 周 |
 
 ---

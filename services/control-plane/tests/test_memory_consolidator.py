@@ -81,7 +81,8 @@ class _ScriptedAuxModel:
 
 
 class _FakeEmbedder:
-    async def embed_one(self, text: str) -> tuple[float, ...]:
+    async def embed_one(self, text: str, *, tenant_id: UUID) -> tuple[float, ...]:
+        del tenant_id
         return (0.5, 0.5)
 
 

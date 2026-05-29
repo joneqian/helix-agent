@@ -133,8 +133,9 @@ class ConsolidatorAuxModel(Protocol):
 class ConsolidatorEmbedder(Protocol):
     """Single-text embedder for the consolidator's summary writes."""
 
-    async def embed_one(self, text: str) -> tuple[float, ...]:
-        """Return the embedding vector for ``text``."""
+    async def embed_one(self, text: str, *, tenant_id: UUID) -> tuple[float, ...]:
+        """Return the embedding vector for ``text`` (Stream O O-9 —
+        ``tenant_id`` resolves the per-tenant embedding credential)."""
 
 
 class _OrchestratorEmbedderAdapter:
@@ -144,10 +145,10 @@ class _OrchestratorEmbedderAdapter:
     def __init__(self, embedder: object) -> None:
         self._embedder = embedder
 
-    async def embed_one(self, text: str) -> tuple[float, ...]:
+    async def embed_one(self, text: str, *, tenant_id: UUID) -> tuple[float, ...]:
         # Embedder.embed returns ``list[tuple[float, ...]]``; we always
         # send a single text and unwrap.
-        result = await self._embedder.embed([text])  # type: ignore[attr-defined]
+        result = await self._embedder.embed([text], tenant_id=tenant_id)  # type: ignore[attr-defined]
         if not result:
             msg = "embedder returned empty result for single text"
             raise RuntimeError(msg)
@@ -648,7 +649,7 @@ class MemoryConsolidator:
             return
 
         if verdict.keep and verdict.summary is not None:
-            embedding = await self._embedder.embed_one(verdict.summary)
+            embedding = await self._embedder.embed_one(verdict.summary, tenant_id=tenant_id)
             new_item = await self._memory.write_consolidated(
                 tenant_id=tenant_id,
                 user_id=user_id,

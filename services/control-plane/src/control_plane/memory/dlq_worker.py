@@ -25,7 +25,7 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from control_plane.uplift.threat_metrics import record_memory_blocked
 from helix_agent.common.observability import helix_counter
@@ -174,7 +174,9 @@ class MemoryDLQWorker:
     async def _attempt_one(self, row: DLQRowLike, *, now: datetime) -> str:
         """Retry one row. Returns ``"ok"`` / ``"retry"`` / ``"dead"``."""
         try:
-            vectors = await self._embedder.embed([content for _, content in row.extracted])
+            vectors = await self._embedder.embed(
+                [content for _, content in row.extracted], tenant_id=row.tenant_id
+            )
             items = _build_memory_items(row, vectors)
             await self._store.write(items)
         except MemoryInjectionBlockedError as exc:
@@ -250,7 +252,7 @@ class DLQRowLike:  # pragma: no cover - protocol-only
     """Structural duck-type for :class:`helix_agent.persistence.memory.DLQRow`."""
 
     id: object
-    tenant_id: object
+    tenant_id: UUID
     user_id: object
     source_thread_id: str | None
     extracted: Sequence[tuple[str, str]]

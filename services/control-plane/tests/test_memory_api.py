@@ -29,7 +29,8 @@ class _StubEmbedder:
     """Returns a deterministic per-text vector so tests can assert that
     PATCH re-embedded the content (not just rewrote the text)."""
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id
         return [(float(len(t)), 0.0, 0.0) for t in texts]
 
 

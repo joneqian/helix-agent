@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -23,8 +24,8 @@ from orchestrator.llm import (
 @pytest.mark.asyncio
 async def test_fake_embedder_is_deterministic_and_correct_width() -> None:
     embedder = FakeEmbedder(dim=64)
-    first = await embedder.embed(["hello", "world"])
-    again = await embedder.embed(["hello", "world"])
+    first = await embedder.embed(["hello", "world"], tenant_id=uuid4())
+    again = await embedder.embed(["hello", "world"], tenant_id=uuid4())
 
     assert [len(v) for v in first] == [64, 64]
     # Same text → same vector; different text → different vector.
@@ -34,7 +35,7 @@ async def test_fake_embedder_is_deterministic_and_correct_width() -> None:
 
 @pytest.mark.asyncio
 async def test_fake_embedder_empty_input() -> None:
-    assert await FakeEmbedder(dim=8).embed([]) == []
+    assert await FakeEmbedder(dim=8).embed([], tenant_id=uuid4()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ async def test_openai_compatible_embedder_extracts_vectors() -> None:
         }
     )
     embedder = OpenAICompatibleEmbedder(client=client, model="text-embedding-v4")
-    vectors = await embedder.embed(["a", "b"])
+    vectors = await embedder.embed(["a", "b"], tenant_id=uuid4())
 
     assert vectors == [(0.1, 0.2), (0.3, 0.4)]
     assert client.calls == [("text-embedding-v4", ["a", "b"])]
@@ -83,14 +84,14 @@ async def test_openai_compatible_embedder_reorders_by_index() -> None:
         }
     )
     embedder = OpenAICompatibleEmbedder(client=client, model="m")
-    assert await embedder.embed(["a", "b"]) == [(0.1, 0.2), (0.3, 0.4)]
+    assert await embedder.embed(["a", "b"], tenant_id=uuid4()) == [(0.1, 0.2), (0.3, 0.4)]
 
 
 @pytest.mark.asyncio
 async def test_openai_compatible_embedder_empty_input_skips_call() -> None:
     client = _ScriptedEmbeddingClient(body={"data": []})
     embedder = OpenAICompatibleEmbedder(client=client, model="m")
-    assert await embedder.embed([]) == []
+    assert await embedder.embed([], tenant_id=uuid4()) == []
     assert client.calls == []
 
 

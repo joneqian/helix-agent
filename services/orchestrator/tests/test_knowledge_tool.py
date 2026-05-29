@@ -34,7 +34,8 @@ class _FixedEmbedder:
     def __init__(self, vector: tuple[float, ...]) -> None:
         self._vector = vector
 
-    async def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        del tenant_id
         return [self._vector for _ in texts]
 
 
@@ -58,7 +59,10 @@ class _FailingLLM:
 class _ReversingReranker:
     """Reranker that reverses the candidate order."""
 
-    async def rerank(self, *, query: str, documents: Sequence[str], top_k: int) -> list[int]:
+    async def rerank(
+        self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+    ) -> list[int]:
+        del tenant_id
         del query
         return list(reversed(range(len(documents))))[:top_k]
 
@@ -154,28 +158,28 @@ def test_parse_rerank_order_garbage_yields_empty() -> None:
 @pytest.mark.asyncio
 async def test_llm_reranker_reorders() -> None:
     reranker = LLMReranker(llm_caller=_ScriptedLLM("[2, 1]"))
-    order = await reranker.rerank(query="q", documents=["a", "b"], top_k=2)
+    order = await reranker.rerank(query="q", documents=["a", "b"], top_k=2, tenant_id=uuid4())
     assert order == [1, 0]
 
 
 @pytest.mark.asyncio
 async def test_llm_reranker_truncates_to_top_k() -> None:
     reranker = LLMReranker(llm_caller=_ScriptedLLM("[3, 2, 1]"))
-    order = await reranker.rerank(query="q", documents=["a", "b", "c"], top_k=2)
+    order = await reranker.rerank(query="q", documents=["a", "b", "c"], top_k=2, tenant_id=uuid4())
     assert order == [2, 1]
 
 
 @pytest.mark.asyncio
 async def test_llm_reranker_unparseable_reply_falls_back_to_input_order() -> None:
     reranker = LLMReranker(llm_caller=_ScriptedLLM("sorry, I cannot help"))
-    order = await reranker.rerank(query="q", documents=["a", "b", "c"], top_k=3)
+    order = await reranker.rerank(query="q", documents=["a", "b", "c"], top_k=3, tenant_id=uuid4())
     assert order == [0, 1, 2]
 
 
 @pytest.mark.asyncio
 async def test_llm_reranker_llm_failure_falls_back() -> None:
     reranker = LLMReranker(llm_caller=_FailingLLM())
-    order = await reranker.rerank(query="q", documents=["a", "b"], top_k=2)
+    order = await reranker.rerank(query="q", documents=["a", "b"], top_k=2, tenant_id=uuid4())
     assert order == [0, 1]
 
 
