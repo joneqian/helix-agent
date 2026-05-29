@@ -79,3 +79,21 @@ class HealthResponse(BaseModel):
 
     status: str
     docker_ok: bool
+
+
+class ReapRequest(BaseModel):
+    """Request body for ``POST /v1/sandboxes:reap`` — Stream P (Mini-ADR P-14)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: ``True`` reaps every active session regardless of idle age; ``False``
+    #: runs the normal idle-TTL sweep.
+    force: bool = False
+
+
+class ReapResponse(BaseModel):
+    """Response body for ``POST /v1/sandboxes:reap``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reaped_count: int

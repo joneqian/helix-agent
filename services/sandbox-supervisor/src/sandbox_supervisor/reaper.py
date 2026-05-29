@@ -49,7 +49,7 @@ class SandboxReaper:
         # always inject one.
         self._lifecycle = lifecycle
 
-    async def run_once(self) -> int:
+    async def run_once(self, *, idle_ttl_s: int | None = None) -> int:
         """Destroy every idle session; return how many were reaped.
 
         One session's failure (e.g. a Docker hiccup) does not abort the
@@ -57,10 +57,14 @@ class SandboxReaper:
         After the idle sweep, the J.15-补强-2 lifecycle sweep runs
         (archive pending soft-deleted volumes + drain the DLQ) — each
         flow swallows its own per-volume errors.
+
+        ``idle_ttl_s`` overrides the configured TTL for this sweep only;
+        Stream P (Mini-ADR P-14) passes ``0`` for a forced reap so every
+        active session is treated as idle (deterministic teardown for the
+        ``/v1/sandboxes:reap`` force path). Volumes are preserved.
         """
-        idle = await self._store.list_idle_sessions(
-            now=datetime.now(UTC), idle_ttl_s=self._idle_ttl_s
-        )
+        ttl = self._idle_ttl_s if idle_ttl_s is None else idle_ttl_s
+        idle = await self._store.list_idle_sessions(now=datetime.now(UTC), idle_ttl_s=ttl)
         reaped = 0
         for session in idle:
             try:

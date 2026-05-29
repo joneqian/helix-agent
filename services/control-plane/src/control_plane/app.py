@@ -48,6 +48,7 @@ from control_plane.api import (
     build_role_bindings_router,
     build_runs_list_router,
     build_runs_router,
+    build_sandboxes_router,
     build_service_accounts_router,
     build_sessions_router,
     build_skills_router,
@@ -939,6 +940,7 @@ def create_app(
     app.include_router(build_role_bindings_router())
     app.include_router(build_quota_router())
     app.include_router(build_tenants_router())
+    app.include_router(build_sandboxes_router())
     app.include_router(build_platform_config_router())
     app.include_router(build_tenant_quotas_router())
     app.include_router(build_tenant_config_router())

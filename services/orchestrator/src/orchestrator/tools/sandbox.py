@@ -89,6 +89,14 @@ class SupervisorClient(Protocol):
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         """Read a file from a user's persistent workspace volume (J.9 artifact download)."""
 
+    async def reap(self, *, force: bool) -> int:
+        """Run the idle-session sweep now; return how many were reaped.
+
+        ``force=True`` reaps every active session regardless of idle age
+        (deterministic teardown for ops + the M0→M1 Gate E2E); ``force=False``
+        runs the normal idle-TTL sweep. Persistent workspace volumes are
+        preserved — only sessions are destroyed (Stream P, Mini-ADR P-14)."""
+
 
 @dataclass
 class HTTPSupervisorClient:
@@ -130,6 +138,10 @@ class HTTPSupervisorClient:
             json={"reason": reason},
             expect_body=False,
         )
+
+    async def reap(self, *, force: bool) -> int:
+        body = await self._post("/v1/sandboxes:reap", json={"force": force})
+        return int(body.get("reaped_count", 0))
 
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         url = f"{self.base_url}/v1/workspaces/{tenant_id}/{user_id}/file"
@@ -193,6 +205,8 @@ class RecordingSupervisorClient:
     released: list[UUID] = field(default_factory=list)
     destroyed: list[tuple[UUID, str]] = field(default_factory=list)
     workspace_reads: list[tuple[UUID, UUID, str]] = field(default_factory=list)
+    reaped: list[bool] = field(default_factory=list)
+    reap_count: int = 0
     _next_id: int = 0
 
     async def acquire(
@@ -222,6 +236,10 @@ class RecordingSupervisorClient:
         if self.workspace_file_error is not None:
             raise self.workspace_file_error
         return self.workspace_file
+
+    async def reap(self, *, force: bool) -> int:
+        self.reaped.append(force)
+        return self.reap_count
 
 
 @dataclass
