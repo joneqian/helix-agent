@@ -37,136 +37,136 @@
 
 | Phase | 名称 | 估时 | 必需环境 | 阻塞下游 |
 |-------|------|------|---------|---------|
-| **Phase 0** | 前置准备 + canonical agent manifest 入仓 | 0.5-1d | dev | 全部 |
+| **Phase 0** | 前置准备:起栈 + bootstrap admin + 登录 + 配模型 + 建租户 + 注册 canonical agent | 0.5-1d | dev | 全部 |
 | **Phase 1** | 能力级 eval baseline 重产 + diff | 0.5d | dev | — |
 | **Phase 2** | 多轮对话 + 跨 thread 长记忆 | 0.5d | dev | — |
-| **Phase 3** | 持久工作区 + hibernate restore | 0.5d | dev | — |
+| **Phase 3** | 持久工作区 + 强制冷启动 restore | 0.5d | dev | — |
 | **Phase 4** | artifact + 审批门 | 0.5d | dev | — |
 | **Phase 5** | 多模态(图像)输入 | 0.5d | dev | — |
-| **Phase 6** | SLO 8 项指标采集联调 | 0.5d | dev + Prometheus | — |
-| **Phase 7** | 安全 + 数据保护(staging) | 1-2d | staging Linux | — |
+| **Phase 6** | SLO 8 项指标采集联调 | 0.5d | dev + observability profile | — |
+| **Phase 7** | 安全 + 数据保护(staging) | 1-2d | staging Linux | ⏸ **本迭代不跑** |
 
-**整段累计:4-6 工作日**(Phase 7 因为要打 staging 演练,实际占 1-2 天)。
+**本迭代覆盖 Phase 0–6(dev 跑通)。Phase 7 单列后续** —— gVisor 7 用例 + cross-tenant
+3 件套 + KMS 轮换 runbook 都依赖 **staging Linux 主机 provisioning**(macOS dev 跑不动
+gVisor),环境就绪后单列 Stream/PR。**Phase 0–6 累计 3-4 工作日。**
 
 ---
 
 ## Phase 0 — 前置准备
 
-### 0.1 dev 环境拉起 + 健康检查
+> 顺序:起栈 + dev key → bootstrap system_admin → OIDC 登录 → 配平台凭证 →
+> 建租户 → 注册 canonical agent。每步都依赖前一步。
+
+### 0.1 dev key + 起栈 + 健康检查
 
 ```sh
 cd /Users/mac/src/github/jone_qian/helix-agent
-
-# 1. 拉最新 main
 git checkout main && git pull --ff-only
 
-# 2. 启动 docker-compose 全栈
+# 1. dev 真实 LLM key —— agent 主对话模型 / embedder / web_search 的 key 值都
+#    从 local_dev SecretStore 文件取(它只读文件,不读 ANTHROPIC_API_KEY 进程 env)。
+#    详见 docs/runbooks/bootstrap-admin.md § 5。
+cp infra/dev-keys/dev-llm-keys.example infra/dev-keys/dev-llm-keys.local
+$EDITOR infra/dev-keys/dev-llm-keys.local
+#   helix-agent/dev/llm/anthropic-api-key=sk-ant-<真key>   ← canonical manifest 引用这个
+
+# 2. 起栈 —— 三个 profile 缺一不可:
+#      full          control-plane / postgres / pgbouncer / redis / sandbox-supervisor / minio
+#      auth          keycloak(OIDC,登录拿 token 用)
+#      observability prometheus / grafana / otel-collector / tempo / loki(Phase 6 用)
 cd infra
-docker compose --profile full up -d
+docker compose --profile full --profile auth --profile observability up -d
 
-# 3. 等所有容器就绪(60s)
-docker compose ps
-# 期望:control-plane / postgres / pgbouncer / redis / sandbox-supervisor /
-#       credential-proxy / minio / prometheus / grafana / loki / tempo
-#       状态都是 healthy 或 Up
-
-# 4. healthcheck
+# 3. 等就绪 + healthcheck
+docker compose ps                  # 期望全 healthy / Up
 curl -sS http://localhost:8000/healthz/ready | python3 -m json.tool
 # 期望:{"status": "ready", "checks": {"postgres": "ok", "redis": "ok", ...}}
 ```
 
 **失败排查**:
-- 容器起不来 → `docker compose logs control-plane`,常见 DB 未 migrate(`docker compose exec control-plane alembic upgrade head`)
-- `ready=false` 但容器是 Up → 看 `checks` 里哪个失败,对应排查 `postgres.md` / `sandbox.md`
+- 容器起不来 → `docker compose logs control-plane`,常见 DB 未 migrate(`migrate` 一次性服务,看其 log)
+- `ready=false` 但容器 Up → 看 `checks` 里哪个失败
 
-### 0.2 创建 canonical agent manifest 并落仓库
+### 0.2 bootstrap 首个 system_admin + 登录
 
-⚠️ **仓库当前没有 canonical agent yaml,这一步必须先做**。
-
-新建 `manifests/canonical-agent/v1.0.0.yaml`(或团队约定路径),内容大致:
-
-```yaml
-apiVersion: helix.io/v1
-kind: Agent
-metadata:
-  name: canonical
-  version: "1.0.0"
-  tenant: platform-eng
-spec:
-  tenant_config: {}
-  model:
-    provider: anthropic
-    name: claude-sonnet-4-5
-    fallback_chain:
-      - {provider: anthropic, name: claude-haiku-4-5-20251001}
-  system_prompt:
-    template: |
-      你是 helix canonical agent — per-user 持久 agent。
-      用户=公司的员工/客户;租户=公司。
-      你有跨会话的长期记忆、可访问的工作区 /workspace、可调用工具。
-  sandbox:
-    resources: { cpu: "1.0", memory: "1Gi" }
-    network:
-      egress: proxy
-      allowlist: ["api.anthropic.com"]
-    filesystem:
-      readonly_root: true
-      writable: ["/workspace"]
-  tools:
-    # canonical agent 至少要打开:web_search / file_io / code_exec
-    enabled_skills:
-      - {name: web_search, version: "*"}
-      - {name: file_io, version: "*"}
-      - {name: code_exec, version: "*"}
-  memory:
-    long_term:
-      enabled: true
-      embedder: helix-fake-keyword-embedder-v1  # M0 用 fake;Phase 7 staging 切真实
-  hitl:
-    enabled: true
-    triggers:
-      - on_action: code_exec
-        match: "rm -rf|sudo|curl.*\\|.*sh"
-  multimodal:
-    vision: true  # supports_vision 主模型走 content block;否则 ask_image
-```
-
-入仓 + 注册:
+平台第一个管理员有"鸡生蛋"问题(授 system_admin 本身需要 system_admin),用
+infra 级 CLI 破环(详见 [`bootstrap-admin.md`](./bootstrap-admin.md)):
 
 ```sh
-# 1. 写入仓库
-mkdir -p manifests/canonical-agent
-$EDITOR manifests/canonical-agent/v1.0.0.yaml
-# 粘贴上面内容(根据实际 Skill 名称调整)
+# 1. 取 dev 用户的 subject id(keycloak realm 预置 dev/devpass;UUID 非 email)
+TOKEN=$(curl -sS -X POST http://localhost:8080/realms/helix-agent/protocol/openid-connect/token \
+  -d grant_type=password -d client_id=helix-agent-admin-ui \
+  -d username=dev -d password=devpass -d scope=openid | jq -r .access_token)
+SUB=$(echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sub)
 
-# 2. 通过 control-plane API 注册
-TENANT_ID=$(curl -sS -X POST http://localhost:8000/v1/tenants -H 'Content-Type: application/json' -d '{"name":"platform-eng"}' | jq -r .data.id)
-USER_TOKEN="<本地 keycloak 或 dev 调试 token>"
+# 2. 一次性授 system_admin(幂等)
+docker compose exec control-plane python -m control_plane.bootstrap_admin --subject-id "$SUB"
 
-curl -sS -X POST http://localhost:8000/v1/agents \
-  -H "Authorization: Bearer ${USER_TOKEN}" \
-  -H 'Content-Type: application/json' \
-  -d @<(jq -Rn --rawfile y manifests/canonical-agent/v1.0.0.yaml '{manifest: $y}')
-# 期望:201 Created,返回 spec_id + sha
-
-# 3. 验证已注册
-curl -sS http://localhost:8000/v1/agents -H "Authorization: Bearer ${USER_TOKEN}" | jq .
-# 期望:items 列表里有 name=canonical version=1.0.0
+# 3. 验证 /v1/me
+curl -sS http://localhost:8000/v1/me -H "Authorization: Bearer ${TOKEN}" | jq '.is_system_admin'
+# 期望:true
 ```
 
-**或者**通过 Admin UI:
-1. 浏览器开 `http://localhost:5173/agents`
-2. 点 `New Agent` → 选 `Upload YAML` → 选 `manifests/canonical-agent/v1.0.0.yaml`
-3. 验证列表里出现 `canonical 1.0.0`
+> Admin UI 登录(localhost:5173):走同一个 keycloak;登录后右上角应出现平台级入口
+> `/settings/platform`(仅 system_admin 可见)。
 
-### 0.3 前置 Checklist(全部 ✅ 才能进 Phase 1)
+### 0.3 配平台 provider / tool 凭证
 
-- [ ] docker compose 全栈 healthy
+embedder(Phase 2 长记忆)和 web_search 工具的 key 通过**平台凭证**解析。两种配法:
+
+- **env 种子**(最简):`HELIX_AGENT_PLATFORM_PROVIDER_CREDENTIALS` / `..._TOOL_CREDENTIALS`
+  声明 `provider/tool → secret://<name>` ref,ref 指向的**值**仍由 0.1 的 SecretStore 文件提供。
+- **运行时**:平台配置页 **`/settings/platform`**(system_admin)填写,DB 覆盖 env。
+
+```sh
+# GET 当前合并视图(env 种子 + DB 覆盖)
+curl -sS http://localhost:8000/v1/platform/credentials -H "Authorization: Bearer ${TOKEN}" | jq .
+# 期望:providers/tools 列表反映已启用的 provider(anthropic 等)与 tool(web_search)
+```
+
+### 0.4 创建租户
+
+```sh
+# 真端点:POST /v1/tenants(system_admin only),payload 是 display_name
+TENANT_ID=$(curl -sS -X POST http://localhost:8000/v1/tenants \
+  -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d '{"display_name":"Gate E2E Tenant"}' | jq -r .data.tenant_id)
+echo "tenant_id=$TENANT_ID"
+# 非 admin 调 → 403;重复同 id → 409(惰性建租;tenant_config 行即租户)
+```
+
+### 0.5 注册 canonical agent
+
+✅ **manifest 已入仓:`manifests/canonical-agent/v1.0.0.yaml`**(按真 `AgentSpec` schema 写,
+CI 由 `services/control-plane/tests/test_canonical_manifest.py` 守护)。能力面:长记忆 /
+持久工作区 / 审批门(`approval_required_tools: [http]`)/ 多模态(`model.supports_vision: true`)。
+直接注册即可,无需手写:
+
+```sh
+cd /Users/mac/src/github/jone_qian/helix-agent
+curl -sS -X POST http://localhost:8000/v1/agents \
+  -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
+  -d "$(jq -Rn --rawfile y manifests/canonical-agent/v1.0.0.yaml '{manifest: $y}')"
+# 期望:201 Created,返回 spec_sha256
+
+# 验证
+curl -sS http://localhost:8000/v1/agents -H "Authorization: Bearer ${TOKEN}" \
+  | jq '.data.items[] | select(.name=="canonical-agent")'
+# 期望:有 name=canonical-agent version=1.0.0
+```
+
+**或**通过 Admin UI:`/agents` → `New Agent` → `Upload YAML` → 选 `manifests/canonical-agent/v1.0.0.yaml`。
+
+### 0.6 前置 Checklist(全部 ✅ 才能进 Phase 1)
+
+- [ ] `docker compose ps` 全栈 healthy(full + auth + observability)
 - [ ] `/healthz/ready` 返回 ready
-- [ ] `manifests/canonical-agent/v1.0.0.yaml` 已 commit 入仓库
-- [ ] `POST /v1/agents` 注册返回 201
-- [ ] `GET /v1/agents` 列表能看到 canonical 1.0.0
-- [ ] Admin UI(localhost:5173)能看到 canonical agent
+- [ ] `infra/dev-keys/dev-llm-keys.local` 已填真 key(git-ignored)
+- [ ] `bootstrap_admin` 跑过,`/v1/me` `is_system_admin: true`
+- [ ] `GET /v1/platform/credentials` 反映已配 provider/tool
+- [ ] `POST /v1/tenants` 返回 201(非 admin 403 / 重复 409)
+- [ ] `POST /v1/agents` 注册 canonical-agent 返回 201,`GET /v1/agents` 能看到
+- [ ] Admin UI(localhost:5173)能看到 canonical-agent 1.0.0
 
 ---
 
@@ -197,7 +197,8 @@ diff <(yq '.capabilities' tools/eval/baselines/m0_gate_baseline.yaml) \
 抽查 3 个最复杂的(J.1 plan_execute / J.3 memory_recall / J.6 multimodal):
 
 ```sh
-# J.1 plan_execute(LLM-judge,需要 ANTHROPIC_API_KEY)
+# J.1 plan_execute(LLM-judge;有 ANTHROPIC_API_KEY 走真 judge,否则自动退到
+# ScriptedJudge —— 后者也能 PASS,只是判定更弱)
 ANTHROPIC_API_KEY=<key> .venv/bin/pytest tools/eval/test_plan_execute.py -v
 
 # J.3 memory_recall
@@ -250,7 +251,7 @@ agent> 你在做 Stream M 的 Gate 验收,正在跑 canonical agent 端到端测
 ```sh
 # 1. 列 user 的 long-term memory
 curl -sS http://localhost:8000/v1/memory?kind=long_term \
-  -H "Authorization: Bearer ${USER_TOKEN}" | jq .
+  -H "Authorization: Bearer ${TOKEN}" | jq .
 # 期望:items 里有 current_work 这条记忆
 
 # 2. cross-tenant 隔离验证(另起一个 tenant 的 user 应看不到)
@@ -265,55 +266,52 @@ curl -sS http://localhost:8000/v1/memory?kind=long_term \
 
 - [ ] Thread #2 能复述 Thread #1 的内容
 - [ ] `/v1/memory` 能列出 current_work 记忆
-- [ ] cross-tenant 用 OTHER_TENANT_TOKEN 看不到这条记忆
+- [ ] cross-tenant 用 $OTHER_TENANT_TOKEN(另一租户用户) 看不到这条记忆
 - [ ] Admin UI /memory 页能编辑这条记忆(走 H.4 PR 2 path)
 
 ---
 
-## Phase 3 — 持久工作区 + hibernate restore
+## Phase 3 — 持久工作区 + 强制冷启动 restore
 
-对应 STREAM-M § 2.2 ② + ③:**持久工作区跨 run 留存** + **空闲 hibernate + 快速 restore**。
+对应 STREAM-M § 2.2 ② + ③:**持久工作区跨 run 留存** + **空闲回收 + 快速 restore**。
 
-### 3.1 测试场景
+> ⚠️ **M0 范围**:canonical agent(M0)的工具是 `web_search` + `http`,**没有写
+> `/workspace` 的工具**(`exec_python` / file I/O 是 **M1**)。所以 M0 能验证的是:
+> ① persistent_workspace **挂载语义**(manifest `filesystem.persistent_workspace: true`
+> → /workspace 是 named volume,不是 ephemeral tmpfs);② **reap 端点保留 volume 只删
+> session**(PR K);③ **冷启动延迟 SLO**。**agent 自己写文件 → 重读的完整闭环依赖 M1
+> exec_python**,本迭代标注为 M1 项,不在 M0 跑通。
+>
+> dev 主机用 **runc**(非 gVisor),这是预期;gVisor 安全用例在 Phase 7(staging)。
 
-agent 在 /workspace 写一个文件 → run 结束 → 等 TTL reaper 回收 sandbox →
-重新发消息触发 cold start → 文件应仍可读 → 冷启动 P95 < 5s。
-
-### 3.2 操作步骤
-
-```
-# Step 1 - 通过 Playground
-user> 在 /workspace/notes.md 写入 "Gate verification notes - 2026-05-27"
-agent> [执行 file_io,写文件]
-user> 验证文件存在 → cat /workspace/notes.md
-agent> Gate verification notes - 2026-05-27
-```
+### 3.1 强制冷启动 + volume 保留(M0 可验)
 
 ```sh
-# Step 2 - 触发 TTL reaper 回收(或等自然 TTL)
-# 强制回收当前 sandbox(通过 admin API,需 system_admin):
-curl -sS -X POST http://localhost:8000/v1/sandboxes/reap?force=true \
-  -H "Authorization: Bearer ${SYSADMIN_TOKEN}"
-# 期望:reaped_count >= 1
-```
+# Step 1 - 起一个 thread 跑一个真实 turn,让 sandbox 冷启动一次(产生 cold_start 样本 +
+#          挂上该 user 的持久 workspace volume)。通过 Playground 发任意 prompt 即可。
 
-```
-# Step 3 - 回 Playground 继续对话
-user> cat /workspace/notes.md
-agent> Gate verification notes - 2026-05-27   ← 文件仍在
-```
+# Step 2 - 强制回收所有空闲 sandbox(system_admin;PR K 的端点)
+curl -sS -X POST 'http://localhost:8000/v1/sandboxes/reap?force=true' \
+  -H "Authorization: Bearer ${TOKEN}" | jq '.data.reaped_count'
+# 期望:reaped_count >= 1;volume 不被删(reaper 只删 session)
 
-```sh
-# Step 4 - 抓本次 run 的冷启动延迟
-curl -sS 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.95, sum by (le)(rate(helix_sandbox_cold_start_seconds_bucket[5m])))' | jq .
+# Step 3 - 确认 workspace volume 仍在(被 reap 的是 sandbox 容器,不是 volume)
+docker volume ls | grep workspace
+# 期望:该 user 的 workspace volume 仍列出
+
+# Step 4 - 再发一个 turn 触发冷启动,抓延迟
+curl -sS 'http://localhost:9090/api/v1/query?query=histogram_quantile(0.95,sum%20by%20(le)(rate(helix_sandbox_cold_start_seconds_bucket[5m])))' \
+  | jq '.data.result[0].value[1]'
 # 期望:P95 < 5.0
 ```
 
-### 3.3 Phase 3 Checklist
+### 3.2 Phase 3 Checklist
 
-- [ ] sandbox 被回收后,文件 `/workspace/notes.md` 仍可读
+- [ ] `POST /v1/sandboxes/reap?force=true` 返回 `reaped_count >= 1`(非 admin → 403)
+- [ ] reap 后该 user 的 workspace volume 仍在(`docker volume ls`)
 - [ ] `helix_sandbox_cold_start_seconds` P95 < 5s
-- [ ] Admin UI Run Detail 页能看到 sandbox lifecycle 事件(cold_start → idle → reaped → cold_start)
+- [ ] Admin UI Run Detail 能看到 sandbox lifecycle 事件
+- [ ] _(M1)_ agent 经 exec_python 写 `/workspace` 文件 → reap → 重读仍在 —— **本迭代不跑**
 
 ---
 
@@ -332,7 +330,7 @@ agent> [调用 artifact 工具] → 保存 artifact gate-notes v1
 ```sh
 # 验证 artifact 已写入
 curl -sS http://localhost:8000/v1/artifacts \
-  -H "Authorization: Bearer ${USER_TOKEN}" | jq '.items[] | select(.name=="gate-notes")'
+  -H "Authorization: Bearer ${TOKEN}" | jq '.items[] | select(.name=="gate-notes")'
 # 期望:items 里有 name=gate-notes version=1
 ```
 
@@ -346,37 +344,44 @@ agent> Gate verification notes - 2026-05-27
 
 ### 4.2 审批门测试
 
+> 审批门是**平台强制**的,由 manifest `policies.approval_required_tools` 声明 —— canonical
+> agent 列了 **`http`**(**精确工具名,不是正则**)。agent 一旦要调 `http` 工具,LangGraph
+> `interrupt()` 把 run 暂停成 **`paused`**,等人审批。
+>
+> ⚠️ SOP 旧版写的 `hitl.triggers[].match` 正则 **运行期不存在**;审批触发只认
+> `approval_required_tools` 里的精确工具名(Mini-ADR P-17)。
+
 ```
-# Thread #5
-user> 帮我执行 rm -rf /workspace/notes.md
-agent> ⚠️ 危险操作 — 已暂停等待审批(interrupt 触发)
+# Thread #5 —— 诱导 agent 调用 http 工具(被审批门拦)
+user> 帮我用 HTTP 工具抓一下 https://example.com 的首页内容
+agent> ⚠️ 该操作需要人工审批 —— 已暂停(interrupt 触发)
 ```
 
 ```sh
-# 后端验证 — 应有 pending approval
-curl -sS http://localhost:8000/v1/runs?status=awaiting_approval \
-  -H "Authorization: Bearer ${USER_TOKEN}" | jq '.items[0]'
-# 期望:有一条 run 状态 awaiting_approval,reason 包含 "rm -rf"
+# 后端验证 —— 应有一条 paused 的 run(注意:status=paused,不是 awaiting_approval)
+curl -sS 'http://localhost:8000/v1/runs?status=paused' \
+  -H "Authorization: Bearer ${TOKEN}" | jq '.data.items[0]'
+# 期望:有一条 run 状态 paused,interrupt 指向 http 工具调用
 
 # Admin UI 操作:
-# 1. 开 /runs 列表 → 找到 awaiting approval 那条 run
+# 1. 开 /runs 列表(可按 status=paused 过滤)→ 找到那条 run
 # 2. 打开 Run Detail 页 → ApprovalCard
-# 3. 点 Approve → run resume → audit_log 写入 APPROVAL_GRANTED
-# 4. 或点 Reject → run 标 failed → audit_log 写入 APPROVAL_DENIED
+# 3. 点 Approve → run resume → audit_log 写 APPROVAL_GRANTED
+# 4. 或点 Reject → run 终止 → audit_log 写 APPROVAL_DENIED
 
 # 验证 audit trail
-curl -sS http://localhost:8000/v1/audit?action=approval_granted \
-  -H "Authorization: Bearer ${USER_TOKEN}" | jq '.items[0]'
+curl -sS 'http://localhost:8000/v1/audit?action=approval_granted' \
+  -H "Authorization: Bearer ${TOKEN}" | jq '.data.items[0]'
 # 期望:有审批通过的 audit entry
 ```
 
 ### 4.3 Phase 4 Checklist
 
 - [ ] artifact 跨 thread 可列 + 可下载
-- [ ] cross-tenant 拒绝(用 OTHER_TENANT_TOKEN 取不到 gate-notes)
-- [ ] 危险操作触发 interrupt
+- [ ] cross-tenant 拒绝(用 $OTHER_TENANT_TOKEN(另一租户用户) 取不到 gate-notes)
+- [ ] 调 `http` 工具触发 `interrupt()`,run 进 `status=paused`
 - [ ] Admin UI ApprovalCard 可 Approve / Reject
-- [ ] Resume 后 run 状态变化:awaiting_approval → running → completed/failed
+- [ ] Resume 后 run 状态变化:paused → running → completed/failed
 - [ ] Audit log 有完整 trail(APPROVAL_REQUESTED → APPROVAL_GRANTED → ACTION_EXECUTED)
 
 ---
@@ -385,45 +390,43 @@ curl -sS http://localhost:8000/v1/audit?action=approval_granted \
 
 对应 STREAM-M § 2.2 ⑥:**多模态输入**(J.6 Path A + Path B 均在 staging 跑通真实图像)。
 
+> **dev vs staging 分层**:Path A 在 dev 用真 anthropic vision key 就能跑真实描述
+> (canonical manifest 主模型 `claude-sonnet-4-5` `supports_vision: true`)。Path B 需要
+> 临改 manifest + 一个 OpenAI key + `vision:` 块,较重 —— 列为**进阶/staging**,M0 dev
+> 主跑 Path A。
+
 ### 5.1 Path A — 主模型支持视觉(content block)
 
-```sh
-# 上传图片到 uploads
-curl -sS -X POST http://localhost:8000/v1/uploads \
-  -H "Authorization: Bearer ${USER_TOKEN}" \
-  -F "file=@/path/to/some/screenshot.png" | jq .
-# 拿 upload_id
-```
+最简:**用 Admin UI Playground 的传图入口**(PR M)。
 
 ```
-# Playground - 主模型是 claude-sonnet-4-5(supports_vision=true)
-user> [附加 upload_id 对应的图片] 描述这张图
+# Playground (localhost:5173/agents/canonical-agent/1.0.0/playground)
+# 1. 点「添加图片」→ 选一张本地 png/jpg(走 POST /v1/sessions/{thread_id}/uploads
+#    → 返回 helix://image/... ref,作为附件 chip 显示)
+# 2. 输入框打字 + Run
+user> [附件:screenshot.png] 描述这张图
 agent> 这是一张 ... 的截图,我看到 ...
 ```
 
-### 5.2 Path B — `ask_image` 工具 + 单独 VL 模型
+手动 API(等价,Playground 内部就是这两步):
 
-把 canonical manifest 临时改为不支持视觉的模型(如 GPT-3.5),验证 fallback:
-
-```yaml
-# 临时修改 manifests/canonical-agent/v1.0.0.yaml
-spec:
-  model:
-    provider: openai
-    name: gpt-3.5-turbo  # supports_vision=false
+```sh
+# 先建一个 thread(POST /v1/sessions),拿 thread_id;再上传到该 thread:
+curl -sS -X POST "http://localhost:8000/v1/sessions/${THREAD_ID}/uploads" \
+  -H "Authorization: Bearer ${TOKEN}" -F "file=@/path/to/screenshot.png" | jq .image_ref
+# 期望:201 + {"image_ref": "helix://image/..."};该 ref 放进下个 run 的 image_refs
 ```
 
-```
-# Playground - 主模型 GPT-3.5 不支持视觉,期望走 ask_image 工具
-user> [附加 upload_id] 描述这张图
-agent> [调用 ask_image 工具] → 这是一张 ...
-```
+### 5.2 Path B — `ask_image` 工具 + 单独 VL 模型(进阶 / staging)
+
+主模型不支持视觉时,图走 `ask_image` 工具路由到单独 VL 模型。需把 manifest 主模型换成
+`supports_vision: false` 的模型并加 `spec.vision:` 块(声明 VL 模型)。本迭代不在 dev 主跑。
 
 ### 5.3 Phase 5 Checklist
 
-- [ ] Path A:主模型直接看到图,回答合理
-- [ ] Path B:主模型不支持视觉,自动调 ask_image,回答合理
-- [ ] 测试完后**还原 manifest 为 sonnet-4-5**
+- [ ] Path A:Playground 传图 → 主模型(真 anthropic key)直接看图、描述合理
+- [ ] `POST /v1/sessions/{thread_id}/uploads` 返回 `helix://image/...` ref
+- [ ] _(进阶/staging)_ Path B:主模型不支持视觉时自动走 `ask_image`
 
 ---
 
@@ -433,12 +436,10 @@ agent> [调用 ask_image 工具] → 这是一张 ...
 
 ### 6.1 触发足够流量
 
-跑 5 个 thread,每个 thread 3-5 个 turn,确保指标有样本:
-
-```sh
-.venv/bin/python tools/eval/run_baseline.py --warmup
-# (如果 run_baseline 不支持 warmup,改为手工 5 个 thread × 5 turn 真实对话)
-```
+指标需要样本才查得到。**`run_baseline.py` 没有 `--warmup` 参数** —— 手工造流量:
+在 Playground 跑 ~5 个 thread、每个 3-5 个真实 turn(混入 Phase 2/5 的对话即可),
+或重复 `run_baseline.py --out /tmp/warmup.yaml` 几次。确保 control-plane 和
+sandbox-supervisor 的 `/metrics` 都有近期样本后再查 Prometheus。
 
 ### 6.2 逐项 Prometheus 查询
 
@@ -494,6 +495,10 @@ ls docs/incidents/2026-05/ 2>/dev/null | wc -l
 
 ## Phase 7 — 安全 + 数据保护(staging)
 
+> ⏸ **本迭代不跑 —— 单列后续**。Phase 7 整段依赖 **staging Linux 主机 provisioning**
+> (macOS dev 跑不动 gVisor),且 KMS 轮换 runbook 尚缺。等 staging 环境就绪后单列
+> Stream/PR。下文保留为目标清单。
+
 ⚠️ **必须 staging Linux 主机**,macOS 跑不动 gVisor。
 
 ### 7.1 gVisor 7/7 沙盒安全用例
@@ -542,27 +547,29 @@ cd services/sandbox-supervisor
 
 ---
 
-## 8. 总验收清单(进 Gate 30 天观察期前)
+## 8. 总验收清单
 
-所有 Phase 都 ✅ 才能开 30 天 Gate 窗口(per `m0-m1-gate.md` § 0):
+**本迭代目标 = Phase 0–6 在 dev 跑通。** Phase 7(安全 + 数据保护)单列后续,
+不阻塞 Phase 0–6 的验收记录。
 
 | 维度 | Phase | Status |
 |------|-------|--------|
 | A. eval baseline | Phase 1 | ☐ |
-| B. canonical agent 端到端 6 条 |  |  |
+| B. canonical agent 端到端 |  |  |
 | &nbsp;&nbsp;① 多轮对话长记忆 | Phase 2 | ☐ |
-| &nbsp;&nbsp;② 持久工作区 | Phase 3 | ☐ |
-| &nbsp;&nbsp;③ hibernate restore | Phase 3 | ☐ |
+| &nbsp;&nbsp;② 持久工作区 volume 保留 + reap | Phase 3 | ☐ |
+| &nbsp;&nbsp;③ 冷启动 restore P95 < 5s | Phase 3 | ☐ |
 | &nbsp;&nbsp;④ artifact 跨 thread | Phase 4 | ☐ |
-| &nbsp;&nbsp;⑤ 审批门 | Phase 4 | ☐ |
-| &nbsp;&nbsp;⑥ 多模态 | Phase 5 | ☐ |
+| &nbsp;&nbsp;⑤ 审批门(`approval_required_tools` / `status=paused`)| Phase 4 | ☐ |
+| &nbsp;&nbsp;⑥ 多模态 Path A | Phase 5 | ☐ |
 | C. SLO 8 项采集 | Phase 6 | ☐ |
-| D. 安全 sandbox 7/7 | Phase 7 | ☐ |
-| D. 安全 cross-tenant 3 项 | Phase 7 | ☐ |
-| E. PG / WORM / KMS / Volume 演练 | Phase 7 | ☐ |
+| _(M1)_ agent 写 /workspace 闭环(exec_python)| Phase 3 | ⏸ 后续 |
+| _(Phase 7)_ 安全 sandbox 7/7 | Phase 7 | ⏸ staging |
+| _(Phase 7)_ cross-tenant 3 项 | Phase 7 | ⏸ staging |
+| _(Phase 7)_ PG / WORM / KMS / Volume 演练 | Phase 7 | ⏸ staging |
 
-**全 ✅ → 打开 Gate 30 天窗口(`m0-m1-gate.md` § 0 写 commit sha + 日期)**。
-任一 ❌ → 进 retro,修完重新跑那个 Phase。
+**Phase 0–6 全 ✅ → 本迭代 E2E readiness 达成。** 进 Gate 30 天窗口还需 Phase 7
+(staging 就绪后单列跑通),见 `m0-m1-gate.md` § 0。
 
 ---
 
@@ -571,11 +578,13 @@ cd services/sandbox-supervisor
 | 症状 | 可能原因 | 处理 |
 |------|---------|------|
 | Phase 0 `POST /v1/agents` 401 | token 未注入 / 过期 | `keycloak admin login` 重发 / 用 dev token |
-| Phase 0 manifest 校验失败 `MANIFEST_VALIDATION` | YAML 字段不符合 AgentSpec | 看 control-plane log error 详细 path |
+| Phase 0 `POST /v1/tenants` 403 | 当前 token 不是 system_admin | 确认跑过 `bootstrap_admin` 且 `/v1/me` `is_system_admin: true` |
+| Phase 0 manifest 校验失败 `MANIFEST_VALIDATION` | YAML 字段不符合 AgentSpec | 本地先 `test_canonical_manifest.py` 复现;看 control-plane log error path |
+| Phase 0 agent 跑真实 turn 报无 key | dev key 没进 SecretStore 文件 | 确认 `infra/dev-keys/dev-llm-keys.local` 有 `helix-agent/dev/llm/anthropic-api-key=…`(注意:`ANTHROPIC_API_KEY` 进程 env **不被读**)|
 | Phase 1 baseline diff 不空 | 上游 PR 影响 eval 分数 | retro 找根因;不允许"分数轻微下降但继续观察"|
-| Phase 2 Thread #2 没复述 Thread #1 | 长记忆没写入 / embedder 不工作 | 看 `/v1/memory` 列表 + control-plane log search `mem_write` |
-| Phase 3 文件丢失 | sandbox volume 没挂 named volume / TTL reaper 把 volume 也删了 | 看 sandbox-supervisor log + `docker volume ls` |
-| Phase 4 审批不触发 | manifest `hitl.triggers` regex 不匹配 | 验证 regex `re.search` 命中,看 control-plane log search `hitl` |
+| Phase 2 Thread #2 没复述 Thread #1 | 长记忆没写入 / embedder key 没配 | 看 `/v1/memory` 列表 + 确认平台 provider 凭证(embedder)已配 |
+| Phase 3 reap 后 volume 没了 | reaper 误删 volume(应只删 session)| 看 sandbox-supervisor log + `docker volume ls` |
+| Phase 4 审批不触发 | manifest 没把工具列进 `approval_required_tools` / agent 没真去调该工具 | 确认 manifest `policies.approval_required_tools: [http]`;**`hitl.triggers.match` 正则运行期不存在,别再找它** |
 | Phase 5 多模态 Path B 不走 ask_image | `supports_vision` 探测错误 | 看 `ModelSpec.supports_vision` 配置 |
 | Phase 6 某项 Prometheus query 返回空 | 指标 emitter 没就位 / scrape job 漏 | 查 `tools/observability/rules/` + control-plane `/metrics` |
 | Phase 7 gVisor 测试 SKIP | runsc 没装 / kernel 不支持 | staging Linux runner image 装 runsc |
