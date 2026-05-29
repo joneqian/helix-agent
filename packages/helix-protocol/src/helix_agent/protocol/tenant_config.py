@@ -172,6 +172,10 @@ class TenantConfigRecord(BaseModel):
     # business-value vs implementation-cost trade-off).
     credentials_mode: CredentialsMode = "platform"
     tool_credentials: dict[Tool, str] = Field(default_factory=dict)
+    # Stream O — Mini-ADR O-14. Per-tenant MCP server credentials:
+    # ``server_name`` (platform-defined, never tenant input) → tenant
+    # secret_ref backing that server's bearer auth in ``tenant`` mode.
+    mcp_credentials: dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     updated_by: str
@@ -241,3 +245,5 @@ class TenantConfigPatch(BaseModel):
     # Stream O — Mini-ADR O-2. Credentials patch fields.
     credentials_mode: CredentialsMode | None = None
     tool_credentials: dict[Tool, str] | None = None
+    # Stream O — Mini-ADR O-14. Per-tenant MCP server credentials.
+    mcp_credentials: dict[str, str] | None = None

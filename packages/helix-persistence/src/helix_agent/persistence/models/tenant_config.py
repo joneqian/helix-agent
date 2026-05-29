@@ -99,6 +99,11 @@ class TenantConfigRow(Base):
     tool_credentials: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Stream O — Mini-ADR O-14. Per-tenant MCP server credentials
+    # (``{server_name: secret_ref}``). Added in migration 0048.
+    mcp_credentials: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
