@@ -61,6 +61,9 @@ class AuditAction(StrEnum):
     # tenant_config (C.7)
     TENANT_CONFIG_READ = "tenant_config:read"
     TENANT_CONFIG_WRITE = "tenant_config:write"
+    # tenant lifecycle — Stream P Mini-ADR P-1 (POST /v1/tenants creates the
+    # first tenant_config row; system_admin-gated).
+    TENANT_CREATE = "tenant:create"
     # tenant credentials — Stream O Mini-ADR O-8.
     # MODE_CHANGED is emitted by the credentials-mode switch endpoint
     # (audit details ``from`` / ``to``); PROVIDER_CREDENTIALS_UPDATED
@@ -238,6 +241,7 @@ class AuditEntry(BaseModel):
         "curation_candidate",  # Stream J.12 — Mini-ADR J-43
         "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
         "run",  # Stream H.3 PR 1 — Mini-ADR H-6 (RUN_LIST_READ)
+        "tenant",  # Stream P — Mini-ADR P-1 (POST /v1/tenants)
     ]
     resource_id: str | None = None
     result: AuditResult

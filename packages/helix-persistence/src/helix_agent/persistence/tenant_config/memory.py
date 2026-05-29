@@ -6,7 +6,10 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
-from helix_agent.persistence.tenant_config.base import TenantConfigStore
+from helix_agent.persistence.tenant_config.base import (
+    TenantConfigAlreadyExistsError,
+    TenantConfigStore,
+)
 from helix_agent.protocol import TenantConfigPatch, TenantConfigRecord, TenantPlan
 
 
@@ -28,6 +31,32 @@ class InMemoryTenantConfigStore(TenantConfigStore):
     async def get(self, *, tenant_id: UUID) -> TenantConfigRecord | None:
         async with self._lock:
             return self._rows.get(tenant_id)
+
+    async def create(
+        self,
+        *,
+        tenant_id: UUID,
+        display_name: str,
+        plan: TenantPlan | None = None,
+        actor_id: str,
+    ) -> TenantConfigRecord:
+        now = _now()
+        async with self._lock:
+            if tenant_id in self._rows:
+                raise TenantConfigAlreadyExistsError(tenant_id=tenant_id)
+            # Only display_name / plan are set; every other field falls back
+            # to its TenantConfigRecord default (mirrors the SQL store's
+            # reliance on column server defaults) — Mini-ADR P-1/P-3.
+            row = TenantConfigRecord(
+                tenant_id=tenant_id,
+                display_name=display_name,
+                plan=plan or TenantPlan.FREE,
+                created_at=now,
+                updated_at=now,
+                updated_by=actor_id,
+            )
+            self._rows[tenant_id] = row
+            return row
 
     async def upsert(
         self,
