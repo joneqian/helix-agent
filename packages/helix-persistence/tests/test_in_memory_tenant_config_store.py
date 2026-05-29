@@ -58,4 +58,6 @@ async def test_create_rejects_existing_tenant() -> None:
         await store.create(tenant_id=tenant_id, display_name="Second", actor_id="b")
     assert exc.value.tenant_id == tenant_id
     # The original row is untouched (no silent overwrite, unlike upsert).
-    assert (await store.get(tenant_id=tenant_id)).display_name == "First"
+    fetched = await store.get(tenant_id=tenant_id)
+    assert fetched is not None
+    assert fetched.display_name == "First"
