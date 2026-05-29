@@ -23,6 +23,7 @@ platform key.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 from uuid import UUID
 
@@ -84,10 +85,20 @@ class CredentialsResolver:
         platform_provider_credentials: dict[Provider, str],
         platform_tool_credentials: dict[Tool, str],
         tenant_config_getter: TenantConfigGetter,
+        platform_provider_getter: Callable[[
+        ], Awaitable[dict[Provider, str]]] | None = None,
+        platform_tool_getter: Callable[[],
+                                       Awaitable[dict[Tool, str]]] | None = None,
     ) -> None:
         self._platform_providers = dict(platform_provider_credentials)
         self._platform_tools = dict(platform_tool_credentials)
         self._tenant_config = tenant_config_getter
+        # Stream P (Mini-ADR P-9) — optional live sources (env + DB overlay).
+        # When provided they win over the frozen dicts above, so a platform
+        # admin's runtime credential change takes effect without a restart.
+        # Back-compat: callers passing only the static dicts are unchanged.
+        self._platform_provider_getter = platform_provider_getter
+        self._platform_tool_getter = platform_tool_getter
 
     async def resolve_provider(
         self,
@@ -103,13 +114,14 @@ class CredentialsResolver:
         """
         cfg = await self._tenant_config.get(tenant_id=tenant_id)
         if cfg.credentials_mode == "platform":
-            secret_ref = self._platform_providers.get(provider)
+            secret_ref = (await self._effective_providers()).get(provider)
             if secret_ref is None:
                 msg = (
                     f"platform credentials missing for provider={provider}. "
                     "Add to settings.platform_provider_credentials."
                 )
-                raise CredentialsResolverError(msg, mode="platform", kind="provider", key=provider)
+                raise CredentialsResolverError(
+                    msg, mode="platform", kind="provider", key=provider)
             return secret_ref
         # tenant mode
         secret_ref = cfg.model_credentials_ref.get(provider)
@@ -120,7 +132,8 @@ class CredentialsResolver:
                 f"credentials via PUT /v1/tenants/{tenant_id}/config or "
                 "switch credentials_mode back to 'platform'."
             )
-            raise CredentialsResolverError(msg, mode="tenant", kind="provider", key=provider)
+            raise CredentialsResolverError(
+                msg, mode="tenant", kind="provider", key=provider)
         return secret_ref
 
     async def resolve_tool(
@@ -134,13 +147,14 @@ class CredentialsResolver:
         Same failure semantics as :meth:`resolve_provider`."""
         cfg = await self._tenant_config.get(tenant_id=tenant_id)
         if cfg.credentials_mode == "platform":
-            secret_ref = self._platform_tools.get(tool)
+            secret_ref = (await self._effective_tools()).get(tool)
             if secret_ref is None:
                 msg = (
                     f"platform credentials missing for tool={tool}. "
                     "Add to settings.platform_tool_credentials."
                 )
-                raise CredentialsResolverError(msg, mode="platform", kind="tool", key=tool)
+                raise CredentialsResolverError(
+                    msg, mode="platform", kind="tool", key=tool)
             return secret_ref
         secret_ref = cfg.tool_credentials.get(tool)
         if not secret_ref:
@@ -150,5 +164,16 @@ class CredentialsResolver:
                 f"credentials via PUT /v1/tenants/{tenant_id}/config or "
                 "switch credentials_mode back to 'platform'."
             )
-            raise CredentialsResolverError(msg, mode="tenant", kind="tool", key=tool)
+            raise CredentialsResolverError(
+                msg, mode="tenant", kind="tool", key=tool)
         return secret_ref
+
+    async def _effective_providers(self) -> dict[Provider, str]:
+        if self._platform_provider_getter is not None:
+            return await self._platform_provider_getter()
+        return self._platform_providers
+
+    async def _effective_tools(self) -> dict[Tool, str]:
+        if self._platform_tool_getter is not None:
+            return await self._platform_tool_getter()
+        return self._platform_tools
