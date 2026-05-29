@@ -7,8 +7,10 @@ system_admin-only CRUD over the platform provider/tool secret-ref overlay
   ``tenant`` resource — same precedent as ``role_bindings.py`` / ``tenants.py``);
 * runs the store reads/writes inside ``bypass_rls_session()`` because the rows
   are tenant-less;
-* returns / stores **refs only** — never plaintext (``PlatformSecretUpsert``
-  ref-validates on the way in, Mini-ADR P-8).
+* stores **refs only** in the catalog — never plaintext. A pasted raw key
+  (``PlatformSecretWrite.value``, Stream Q) is encrypted into the SecretStore
+  and only its generated ``secret://`` ref reaches the catalog (Mini-ADR
+  Q-4/Q-6); an operator-supplied ``secret_ref`` is ref-validated (Mini-ADR P-8).
 
 Naming: the storage layer is ``platform_secrets`` (harness blocks ``credentials``
 paths); the HTTP surface keeps the design's ``/v1/platform/credentials`` path.
@@ -19,6 +21,7 @@ from __future__ import annotations
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
 
 from control_plane.api._authz import _principal
 from control_plane.api.tenant_config import (
@@ -36,16 +39,53 @@ from helix_agent.protocol import (
     PROVIDER_CATALOG,
     TOOL_CATALOG,
     AuditAction,
-    PlatformSecretUpsert,
     Principal,
     Provider,
     Tool,
+    validate_secret_ref,
 )
 from helix_agent.runtime.audit.logger import AuditLogger
+from helix_agent.runtime.secret_store import SecretStore
+
+
+class PlatformSecretWrite(BaseModel):
+    """Write payload for a platform provider/tool credential — Stream Q (Q-4).
+
+    Accepts **exactly one** of:
+
+    * ``secret_ref`` — a ``secret://`` / ``kms://`` reference the operator
+      manages out of band (the original Stream P flow); or
+    * ``value`` — a raw key pasted in the web UI. The write path encrypts it
+      via the SecretStore and stores only the generated ref in the catalog, so
+      the catalog never holds a value (Mini-ADR Q-4/Q-6).
+
+    ``value`` is a :class:`~pydantic.SecretStr` so it never renders in logs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    secret_ref: str | None = None
+    value: SecretStr | None = None
+    enabled: bool = True
+
+    @field_validator("secret_ref")
+    @classmethod
+    def _check_ref(cls, value: str | None) -> str | None:
+        return validate_secret_ref(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> PlatformSecretWrite:
+        if (self.secret_ref is None) == (self.value is None):
+            msg = "provide exactly one of 'secret_ref' or 'value'"
+            raise ValueError(msg)
+        return self
 
 
 def _get_store(request: Request) -> PlatformSecretStore:
     return request.app.state.platform_secret_store  # type: ignore[no-any-return]
+
+
+def _get_secret_store(request: Request) -> SecretStore:
+    return request.app.state.secret_store  # type: ignore[no-any-return]
 
 
 def _get_service(request: Request) -> PlatformSecretsService:
@@ -54,6 +94,32 @@ def _get_service(request: Request) -> PlatformSecretsService:
 
 def _get_audit(request: Request) -> AuditLogger:
     return request.app.state.audit_logger  # type: ignore[no-any-return]
+
+
+async def _resolve_write_ref(
+    payload: PlatformSecretWrite, secret_store: SecretStore, *, name: str
+) -> str:
+    """Return the ref to store in the catalog.
+
+    A pasted raw ``value`` is encrypted into the SecretStore under ``name`` and
+    surfaced as ``secret://<name>``; the value never reaches the catalog or the
+    audit row (Mini-ADR Q-4/Q-7). An operator-supplied ``secret_ref`` is
+    returned as-is.
+    """
+    if payload.value is not None:
+        await secret_store.put(name, payload.value.get_secret_value())
+        return f"secret://{name}"
+    if payload.secret_ref is None:
+        # Unreachable: the model validator enforces exactly one of value /
+        # secret_ref. Guard explicitly (not ``assert`` — stripped under -O).
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_SECRET_WRITE",
+                "message": "provide exactly one of 'secret_ref' or 'value'",
+            },
+        )
+    return payload.secret_ref
 
 
 def _require_system_admin(principal: Principal) -> None:
@@ -147,11 +213,12 @@ def build_platform_config_router() -> APIRouter:
     @router.put("/providers/{provider}")
     async def upsert_provider(
         provider: str,
-        payload: PlatformSecretUpsert,
+        payload: PlatformSecretWrite,
         principal: Annotated[Principal, Depends(_principal)],
         store: Annotated[PlatformSecretStore, Depends(_get_store)],
         service: Annotated[PlatformSecretsService, Depends(_get_service)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
     ) -> dict[str, object]:
         _require_system_admin(principal)
         if provider not in PROVIDER_CATALOG:
@@ -162,10 +229,13 @@ def build_platform_config_router() -> APIRouter:
                     "message": f"provider {provider!r} not in catalog",
                 },
             )
+        secret_ref = await _resolve_write_ref(
+            payload, secret_store, name=f"helix-agent/platform/llm/{provider}"
+        )
         async with bypass_rls_session():
             row = await store.upsert_provider(
                 provider=cast(Provider, provider),
-                secret_ref=payload.secret_ref,
+                secret_ref=secret_ref,
                 enabled=payload.enabled,
                 actor_id=principal.subject_id,
             )
@@ -175,18 +245,19 @@ def build_platform_config_router() -> APIRouter:
             principal=principal,
             action=AuditAction.PLATFORM_PROVIDER_CREDENTIAL_UPSERT,
             key=provider,
-            details={"enabled": payload.enabled, "secret_ref": payload.secret_ref},
+            details={"enabled": payload.enabled, "secret_ref": secret_ref},
         )
         return {"success": True, "data": row.model_dump(mode="json"), "error": None}
 
     @router.put("/tools/{tool}")
     async def upsert_tool(
         tool: str,
-        payload: PlatformSecretUpsert,
+        payload: PlatformSecretWrite,
         principal: Annotated[Principal, Depends(_principal)],
         store: Annotated[PlatformSecretStore, Depends(_get_store)],
         service: Annotated[PlatformSecretsService, Depends(_get_service)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
     ) -> dict[str, object]:
         _require_system_admin(principal)
         if tool not in TOOL_CATALOG:
@@ -194,10 +265,13 @@ def build_platform_config_router() -> APIRouter:
                 status_code=422,
                 detail={"code": "UNKNOWN_TOOL", "message": f"tool {tool!r} not in catalog"},
             )
+        secret_ref = await _resolve_write_ref(
+            payload, secret_store, name=f"helix-agent/platform/tool/{tool}"
+        )
         async with bypass_rls_session():
             row = await store.upsert_tool(
                 tool=cast(Tool, tool),
-                secret_ref=payload.secret_ref,
+                secret_ref=secret_ref,
                 enabled=payload.enabled,
                 actor_id=principal.subject_id,
             )
@@ -207,7 +281,7 @@ def build_platform_config_router() -> APIRouter:
             principal=principal,
             action=AuditAction.PLATFORM_TOOL_CREDENTIAL_UPSERT,
             key=tool,
-            details={"enabled": payload.enabled, "secret_ref": payload.secret_ref},
+            details={"enabled": payload.enabled, "secret_ref": secret_ref},
         )
         return {"success": True, "data": row.model_dump(mode="json"), "error": None}
 

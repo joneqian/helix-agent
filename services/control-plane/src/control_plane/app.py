@@ -861,6 +861,10 @@ def create_app(
     app.state.tenant_config_service = resolved_tenant_config_service
     app.state.platform_secret_store = resolved_platform_secret_store
     app.state.platform_secrets_service = resolved_platform_secrets_service
+    # Stream Q (PR C) — the SecretStore is exposed so the platform-config write
+    # path can encrypt a pasted raw key via ``secret_store.put`` before storing
+    # only the ``secret://`` ref in the catalog.
+    app.state.secret_store = resolved_secret_store
     app.state.agent_runtime = resolved_agent_runtime
     # Stream K.K6 — memory CRUD endpoints. ``memory_repo`` is the store
     # already resolved above (SQL when ``store_backend == "sql"``, else

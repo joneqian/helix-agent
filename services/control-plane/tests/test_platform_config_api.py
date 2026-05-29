@@ -107,7 +107,58 @@ async def test_put_plaintext_ref_rejected(admin_client: tuple[AsyncClient, UUID]
         json={"secret_ref": "sk-ant-plaintext"},
         headers=_headers(admin),
     )
-    assert resp.status_code == 422  # PlatformSecretUpsert ref validator
+    assert resp.status_code == 422  # PlatformSecretWrite ref validator
+
+
+@pytest.mark.asyncio
+async def test_paste_raw_value_encrypts_and_stores_ref(
+    settings: Settings,
+    lifecycle: Lifecycle,
+    jwt_verifier: JWTVerifier,
+) -> None:
+    """Stream Q (PR C) — pasting a raw ``value`` encrypts it into the
+    SecretStore and stores only the generated ``secret://`` ref in the catalog;
+    the value is resolvable via the store but never appears in the catalog."""
+    app = create_app(settings=settings, lifecycle=lifecycle, jwt_verifier=jwt_verifier)
+    admin = await _seed_admin(app)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://control-plane.test") as client:
+        put = await client.put(
+            "/v1/platform/credentials/providers/anthropic",
+            json={"value": "sk-ant-REAL-KEY", "enabled": True},
+            headers=_headers(admin),
+        )
+        assert put.status_code == 200, put.text
+        ref = put.json()["data"]["secret_ref"]
+        # Catalog holds a generated ref, not the value.
+        assert ref == "secret://helix-agent/platform/llm/anthropic"
+        assert "sk-ant-REAL-KEY" not in put.text
+
+        # The value is resolvable through the SecretStore the app wired.
+        resolved = await app.state.secret_store.get("helix-agent/platform/llm/anthropic")  # type: ignore[attr-defined]
+        assert resolved == "sk-ant-REAL-KEY"
+
+
+@pytest.mark.asyncio
+async def test_put_rejects_both_value_and_ref(admin_client: tuple[AsyncClient, UUID]) -> None:
+    client, admin = admin_client
+    resp = await client.put(
+        "/v1/platform/credentials/providers/anthropic",
+        json={"secret_ref": "kms://x", "value": "sk-ant", "enabled": True},
+        headers=_headers(admin),
+    )
+    assert resp.status_code == 422  # exactly-one-of validator
+
+
+@pytest.mark.asyncio
+async def test_put_rejects_neither_value_nor_ref(admin_client: tuple[AsyncClient, UUID]) -> None:
+    client, admin = admin_client
+    resp = await client.put(
+        "/v1/platform/credentials/providers/anthropic",
+        json={"enabled": True},
+        headers=_headers(admin),
+    )
+    assert resp.status_code == 422  # exactly-one-of validator
 
 
 @pytest.mark.asyncio
