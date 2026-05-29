@@ -62,12 +62,21 @@ def _embedding_provider(request: Request) -> Provider:
     return provider
 
 
-def _credentials_catalog(
+async def _credentials_catalog(
     request: Request,
 ) -> tuple[list[Provider], dict[Provider, str], list[Tool], dict[Tool, str]]:
-    """Stream O Mini-ADR O-13 — the effective platform catalog the
-    Credentials panel renders rows from. Read from settings on app.state;
-    test apps that don't wire settings yield empty catalogs."""
+    """Stream O Mini-ADR O-13 — the effective platform catalog the Credentials
+    panel renders rows from.
+
+    Stream P (Mini-ADR P-9): read the **merged** view (env seed + runtime DB
+    overlay) from :class:`PlatformSecretsService` so the panel reflects
+    providers a platform admin configured at runtime, not just env. Falls back
+    to env-only settings when the service isn't wired (lightweight test apps)."""
+    service = getattr(request.app.state, "platform_secrets_service", None)
+    if service is not None:
+        provs = await service.effective_provider_credentials()
+        tools = await service.effective_tool_credentials()
+        return list(provs.keys()), provs, list(tools.keys()), tools
     settings = getattr(request.app.state, "settings", None)
     if settings is None:
         return [], {}, [], {}
@@ -315,7 +324,9 @@ def build_tenant_config_router() -> APIRouter:
         mode. No secret VALUES are returned — only refs (kms:// URIs) and
         booleans."""
         _ensure_tenant_match(principal, tenant_id)
-        supported_provs, plat_provs, supported_tools, plat_tools = _credentials_catalog(request)
+        supported_provs, plat_provs, supported_tools, plat_tools = await _credentials_catalog(
+            request
+        )
         try:
             record = await svc.get(tenant_id=tenant_id, actor_id=principal.subject_id)
             mode: str = record.credentials_mode

@@ -196,6 +196,13 @@ class AuditAction(StrEnum):
     SYSTEM_CROSS_TENANT_QUERY = "system:cross_tenant_query"
     SYSTEM_TENANT_SWITCH = "system:tenant_switch"
 
+    # platform credentials (the runtime DB overlay) — Stream P Mini-ADR P-11.
+    # system_admin-only writes to the platform provider/tool secret-ref tables.
+    PLATFORM_PROVIDER_CREDENTIAL_UPSERT = "platform_credential:provider_upsert"
+    PLATFORM_PROVIDER_CREDENTIAL_DELETE = "platform_credential:provider_delete"
+    PLATFORM_TOOL_CREDENTIAL_UPSERT = "platform_credential:tool_upsert"
+    PLATFORM_TOOL_CREDENTIAL_DELETE = "platform_credential:tool_delete"
+
 
 class AuditEntry(BaseModel):
     """One row of ``audit_log`` (pre-WORM, post-redactor).
@@ -242,6 +249,7 @@ class AuditEntry(BaseModel):
         "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
         "run",  # Stream H.3 PR 1 — Mini-ADR H-6 (RUN_LIST_READ)
         "tenant",  # Stream P — Mini-ADR P-1 (POST /v1/tenants)
+        "platform_credential",  # Stream P — Mini-ADR P-11 (/v1/platform/credentials)
     ]
     resource_id: str | None = None
     result: AuditResult
