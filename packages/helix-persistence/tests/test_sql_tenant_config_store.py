@@ -21,6 +21,7 @@ from helix_agent.persistence import (
     create_async_session_factory,
 )
 from helix_agent.persistence.rls import build_rls_sessionmaker, current_tenant_id_var
+from helix_agent.persistence.tenant_config.base import TenantConfigAlreadyExistsError
 from helix_agent.protocol import TenantConfigPatch, TenantPlan
 
 pytestmark = pytest.mark.integration
@@ -180,5 +181,49 @@ async def test_rls_blocks_cross_tenant_read(
         # Cross-tenant read: scope to B, try to look up A's row.
         current_tenant_id_var.set(tenant_b)
         assert await store.get(tenant_id=tenant_a) is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_provisions_new_tenant_with_defaults(
+    tenant_config_store: tuple[SqlTenantConfigStore, AsyncEngine],
+) -> None:
+    """``create`` writes the first row; every unset field takes its default — Stream P."""
+    store, engine = tenant_config_store
+    try:
+        tenant = uuid4()
+        current_tenant_id_var.set(tenant)
+        created = await store.create(
+            tenant_id=tenant,
+            display_name="Fresh Tenant",
+            actor_id="bootstrap",
+        )
+        assert created.tenant_id == tenant
+        assert created.display_name == "Fresh Tenant"
+        assert created.plan is TenantPlan.FREE
+        assert created.model_credentials_ref == {}
+        assert created.credentials_mode == "platform"
+        assert (await store.get(tenant_id=tenant)) is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_tenant(
+    tenant_config_store: tuple[SqlTenantConfigStore, AsyncEngine],
+) -> None:
+    """A second ``create`` for the same tenant raises, not silently overwrites — Stream P."""
+    store, engine = tenant_config_store
+    try:
+        tenant = uuid4()
+        current_tenant_id_var.set(tenant)
+        await store.create(tenant_id=tenant, display_name="First", actor_id="a")
+        with pytest.raises(TenantConfigAlreadyExistsError) as exc:
+            await store.create(tenant_id=tenant, display_name="Second", actor_id="b")
+        assert exc.value.tenant_id == tenant
+        fetched = await store.get(tenant_id=tenant)
+        assert fetched is not None
+        assert fetched.display_name == "First"
     finally:
         await engine.dispose()

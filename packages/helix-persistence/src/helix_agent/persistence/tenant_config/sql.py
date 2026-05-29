@@ -7,10 +7,14 @@ from typing import cast
 from uuid import UUID
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.models import TenantConfigRow
-from helix_agent.persistence.tenant_config.base import TenantConfigStore
+from helix_agent.persistence.tenant_config.base import (
+    TenantConfigAlreadyExistsError,
+    TenantConfigStore,
+)
 from helix_agent.persistence.tenant_config.memory import FirstUpsertRequiresDisplayNameError
 from helix_agent.protocol import (
     CredentialsMode,
@@ -69,6 +73,41 @@ class SqlTenantConfigStore(TenantConfigStore):
         async with self._sf() as session:
             row = await session.get(TenantConfigRow, tenant_id)
         return _row_to_record(row) if row is not None else None
+
+    async def create(
+        self,
+        *,
+        tenant_id: UUID,
+        display_name: str,
+        plan: TenantPlan | None = None,
+        actor_id: str,
+    ) -> TenantConfigRecord:
+        # Strict INSERT (no ON CONFLICT) — a pre-existing tenant must raise,
+        # not silently merge (Mini-ADR P-3). Every other column relies on its
+        # server_default ('{}' / '[]' / 'free' / …) so a fresh tenant starts
+        # from the platform baseline; admins tune the rest via ``upsert``.
+        now = _utc_now()
+        stmt = (
+            pg_insert(TenantConfigRow)
+            .values(
+                tenant_id=tenant_id,
+                display_name=display_name,
+                plan=(plan or TenantPlan.FREE).value,
+                created_at=now,
+                updated_at=now,
+                updated_by=actor_id,
+            )
+            .returning(TenantConfigRow)
+        )
+        async with self._sf() as session:
+            try:
+                row = (await session.execute(stmt)).scalar_one()
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise TenantConfigAlreadyExistsError(tenant_id=tenant_id) from exc
+            await session.refresh(row)
+            return _row_to_record(row)
 
     async def upsert(
         self,
