@@ -10,6 +10,7 @@ import {
   Key,
   KeyRound,
   UserCircle2,
+  Building2,
   Shield,
 } from "lucide-react";
 import { BrandGlyph } from "../icons/BrandGlyph";
@@ -37,6 +38,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const SETTINGS_ITEMS: NavItem[] = [
+  { key: "settings-create-tenant", label: "Create Tenant", icon: <Building2 size={16} strokeWidth={1.5} />, path: "/settings/create-tenant" },
   { key: "settings-api-keys", label: "API Keys", icon: <Key size={16} strokeWidth={1.5} />, path: "/settings/api-keys" },
   { key: "settings-credentials", label: "Credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/credentials" },
   { key: "settings-service-accounts", label: "Service Accounts", icon: <UserCircle2 size={16} strokeWidth={1.5} />, path: "/settings/service-accounts" },

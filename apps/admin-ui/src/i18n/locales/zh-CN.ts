@@ -297,6 +297,22 @@ const zhCN: TranslationKeys = {
     secret_ref_hint:
       "密钥管理器引用(如 kms://tenant/provider-key)—— 绝不是明文 API key。留空表示清除。",
   },
+  settings_create_tenant: {
+    page_title: "创建租户",
+    subtitle:
+      "新建一个租户。平台级操作 —— 仅系统管理员可用。创建成功后会显示新租户 id,便于后续配置。",
+    not_admin_title: "仅系统管理员",
+    not_admin_body: "创建租户是平台级操作。请联系系统管理员代为创建。",
+    field_display_name: "显示名",
+    display_name_required: "显示名必填",
+    field_plan: "套餐",
+    field_tenant_id: "租户 id(可选)",
+    tenant_id_hint: "留空则由服务端生成 UUID。仅在需要上游幂等 provisioning 时手动指定。",
+    tenant_id_placeholder: "自动生成",
+    create_btn: "创建租户",
+    created: "租户已创建。",
+    created_detail: "新租户 id:",
+  },
   settings_iam: {
     sa_page_title: "Service Accounts",
     sa_subtitle:

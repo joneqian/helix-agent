@@ -1,0 +1,26 @@
+/**
+ * Tenants SDK — backed by ``POST /v1/tenants`` (Stream P, Mini-ADR P-1/P-2/P-5).
+ *
+ * Tenant creation is a **platform-level** operation: the backend gates it on
+ * ``is_system_admin`` (no ``tenant`` RBAC resource — see ``api/tenants.py``),
+ * so the UI hides the page behind the same check. ``tenant_id`` is optional —
+ * omit it to let the server generate one (the common case); supply one for
+ * idempotent provisioning from an upstream system.
+ *
+ * Backend returns the standard ``{success, data, error}`` envelope; the
+ * unwrapped payload is a full ``TenantConfigRecord`` (reused from the
+ * tenant-config SDK so the two stay in sync).
+ */
+import { postJson } from "./client";
+import type { TenantConfigRecord, TenantPlan } from "./tenant_config";
+
+export interface CreateTenantBody {
+  /** Omit to let the server generate a UUID (recommended). */
+  tenant_id?: string;
+  display_name: string;
+  plan?: TenantPlan;
+}
+
+export async function createTenant(body: CreateTenantBody): Promise<TenantConfigRecord> {
+  return postJson<TenantConfigRecord>("/v1/tenants", body);
+}

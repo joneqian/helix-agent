@@ -286,6 +286,21 @@ export interface TranslationKeys {
     secret_ref_label: string;
     secret_ref_hint: string;
   };
+  settings_create_tenant: {
+    page_title: string;
+    subtitle: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    field_display_name: string;
+    display_name_required: string;
+    field_plan: string;
+    field_tenant_id: string;
+    tenant_id_hint: string;
+    tenant_id_placeholder: string;
+    create_btn: string;
+    created: string;
+    created_detail: string;
+  };
   settings_iam: {
     sa_page_title: string;
     sa_subtitle: string;
@@ -942,6 +957,22 @@ const en: TranslationKeys = {
     secret_ref_label: "Secret reference (KMS URI)",
     secret_ref_hint:
       "A secret manager reference (e.g. kms://tenant/provider-key) — never the raw API key. Leave empty to clear.",
+  },
+  settings_create_tenant: {
+    page_title: "Create Tenant",
+    subtitle:
+      "Provision a new tenant. Platform-level action — system admins only. The new tenant id is shown on success so you can configure it.",
+    not_admin_title: "System admin only",
+    not_admin_body: "Creating tenants is a platform-level operation. Ask a system admin to provision one.",
+    field_display_name: "Display name",
+    display_name_required: "Display name is required",
+    field_plan: "Plan",
+    field_tenant_id: "Tenant id (optional)",
+    tenant_id_hint: "Leave empty to let the server generate a UUID. Supply one only for idempotent provisioning.",
+    tenant_id_placeholder: "auto-generated",
+    create_btn: "Create tenant",
+    created: "Tenant created.",
+    created_detail: "New tenant id:",
   },
   settings_iam: {
     sa_page_title: "Service Accounts",
