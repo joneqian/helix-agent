@@ -692,6 +692,8 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [x] **O.10 Per-tenant resolving callers（PR 2a）** — embedder / reranker / web_search 迁到 `CredentialsResolver`：`Embedder.embed(*, tenant_id)` / `Reranker.rerank(*, tenant_id)` / `TavilyClient.search(*, tenant_id)` 协议签名扩展 + `ResolvingEmbedder` / `ResolvingReranker` / `ResolvingTavilyClient` 包装类（control-plane glue，结构化实现 orchestrator 协议）；全 call site 透传 tenant_id（memory recall/writeback / knowledge tool / ingestion+chunking / DLQ worker / consolidator adapter）。reranker 缺凭证优雅降级到 RRF-fused。**Mini-ADR O-9**。**2026-05-29 完成**
 - [x] **O.11 Legacy → effective catalog 派生（PR 2a）** — `Settings.effective_*` gap-fill：legacy `embedding_api_key_ref` / `rerank_api_key_ref` / `tavily_api_key_ref` 并进 catalog，未 opt-in Stream O 的部署透明走 platform mode（零回归）；显式 Stream O 配置优先，legacy 只补缺；startup `_signal_legacy_credentials_derivation` warn + meter（per-role `record_legacy_credentials_fallback`）。**Mini-ADR O-10/O-11**。**2026-05-29 完成**
 - [x] **O.12 Mode-switch gate 完整性（PR 2a）** — `_collect_used_providers` 在任一 agent 声明 `memory.long_term` 时把 `settings.embedding_provider` 计入 used（infra provider 缺凭证必崩，必须 gate）；rerank 不进 gate（优雅降级）。**Mini-ADR O-12**。**2026-05-29 完成**
+- [x] **O.14 MCP allowlist 强制 + 凭证 schema 基础（PR 3a）** — `mcp_allowlist` 最终语义(空=不限制/非空=白名单)并**强制**:`ToolEnv.mcp_allowlist` + `_register_mcp` 按 server 名过滤;`make_agent_builder` 经 `make_mcp_allowlist_provider` 按租户读 `mcp_allowlist`,`AgentBuilder` 协议加 `tenant_id`,`_build` per-tenant `replace(tool_env, mcp_allowlist=…)`。纯过滤、不新建连接、用平台 token。附带落地 M1 基础:`tenant_config.mcp_credentials`(migration 0048) + `mcp_auth.resolve_mcp_bearer_ref`(forward-reserved,本次不接运行时)。**Mini-ADR O-14**。**2026-05-29 完成**
+- [ ] **O.15 / O.16 MCP per-tenant secret（推 M1）** — bearer token 按租户解析需 per-tenant 持久连接 + 懒缓存 + 驱逐(= M1 per-tenant-pool 架构,代码注释本就标 M1);严格闸门 + view 端点 MCP 字段 + Credentials 面板 MCP 分类一并随之。**实现期复议改判降级**(读连接池代码后,2026-05-29),schema + resolver 已作 M1 明文基础。**Mini-ADR O-15/O-16**
 
 **Stream O Verification**：8 项按零债 6 条核验；Platform Catalog 启动校验在 fail-fast 路径上不绕过；CredentialsResolver 双 mode 4 路径 fixture 全过；mode 切换缺凭证返回 403 + 完整 missing 列表；agent manifest publish 引用未支持 provider 立刻 reject；Sprint #7 consolidator aux 在 dogfood 启动前真接 LLMRouter（M1 dogfood 凝结数据采集前提）。
 
@@ -702,7 +704,8 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 **后续 PR**（Stream O 范围内但 PR 1 不做）：
 - **PR 2a**（~3-4 天）✅ **2026-05-29 完成**：embedder / reranker / web_search 迁到 resolver（per-tenant 改造）+ legacy effective-catalog 派生 + mode-switch gate 补 embedding_provider（O.10/O.11/O.12）
 - **PR 2b**（~3-4 天）✅ **2026-05-29 完成**：Admin UI Credentials 面板（mode 切换器 + dry-run + provider/tool 凭证表）+ 2 后端只读/预览端点（O.7 / O.13）
-- **PR 3**（~1 周）：MCP servers 纳入 mode + mcp_servers 字段 schema 迁移 + MCP-specific Admin UI
+- **PR 3a**（backend）✅ **2026-05-29 完成**：MCP allowlist 强制 + mcp_credentials schema(0048) + mcp_auth resolver 基础（O.14）。**Stream O 在此收口**（per-tenant MCP secret 整体推 M1）。
+- **M1 — MCP per-tenant secret**：O.15 per-tenant bearer 连接(懒建+缓存+驱逐,= per-tenant pool 架构) + O.16 严格闸门 + Credentials 面板 MCP 分类 + Admin UI allowlist 编辑器。跟 M1 沙箱/运行时改造一起做。
 
 ---
 

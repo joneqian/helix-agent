@@ -16,9 +16,9 @@ import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -64,12 +64,22 @@ from orchestrator.tools import (
     TavilyClient,
 )
 
+
 #: Builds a runnable agent from a manifest. The production builder
 #: closes over a SecretStore + checkpointer and calls
 #: :func:`orchestrator.build_agent`; integration tests substitute a
 #: stub returning a :class:`BuiltAgent` over a fake-LLM graph — the
 #: real builder wires HTTP provider clients, which a test must not hit.
-AgentBuilder = Callable[[AgentSpec], Awaitable[BuiltAgent]]
+class AgentBuilder(Protocol):
+    """Builds a runnable agent from a manifest.
+
+    Stream O (Mini-ADR O-14) — ``tenant_id`` lets the builder construct a
+    per-tenant ``ToolEnv`` (today: the MCP server allowlist; ``None`` keeps
+    the platform default). Optional + defaulted so test stubs that ignore
+    tenancy still conform."""
+
+    async def __call__(self, spec: AgentSpec, *, tenant_id: UUID | None = None) -> BuiltAgent: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +123,7 @@ class AgentRuntime:
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        built = await self.agent_builder(spec)
+        built = await self.agent_builder(spec, tenant_id=tenant_id)
         self._cache[key] = built
         return built
 
@@ -126,6 +136,7 @@ def make_agent_builder(
     middleware_env: MiddlewareEnv | None = None,
     memory_env: MemoryEnv | None = None,
     subagent_spec_resolver: SubagentSpecResolver | None = None,
+    mcp_allowlist_provider: Callable[[UUID], Awaitable[Sequence[str]]] | None = None,
 ) -> AgentBuilder:
     """Production :data:`AgentBuilder` bound to a SecretStore + checkpointer.
 
@@ -145,14 +156,26 @@ def make_agent_builder(
     time.
     """
 
-    async def _build(spec: AgentSpec) -> BuiltAgent:
+    async def _build(spec: AgentSpec, *, tenant_id: UUID | None = None) -> BuiltAgent:
         if subagent_spec_resolver is not None and spec.spec.subagents:
             detect_subagent_cycle(spec, resolve=subagent_spec_resolver)
+        # Stream O (Mini-ADR O-14) — apply the tenant's MCP server allowlist
+        # to a per-build ToolEnv. Empty / unconfigured → no restriction.
+        build_tool_env = tool_env
+        if (
+            mcp_allowlist_provider is not None
+            and tenant_id is not None
+            and tool_env is not None
+            and tool_env.mcp_pool is not None
+        ):
+            allowlist = await mcp_allowlist_provider(tenant_id)
+            if allowlist:
+                build_tool_env = replace(tool_env, mcp_allowlist=tuple(allowlist))
         return await build_agent(
             spec,
             secret_store=secret_store,
             checkpointer=checkpointer,
-            tool_env=tool_env,
+            tool_env=build_tool_env,
             middleware_env=middleware_env,
             memory_env=memory_env,
         )
@@ -314,6 +337,23 @@ def _tenant_allowlist_provider(service: TenantConfigService) -> AllowlistProvide
         except TenantConfigNotConfiguredError:
             return []
         return record.http_tool_allowlist
+
+    return _provider
+
+
+def make_mcp_allowlist_provider(
+    service: TenantConfigService,
+) -> Callable[[UUID], Awaitable[Sequence[str]]]:
+    """Stream O (Mini-ADR O-14) — reads ``tenant_config.mcp_allowlist`` for the
+    agent builder. Empty / unconfigured → no restriction (agent sees every
+    platform MCP server); non-empty restricts to the listed server names."""
+
+    async def _provider(tenant_id: UUID) -> Sequence[str]:
+        try:
+            record = await service.get(tenant_id=tenant_id)
+        except TenantConfigNotConfiguredError:
+            return []
+        return record.mcp_allowlist
 
     return _provider
 

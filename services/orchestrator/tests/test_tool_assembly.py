@@ -150,6 +150,43 @@ async def test_mcp_allow_tools_filters() -> None:
     assert len(registry) == 1
 
 
+async def _two_server_pool() -> MCPServerPool:
+    pool = MCPServerPool()
+    await pool.add(
+        "gitlab",
+        RecordingMCPClient(tools=(MCPToolDef(name="read_pr", description="", input_schema={}),)),
+    )
+    await pool.add(
+        "linear",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="list_issues", description="", input_schema={}),)
+        ),
+    )
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_allowlist_empty_sees_all_servers() -> None:
+    # Stream O Mini-ADR O-14 — empty allowlist (default) = no restriction.
+    pool = await _two_server_pool()
+    registry = await build_tool_registry([MCPToolSpec()], tool_env=ToolEnv(mcp_pool=pool))
+    assert len(registry) == 2
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_allowlist_hides_unlisted_servers() -> None:
+    # A non-empty allowlist restricts the agent to the listed server names;
+    # ``linear`` is hidden even though it is in the platform pool.
+    pool = await _two_server_pool()
+    registry = await build_tool_registry(
+        [MCPToolSpec()],
+        tool_env=ToolEnv(mcp_pool=pool, mcp_allowlist=("gitlab",)),
+    )
+    assert len(registry) == 1
+    assert registry.get("mcp:gitlab.read_pr") is not None
+    assert registry.get("mcp:linear.list_issues") is None
+
+
 @pytest.mark.asyncio
 async def test_mcp_missing_pool_raises() -> None:
     with pytest.raises(AgentFactoryError, match="MCP server pool"):
