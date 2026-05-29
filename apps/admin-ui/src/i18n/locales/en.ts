@@ -301,6 +301,33 @@ export interface TranslationKeys {
     created: string;
     created_detail: string;
   };
+  settings_platform: {
+    page_title: string;
+    subtitle: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    failed_to_load: string;
+    providers_heading: string;
+    tools_heading: string;
+    col_name: string;
+    col_source: string;
+    col_secret_ref: string;
+    col_enabled: string;
+    col_used_by: string;
+    col_actions: string;
+    source_env: string;
+    source_db: string;
+    source_unset: string;
+    edit_btn: string;
+    delete_confirm: string;
+    edit_modal_title: string;
+    secret_ref_label: string;
+    secret_ref_hint: string;
+    enabled_label: string;
+    saved: string;
+    deleted: string;
+    unset_ref: string;
+  };
   settings_iam: {
     sa_page_title: string;
     sa_subtitle: string;
@@ -973,6 +1000,34 @@ const en: TranslationKeys = {
     create_btn: "Create tenant",
     created: "Tenant created.",
     created_detail: "New tenant id:",
+  },
+  settings_platform: {
+    page_title: "Platform Credentials",
+    subtitle:
+      "Platform-level provider & tool credential refs (the runtime overlay over env config). System admins only. DB rows win over env; disable to turn one off without deleting.",
+    not_admin_title: "System admin only",
+    not_admin_body: "Platform credentials are managed by system admins. Ask one to configure providers/tools.",
+    failed_to_load: "Failed to load platform credentials.",
+    providers_heading: "Providers",
+    tools_heading: "Tools",
+    col_name: "Name",
+    col_source: "Source",
+    col_secret_ref: "Secret reference",
+    col_enabled: "Enabled",
+    col_used_by: "Used by agents",
+    col_actions: "Actions",
+    source_env: "env",
+    source_db: "db",
+    source_unset: "unset",
+    edit_btn: "Edit",
+    delete_confirm: "Delete this DB-managed credential? (env fallback, if any, applies again.)",
+    edit_modal_title: "Edit {{key}} credential",
+    secret_ref_label: "Secret reference (KMS / secret URI)",
+    secret_ref_hint: "A secret manager reference (e.g. kms://platform/anthropic-key) — never a plaintext key.",
+    enabled_label: "Enabled",
+    saved: "Credential saved.",
+    deleted: "Credential deleted.",
+    unset_ref: "not set",
   },
   settings_iam: {
     sa_page_title: "Service Accounts",
