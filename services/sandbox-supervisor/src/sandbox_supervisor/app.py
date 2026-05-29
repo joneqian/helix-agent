@@ -53,6 +53,8 @@ from sandbox_supervisor.schemas import (
     ExecRequest,
     ExecResponse,
     HealthResponse,
+    ReapRequest,
+    ReapResponse,
 )
 from sandbox_supervisor.settings import SandboxSupervisorSettings
 from sandbox_supervisor.store import DbSandboxStore
@@ -153,6 +155,9 @@ def create_app(
                     idle_ttl_s=resolved_settings.session_idle_ttl_s,
                     lifecycle=lifecycle,
                 )
+                # Stream P (Mini-ADR P-14) — exposed so the /v1/sandboxes:reap
+                # endpoint can trigger a forced sweep on demand.
+                app.state.reaper = reaper
                 tasks.append(asyncio.create_task(reaper.run_forever(stop)))
                 if lifecycle is not None and resolved_settings.workspace_backup_hour >= 0:
                     tasks.append(
@@ -285,6 +290,17 @@ def _register_routes(app: FastAPI) -> None:
     async def metrics() -> Response:
         body, content_type = metrics_text()
         return Response(content=body, media_type=content_type)
+
+    # Stream P (Mini-ADR P-14) — on-demand sweep. The control-plane proxies an
+    # admin's POST /v1/sandboxes/reap here; force=true reaps every active
+    # session (idle_ttl=0) for a deterministic teardown. Volumes are preserved.
+    @app.post("/v1/sandboxes:reap")
+    async def reap(body: ReapRequest, request: Request) -> ReapResponse:
+        reaper: SandboxReaper | None = getattr(request.app.state, "reaper", None)
+        if reaper is None:
+            return ReapResponse(reaped_count=0)
+        count = await reaper.run_once(idle_ttl_s=0 if body.force else None)
+        return ReapResponse(reaped_count=count)
 
 
 def _register_exception_handlers(app: FastAPI) -> None:

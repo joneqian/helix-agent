@@ -543,6 +543,26 @@ async def test_reaper_reaps_idle_warm_session() -> None:
     assert h.store.rows[acquired.sandbox_id].destroy_reason == DESTROY_REASON_IDLE_TIMEOUT
 
 
+async def test_reaper_force_reaps_non_idle_session() -> None:
+    # Stream P (Mini-ADR P-14) — idle_ttl_s=0 treats every active session as
+    # idle, so a freshly-acquired (non-idle) session is reaped.
+    h = _harness()
+    acquired = await h.supervisor.acquire(_acquire_request(user_id=uuid4()))
+    reaper = SandboxReaper(supervisor=h.supervisor, store=h.store, interval_s=10.0, idle_ttl_s=900)
+
+    assert await reaper.run_once(idle_ttl_s=0) == 1
+    assert h.store.rows[acquired.sandbox_id].state is SandboxState.DESTROYED
+
+
+def test_reap_route_without_reaper_returns_zero() -> None:
+    h = _harness()
+    app = create_app(SandboxSupervisorSettings(), supervisor=h.supervisor, enable_reaper=False)
+    with TestClient(app) as client:
+        resp = client.post("/v1/sandboxes:reap", json={"force": True})
+    assert resp.status_code == 200
+    assert resp.json()["reaped_count"] == 0
+
+
 # ---------------------------------------------------------------------------
 # J.15-补强-1 — volume quota + lifecycle (Mini-ADR J-29 第 1 项 + J-36)
 # ---------------------------------------------------------------------------
