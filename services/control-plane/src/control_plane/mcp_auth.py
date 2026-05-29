@@ -27,8 +27,7 @@ class McpCredentialMissingError(LookupError):
 
     def __init__(self, server_name: str) -> None:
         super().__init__(
-            f"tenant credentials_mode: no MCP credential configured for "
-            f"server {server_name!r}"
+            f"tenant credentials_mode: no MCP credential configured for server {server_name!r}"
         )
         self.server_name = server_name
 
