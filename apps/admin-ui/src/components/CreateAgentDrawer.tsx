@@ -12,12 +12,12 @@
  */
 import { useCallback, useState } from "react";
 import { Alert, Button, Drawer, Space, Typography } from "antd";
-import Editor from "@monaco-editor/react";
 import { Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
 import { createAgent, type AgentDetailResponse } from "../api/agents";
+import { ManifestEditor } from "./manifest-editor";
 
 const { Text } = Typography;
 
@@ -143,23 +143,7 @@ export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawe
         />
       )}
 
-      <Editor
-        language="yaml"
-        value={buffer}
-        onChange={(v) => setBuffer(v ?? "")}
-        theme="vs-dark"
-        height="calc(100vh - 220px)"
-        options={{
-          minimap: { enabled: false },
-          fontFamily: "var(--hx-font-mono)",
-          fontSize: 12,
-          tabSize: 2,
-          scrollBeyondLastLine: false,
-          renderWhitespace: "boundary",
-          wordWrap: "on",
-        }}
-        data-testid="create-agent-editor"
-      />
+      <ManifestEditor mode="create" initialYaml={DEFAULT_AGENT_YAML} onChange={setBuffer} />
     </Drawer>
   );
 }
