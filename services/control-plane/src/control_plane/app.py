@@ -32,6 +32,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from control_plane.api import (
+    build_agent_schema_router,
     build_agents_router,
     build_api_keys_router,
     build_artifacts_router,
@@ -963,6 +964,7 @@ def create_app(
 
     app.include_router(build_health_router(health_provider))
     app.include_router(build_metrics_router())
+    app.include_router(build_agent_schema_router())
     app.include_router(build_agents_router())
     app.include_router(build_sessions_router())
     app.include_router(build_runs_router())

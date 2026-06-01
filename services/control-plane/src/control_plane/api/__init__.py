@@ -1,5 +1,6 @@
 """FastAPI routers for the Control Plane (Streams B + C)."""
 
+from control_plane.api.agent_schema import build_agent_schema_router
 from control_plane.api.agents import build_agents_router
 from control_plane.api.api_keys import build_api_keys_router
 from control_plane.api.artifacts import build_artifacts_router
@@ -27,6 +28,7 @@ from control_plane.api.triggers import build_triggers_router, build_webhooks_rou
 from control_plane.api.uploads import build_uploads_router
 
 __all__ = [
+    "build_agent_schema_router",
     "build_agents_router",
     "build_api_keys_router",
     "build_artifacts_router",
