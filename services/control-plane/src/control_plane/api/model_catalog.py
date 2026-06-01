@@ -21,7 +21,8 @@ from helix_agent.protocol.provider_catalog import PROVIDER_CATALOG
 class ConfiguredProviders(Protocol):
     """Minimal interface: return the set of usable provider names."""
 
-    async def configured_enabled_providers(self) -> set[str]: ...
+    async def configured_enabled_providers(self) -> set[str]:
+        """Return the set of usable provider names."""
 
 
 class PlatformConfiguredProviders:
