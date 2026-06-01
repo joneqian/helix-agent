@@ -827,6 +827,22 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
+### Stream S — 可视化 Manifest 编辑器（~1-2 周）— 设计 [STREAM-S-DESIGN](./streams/STREAM-S-DESIGN.md)
+
+**触发(2026-06-01)**：注册/编辑 agent 只有纯 Monaco YAML，对不懂 YAML 的管理员不友好（建一个 agent 要手写整份 manifest；换模型要再写一遍）。目标：VS Code Settings 式编辑器——可视化表单为主、原始 YAML 为逃生舱、双向；覆盖**全字段**；建 agent 时模型从**已配 key 的 provider** 下拉选。
+
+**锁定决策**：① 全字段表单；② **schema 驱动**（后端导出 `AgentSpec` JSON Schema，前端 RJSF 渲染，`uiSchema` 精修，永不漂移）；③ 表单⇄YAML **切标签同步**（非实时）；④ 模型 = provider 下拉（已配 key）+ 模型名内置目录（选定自动带出 vision）；⑤ create+edit 复用 `<ManifestEditor>`。
+
+- [ ] **S-A 设计先行**（STREAM-S-DESIGN + 本 backlog）— **Mini-ADR S-1~S-8**
+- [ ] **S-B 后端**：`GET /v1/agents/schema`（`model_json_schema()`）+ `MODEL_CATALOG`（官网核对最新模型 + 能力）+ `GET /v1/model-catalog`（目录 ∩ 已配 provider）
+- [ ] **S-C 前端内核**：`<ManifestEditor>` = RJSF + 表单/YAML 双标签 + 切换同步 + ajv 校验 → 替换 Create 抽屉
+- [ ] **S-D 前端模型选择 + 默认模板**：`ModelSelect` 联动控件 + 默认模板按能力自适应（无 vision/无 embedding 自动裁剪 + 黄条）+ 三层校验 + i18n
+- [ ] **S-E 编辑接入**：接 `智能体详情→配置清单` 标签 + create/edit 两条 Playwright/axe + 收尾
+
+**关键路径** A→B→C→D→E；C 依赖 B 两端点。每 PR CI-green + 零债 6 条。**新前端依赖** `@rjsf/core`+`@rjsf/antd`+`@rjsf/validator-ajv8`。
+
+---
+
 ## Phase M1 — 生产化（6-8 个月）
 
 ### 目标
