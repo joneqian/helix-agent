@@ -91,11 +91,14 @@ MODEL_CATALOG: dict[Provider, tuple[ModelEntry, ...]] = {
         ModelEntry(name="glm-4.1v-thinking", vision=True, context_window=32_000, deprecated=True),
     ),
     # Alibaba Qwen / DashScope (Model Studio / 百炼) — help.aliyun.com/zh/model-studio (2026-06)
-    # qwen3-max is the flagship; qwen3.5-plus is multimodal (text/image/video).
-    # qwen3-vl-plus / qwen3-vl-flash are the vision tiers. Context windows left
-    # unset where not confirmed against the 百炼 console. Legacy qwen-max /
-    # qwen-vl-max kept deprecated.
+    # qwen3.7-max (2026 flagship) and qwen3.6-plus are multimodal with ~1M
+    # context (vision: OCR, object localisation, chart/diagram understanding).
+    # qwen3.5-plus is the prior multimodal tier; qwen3-vl-* are vision tiers.
+    # Context windows left unset where not confirmed against the 百炼 console.
+    # Legacy qwen-max / qwen-vl-max kept deprecated.
     "qwen": (
+        ModelEntry(name="qwen3.7-max", vision=True, context_window=1_000_000),
+        ModelEntry(name="qwen3.6-plus", vision=True, context_window=1_000_000),
         ModelEntry(name="qwen3.5-plus", vision=True),
         ModelEntry(name="qwen3-max", vision=False),
         ModelEntry(name="qwen3-vl-plus", vision=True),
