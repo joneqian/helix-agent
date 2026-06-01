@@ -38,13 +38,19 @@ from orchestrator import (
 
 @dataclass
 class _SlowReadTool:
-    """Read-only tool that sleeps ``sleep_s`` before returning. Lets the
-    test prove that two of these in one batch run concurrently
-    (combined wall-clock ≈ sleep_s, not 2 * sleep_s)."""
+    """Read-only tool that sleeps ``sleep_s`` before returning. Records each
+    call's ``(start, end)`` monotonic window in ``windows`` so a test can prove
+    two calls in one batch *overlapped* in time — a concurrency check that is
+    robust to scheduling overhead, unlike an absolute wall-clock bound."""
 
     name: str
     sleep_s: float
     is_read_only: bool = True
+    windows: list[tuple[float, float]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.windows is None:
+            self.windows = []
 
     @property
     def spec(self) -> ToolSpec:
@@ -56,7 +62,9 @@ class _SlowReadTool:
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
         del ctx
+        start = time.monotonic()
         await asyncio.sleep(self.sleep_s)
+        self.windows.append((start, time.monotonic()))
         return ToolResult(content=f"{self.name}:{args.get('q', '')}")
 
 
@@ -143,9 +151,9 @@ async def _run(
 
 @pytest.mark.asyncio
 async def test_two_read_only_calls_run_concurrently() -> None:
-    """The central L6 guarantee. Two reads (200ms each) take ≈ 200ms
-    total — not ≈ 400ms — because the scheduler dispatches them via
-    ``asyncio.gather``."""
+    """The central L6 guarantee. Two reads dispatched in one batch run
+    concurrently (via ``asyncio.gather``), so their execution windows
+    overlap rather than running back-to-back."""
     sleep_s = 0.2
     llm = _ScriptedLLM(
         responses=[
@@ -160,15 +168,21 @@ async def test_two_read_only_calls_run_concurrently() -> None:
         ]
     )
     registry = ToolRegistry()
-    registry.register(_SlowReadTool(name="knowledge_search", sleep_s=sleep_s))
+    read_tool = _SlowReadTool(name="knowledge_search", sleep_s=sleep_s)
+    registry.register(read_tool)
 
-    started = time.monotonic()
     state = await _run(llm, registry)
-    elapsed = time.monotonic() - started
 
-    # If the two reads ran sequentially we'd see ~ 2 * sleep_s. With L6
-    # they share one stage and finish in ~ sleep_s + scheduler overhead.
-    assert elapsed < sleep_s * 1.8, f"expected parallel ≈{sleep_s}s, got {elapsed:.3f}s"
+    # Concurrency proven by overlapping windows, not absolute wall-clock: the
+    # later-starting read began before the earlier one finished. Robust to CI
+    # scheduling overhead — load delays both start and end together and cannot
+    # make two truly-concurrent sleeps stop overlapping. Sequential execution
+    # would give disjoint windows (second_start >= first_end).
+    assert len(read_tool.windows) == 2
+    (_, first_end), (second_start, _) = sorted(read_tool.windows)
+    assert second_start < first_end, (
+        f"reads did not overlap — ran sequentially: windows={read_tool.windows}"
+    )
     # Both ToolMessages came back in original tool_call order.
     tool_msgs = [m for m in state["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_msgs) == 2
@@ -231,11 +245,15 @@ async def test_writes_to_different_paths_run_concurrently() -> None:
     registry = ToolRegistry()
     registry.register(tool)
 
-    started = time.monotonic()
     await _run(llm, registry)
-    elapsed = time.monotonic() - started
 
-    assert elapsed < sleep_s * 1.8
+    # Concurrency proven by overlap, not wall-clock: with disjoint paths the
+    # second write began before the first finished. Robust to CI overhead.
+    starts = sorted(t for label, t in tool.invocations if label == "start")
+    ends = sorted(t for label, t in tool.invocations if label == "end")
+    assert starts[1] < ends[0], (
+        f"writes to different paths did not overlap: invocations={tool.invocations}"
+    )
 
 
 # ---------------------------------------------------------------------------
