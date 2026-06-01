@@ -31,6 +31,19 @@ export interface TranslationKeys {
   };
   nav: {
     settings_group: string;
+    agents: string;
+    runs: string;
+    curation: string;
+    memory: string;
+    skills: string;
+    triggers: string;
+    create_tenant: string;
+    platform_credentials: string;
+    api_keys: string;
+    credentials: string;
+    service_accounts: string;
+    members: string;
+    audit: string;
   };
   login: {
     title: string;
@@ -767,6 +780,19 @@ const en: TranslationKeys = {
   },
   nav: {
     settings_group: "Settings",
+    agents: "Agents",
+    runs: "Runs",
+    curation: "Curation+Eval",
+    memory: "Memory",
+    skills: "Skills",
+    triggers: "Triggers",
+    create_tenant: "Create Tenant",
+    platform_credentials: "Platform Credentials",
+    api_keys: "API Keys",
+    credentials: "Credentials",
+    service_accounts: "Service Accounts",
+    members: "Members",
+    audit: "Audit",
   },
   login: {
     title: "helix Admin",

@@ -1,4 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Menu } from "antd";
 import {
   Bot,
@@ -19,38 +20,37 @@ import { ApprovalPendingBadge } from "./ApprovalPendingBadge";
 
 interface NavItem {
   key: string;
-  label: React.ReactNode;
+  /** i18n key under ``nav.*`` for the menu label. */
+  labelKey: string;
   icon: React.ReactNode;
   path: string;
+  /** Wrap the label in the pending-approval badge (Runs only). */
+  badge?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { key: "agents", label: "Agents", icon: <Bot size={16} strokeWidth={1.5} />, path: "/agents" },
-  {
-    key: "runs",
-    label: <ApprovalPendingBadge>Runs</ApprovalPendingBadge>,
-    icon: <Activity size={16} strokeWidth={1.5} />,
-    path: "/runs",
-  },
-  { key: "curation", label: "Curation+Eval", icon: <CheckSquare size={16} strokeWidth={1.5} />, path: "/curation" },
-  { key: "memory", label: "Memory", icon: <Brain size={16} strokeWidth={1.5} />, path: "/memory" },
-  { key: "skills", label: "Skills", icon: <FileText size={16} strokeWidth={1.5} />, path: "/skills" },
-  { key: "triggers", label: "Triggers", icon: <Clock size={16} strokeWidth={1.5} />, path: "/triggers" },
+  { key: "agents", labelKey: "nav.agents", icon: <Bot size={16} strokeWidth={1.5} />, path: "/agents" },
+  { key: "runs", labelKey: "nav.runs", icon: <Activity size={16} strokeWidth={1.5} />, path: "/runs", badge: true },
+  { key: "curation", labelKey: "nav.curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, path: "/curation" },
+  { key: "memory", labelKey: "nav.memory", icon: <Brain size={16} strokeWidth={1.5} />, path: "/memory" },
+  { key: "skills", labelKey: "nav.skills", icon: <FileText size={16} strokeWidth={1.5} />, path: "/skills" },
+  { key: "triggers", labelKey: "nav.triggers", icon: <Clock size={16} strokeWidth={1.5} />, path: "/triggers" },
 ];
 
 const SETTINGS_ITEMS: NavItem[] = [
-  { key: "settings-create-tenant", label: "Create Tenant", icon: <Building2 size={16} strokeWidth={1.5} />, path: "/settings/create-tenant" },
-  { key: "settings-platform", label: "Platform Credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/platform" },
-  { key: "settings-api-keys", label: "API Keys", icon: <Key size={16} strokeWidth={1.5} />, path: "/settings/api-keys" },
-  { key: "settings-credentials", label: "Credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/credentials" },
-  { key: "settings-service-accounts", label: "Service Accounts", icon: <UserCircle2 size={16} strokeWidth={1.5} />, path: "/settings/service-accounts" },
-  { key: "settings-members", label: "Members", icon: <Users size={16} strokeWidth={1.5} />, path: "/settings/members" },
-  { key: "settings-audit", label: "Audit", icon: <Shield size={16} strokeWidth={1.5} />, path: "/settings/audit" },
+  { key: "settings-create-tenant", labelKey: "nav.create_tenant", icon: <Building2 size={16} strokeWidth={1.5} />, path: "/settings/create-tenant" },
+  { key: "settings-platform", labelKey: "nav.platform_credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/platform" },
+  { key: "settings-api-keys", labelKey: "nav.api_keys", icon: <Key size={16} strokeWidth={1.5} />, path: "/settings/api-keys" },
+  { key: "settings-credentials", labelKey: "nav.credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/credentials" },
+  { key: "settings-service-accounts", labelKey: "nav.service_accounts", icon: <UserCircle2 size={16} strokeWidth={1.5} />, path: "/settings/service-accounts" },
+  { key: "settings-members", labelKey: "nav.members", icon: <Users size={16} strokeWidth={1.5} />, path: "/settings/members" },
+  { key: "settings-audit", labelKey: "nav.audit", icon: <Shield size={16} strokeWidth={1.5} />, path: "/settings/audit" },
 ];
 
 export function Sidebar() {
   const nav = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation();
 
   const selectedKey = (() => {
     const path = location.pathname;
@@ -98,15 +98,23 @@ export function Sidebar() {
           padding: "12px 8px",
         }}
         items={[
-          ...NAV_ITEMS.map((i) => ({ key: i.key, label: i.label, icon: i.icon })),
+          ...NAV_ITEMS.map((i) => ({
+            key: i.key,
+            label: i.badge ? (
+              <ApprovalPendingBadge>{t(i.labelKey)}</ApprovalPendingBadge>
+            ) : (
+              t(i.labelKey)
+            ),
+            icon: i.icon,
+          })),
           { type: "divider" as const },
           {
             key: "settings-group",
-            label: "Settings",
+            label: t("nav.settings_group"),
             type: "group" as const,
             children: SETTINGS_ITEMS.map((i) => ({
               key: i.key,
-              label: i.label,
+              label: t(i.labelKey),
               icon: i.icon,
             })),
           },

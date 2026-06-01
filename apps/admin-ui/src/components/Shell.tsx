@@ -28,8 +28,8 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           <Topbar />
         </Header>
-        <Content style={{ padding: 24, overflow: "auto" }}>
-          <div style={{ maxWidth: 1280, margin: "0 auto" }}>{children}</div>
+        <Content style={{ padding: "24px 32px", overflow: "auto" }}>
+          {children}
         </Content>
       </Layout>
     </Layout>
