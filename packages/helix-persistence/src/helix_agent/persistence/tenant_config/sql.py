@@ -57,6 +57,7 @@ def _row_to_record(row: TenantConfigRow) -> TenantConfigRecord:
         credentials_mode=cast(CredentialsMode, row.credentials_mode),
         tool_credentials={cast(Tool, str(k)): str(v) for k, v in row.tool_credentials.items()},
         mcp_credentials={str(k): str(v) for k, v in row.mcp_credentials.items()},
+        default_agent_name=row.default_agent_name,
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -180,6 +181,8 @@ class SqlTenantConfigStore(TenantConfigStore):
                     values["mcp_credentials"] = {
                         str(k): str(v) for k, v in patch.mcp_credentials.items()
                     }
+                if patch.default_agent_name is not None:
+                    values["default_agent_name"] = patch.default_agent_name
                 stmt = (
                     pg_insert(TenantConfigRow)
                     .values(**values)
@@ -261,6 +264,8 @@ class SqlTenantConfigStore(TenantConfigStore):
                 existing.mcp_credentials = {
                     str(k): str(v) for k, v in patch.mcp_credentials.items()
                 }
+            if patch.default_agent_name is not None:
+                existing.default_agent_name = patch.default_agent_name
             existing.updated_at = _utc_now()
             existing.updated_by = actor_id
             await session.commit()

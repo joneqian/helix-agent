@@ -40,6 +40,7 @@ from control_plane.quota.base import QuotaService
 from control_plane.tenant_scope import CrossTenant, applied_scope, ensure_tenant_scope
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.agent_spec import AgentSpecStore
+from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.persistence.thread_meta import ThreadMetaStore
 from helix_agent.protocol import AgentSpecStatus, AuditAction, AuditResult, ThreadStatus
@@ -53,11 +54,21 @@ logger = logging.getLogger("helix.control_plane.sessions")
 # ---------------------------------------------------------------------------
 
 
+#: Platform fallback agent when a tenant has set no ``default_agent_name``
+#: and the caller didn't pick one (Stream R Mini-ADR R-9).
+_PLATFORM_FALLBACK_AGENT = "canonical-agent"
+
+
 class CreateSessionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    agent_name: str = Field(min_length=1)
-    agent_version: str = Field(min_length=1)
+    # Stream R (R-9): both optional. When ``agent_name`` is omitted the
+    # session resolves the tenant's ``default_agent_name`` (or the platform
+    # fallback ``canonical-agent``) so an employee can just "start a chat"
+    # without knowing an agent name. ``agent_version`` omitted → the latest
+    # ACTIVE version of the resolved agent.
+    agent_name: str | None = Field(default=None, min_length=1)
+    agent_version: str | None = Field(default=None, min_length=1)
 
 
 class TransitionPayload(BaseModel):
@@ -87,6 +98,43 @@ def _get_audit(request: Request) -> AuditLogger:
 
 def _get_quota(request: Request) -> QuotaService:
     return request.app.state.quota_service  # type: ignore[no-any-return]
+
+
+def _get_tenant_config_repo(request: Request) -> TenantConfigStore:
+    return request.app.state.tenant_config_repo  # type: ignore[no-any-return]
+
+
+async def _resolve_agent_selection(
+    *,
+    tenant_id: UUID,
+    payload_name: str | None,
+    payload_version: str | None,
+    agents: AgentSpecStore,
+    tenant_config: TenantConfigStore,
+) -> tuple[str, str] | None:
+    """Resolve ``(agent_name, agent_version)`` for a session create (R-9).
+
+    Precedence for the name: explicit ``payload_name`` → the tenant's
+    ``default_agent_name`` → the platform fallback ``canonical-agent``. When
+    ``payload_version`` is absent the latest ACTIVE version of the resolved
+    name is used. Returns ``None`` when no ACTIVE version exists (the caller
+    surfaces ``AGENT_NOT_FOUND``).
+    """
+    name = payload_name
+    if name is None:
+        config = await tenant_config.get(tenant_id=tenant_id)
+        name = (config.default_agent_name if config else None) or _PLATFORM_FALLBACK_AGENT
+
+    if payload_version is not None:
+        return name, payload_version
+
+    # Latest ACTIVE version (list_by_tenant is newest-first).
+    active = await agents.list_by_tenant(
+        tenant_id=tenant_id, status=AgentSpecStatus.ACTIVE, name=name, limit=1
+    )
+    if not active:
+        return None
+    return name, active[0].version
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +171,7 @@ def build_sessions_router() -> APIRouter:
         request: Request,
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
         agents: Annotated[AgentSpecStore, Depends(_get_agent_repo)],
+        tenant_config: Annotated[TenantConfigStore, Depends(_get_tenant_config_repo)],
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         quota: Annotated[QuotaService, Depends(_get_quota)],
@@ -130,6 +179,24 @@ def build_sessions_router() -> APIRouter:
         tenant_id: UUID = request.state.tenant_id
         actor_id: str = request.state.actor_id
         trace_id = current_trace_id_hex()
+
+        # Stream R (R-9): resolve which agent to run. An employee may omit
+        # the name (→ tenant default → platform canonical-agent) and/or the
+        # version (→ latest ACTIVE).
+        selection = await _resolve_agent_selection(
+            tenant_id=tenant_id,
+            payload_name=payload.agent_name,
+            payload_version=payload.agent_version,
+            agents=agents,
+            tenant_config=tenant_config,
+        )
+        if selection is None:
+            return _envelope_error(
+                "AGENT_NOT_FOUND",
+                "no active agent for this tenant (set a default or register one)",
+                422,
+            )
+        agent_name, agent_version = selection
 
         # Admission (Stream C.5b): consume one token from the tenant's
         # QPS bucket before doing any other work. Denial emits a
@@ -140,7 +207,7 @@ def build_sessions_router() -> APIRouter:
             audit=audit,
             tenant_id=tenant_id,
             actor_id=actor_id,
-            agent=payload.agent_name,
+            agent=agent_name,
             resource_kind="session",
         )
         if denial is not None:
@@ -151,8 +218,8 @@ def build_sessions_router() -> APIRouter:
         # later GET would fail to resolve.
         record = await agents.get(
             tenant_id=tenant_id,
-            name=payload.agent_name,
-            version=payload.agent_version,
+            name=agent_name,
+            version=agent_version,
         )
         if record is None or record.status is not AgentSpecStatus.ACTIVE:
             await emit(
@@ -161,7 +228,7 @@ def build_sessions_router() -> APIRouter:
                 actor_id=actor_id,
                 action=AuditAction.SESSION_WRITE,
                 resource_type="session",
-                resource_id=f"{payload.agent_name}/{payload.agent_version}",
+                resource_id=f"{agent_name}/{agent_version}",
                 result=AuditResult.ERROR,
                 reason="agent_not_found",
                 trace_id=trace_id,
@@ -181,8 +248,8 @@ def build_sessions_router() -> APIRouter:
             tenant_id=tenant_id,
             created_by=actor_id,
             user_id=user_id,
-            agent_name=payload.agent_name,
-            agent_version=payload.agent_version,
+            agent_name=agent_name,
+            agent_version=agent_version,
         )
         await emit(
             audit,
@@ -192,7 +259,7 @@ def build_sessions_router() -> APIRouter:
             resource_type="session",
             resource_id=str(thread_id),
             trace_id=trace_id,
-            details={"agent": f"{payload.agent_name}/{payload.agent_version}"},
+            details={"agent": f"{agent_name}/{agent_version}"},
         )
         return JSONResponse(
             status_code=201,

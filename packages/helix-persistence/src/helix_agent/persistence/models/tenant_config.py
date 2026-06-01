@@ -104,6 +104,10 @@ class TenantConfigRow(Base):
     mcp_credentials: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Stream R — Mini-ADR R-9. The agent a tenant's members get by default
+    # when they don't pick one. NULL → platform fallback (canonical-agent).
+    # Added in migration 0052.
+    default_agent_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

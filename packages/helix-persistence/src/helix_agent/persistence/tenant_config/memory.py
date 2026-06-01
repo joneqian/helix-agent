@@ -123,6 +123,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                     row_kwargs["tool_credentials"] = dict(patch.tool_credentials)
                 if patch.mcp_credentials is not None:
                     row_kwargs["mcp_credentials"] = dict(patch.mcp_credentials)
+                if patch.default_agent_name is not None:
+                    row_kwargs["default_agent_name"] = patch.default_agent_name
                 row = TenantConfigRecord(**row_kwargs)  # type: ignore[arg-type]
             else:
                 row = existing.model_copy(
@@ -156,6 +158,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                             "credentials_mode": patch.credentials_mode,
                             "tool_credentials": patch.tool_credentials,
                             "mcp_credentials": patch.mcp_credentials,
+                            # Stream R — tenant default agent.
+                            "default_agent_name": patch.default_agent_name,
                         }.items()
                         if v is not None
                     }

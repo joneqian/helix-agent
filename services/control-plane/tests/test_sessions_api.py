@@ -123,6 +123,47 @@ async def test_post_rejects_deleted_agent(session_client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stream R (R-9) — tenant default agent + latest-version resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_resolves_latest_version_when_omitted(session_client: AsyncClient) -> None:
+    # Only name given → latest ACTIVE version of that agent is used.
+    response = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer"},
+    )
+    assert response.status_code == 201, response.text
+    meta = response.json()["data"]
+    assert meta["agent_name"] == "code-reviewer"
+    assert meta["agent_version"] == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_post_uses_tenant_default_when_name_omitted(session_client: AsyncClient) -> None:
+    # Point the tenant default at the seeded agent, then create with no agent.
+    await session_client.put(
+        f"/v1/tenants/{_DEFAULT_TENANT}/config",
+        json={"display_name": "Dev Tenant", "default_agent_name": "code-reviewer"},
+    )
+    response = await session_client.post("/v1/sessions", json={})
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["agent_name"] == "code-reviewer"
+
+
+@pytest.mark.asyncio
+async def test_post_no_agent_no_default_falls_back_to_canonical(
+    session_client: AsyncClient,
+) -> None:
+    # No name, no tenant default → platform fallback ``canonical-agent``,
+    # which isn't registered here → AGENT_NOT_FOUND (not a 500).
+    response = await session_client.post("/v1/sessions", json={})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "AGENT_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
 # read
 # ---------------------------------------------------------------------------
 
