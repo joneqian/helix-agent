@@ -66,12 +66,17 @@ a:hover { color: var(--hx-text-link-hover); }
 /* 数字单元格 mono + 右对齐 */
 .hx-num { font-family: var(--hx-font-mono); text-align: right; }
 
-/* page heading */
+/* page heading — stack vertically: breadcrumb → title row (title left,
+   actions right) → subtitle. Pages put breadcrumb + an icon/title <div> +
+   an optional subtitle <p> as siblings here; a row+space-between layout
+   flung them to opposite edges on a full-width content area, so column is
+   both correct and width-robust. The title row's own flex pushes its
+   action buttons right via an internal spacer. */
 .hx-page-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   margin-bottom: 24px;
 }
 .hx-page-header h1 {
