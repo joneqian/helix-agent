@@ -69,7 +69,7 @@ def resolve_secret_value(arg_value: str | None, env: dict[str, str] | None = Non
 async def seed_keycloak_admin_secret(store: SecretStore, *, name: str, value: str) -> None:
     """Write the Keycloak admin client secret to the vault under ``name``."""
     await store.put(name, value)
-    logger.info("seeded keycloak admin secret name=%s", name)
+    logger.info("seeded keycloak admin client secret into the vault")
 
 
 async def _amain(args: argparse.Namespace) -> int:
@@ -78,9 +78,9 @@ async def _amain(args: argparse.Namespace) -> int:
 
     if settings.secret_store_backend != "sql_encrypted":  # noqa: S105 — backend name, not a secret
         print(
-            "ERROR: seed_keycloak_secret only applies to "
-            f"secret_store_backend='sql_encrypted' (got '{settings.secret_store_backend}'). "
-            "For the local_dev backend put the secret in the dev-keys env file instead."
+            "ERROR: seed_keycloak_secret only applies to the 'sql_encrypted' secret "
+            "store backend. For the local_dev backend put the value in the dev-keys "
+            "env file instead."
         )
         return 2
     if settings.secret_encryption_key is None:
@@ -107,7 +107,7 @@ async def _amain(args: argparse.Namespace) -> int:
     finally:
         await engine.dispose()
 
-    print(f"OK: seeded keycloak admin secret under {settings.keycloak_admin_secret_name!r}")
+    print("OK: seeded the keycloak admin client secret into the vault")
     return 0
 
 
