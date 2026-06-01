@@ -796,23 +796,25 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 **范围决策(2026-06-01)**：① 邀请态建表(状态机+审计+list)；② 删装饰性 Keycloak realm role,维持应用自管授权(Keycloak 只管认证+tenant_id 属性)；③ Keycloak Admin 凭据走 Stream Q 加密金库,service account `helix-agent-api-internal` 配最小 `manage-users`；④ per-user agent 惰性初始化；⑤ 租户可配默认 agent;⑥ 链路终点=员工用上 agent;⑦ W3 本轮做。
 
-**W1 — 地基**
-- [ ] **R-1 Keycloak Admin client 封装(`keycloak/` module:Protocol+Http+token cache+errors+Fake;service-account client_credentials grant;凭据金库取)** — **Mini-ADR R-1/R-2**
-- [ ] **R-2 删装饰 realm role `admin`(realm json + auth 回归断言:无 roles claim 仍 system_admin via binding)** — **Mini-ADR R-7**
-- [ ] **R-3 `tenant_member` 表(migration 0051,状态机+partial-unique 幂等键+RLS)+ audit Literal 两处同改 + `TenantMemberStore`** — **Mini-ADR R-6/R-10**
-- [ ] **R-4 `POST /v1/tenants` 加 first_admin(DB-first+幂等补偿跨系统事务;cross-tenant role_binding 写;Keycloak 建号+发设密码邮件)** — **Mini-ADR R-4/R-5/R-11**
+**W1 — 地基（PR #351）**
+- [x] **R-1 Keycloak Admin client 封装(`keycloak/` module:Protocol+Http+token cache+errors+Fake;service-account client_credentials grant;凭据金库取)（#351）** — **Mini-ADR R-1/R-2** ✅
+- [x] **R-2 ~~删装饰 realm role~~ → 实施期纠正:补全租户 role_binding enrich 进授权(`resolve_tenant_roles`)。审计发现 rbac 只读 JWT roles claim、租户级 role_binding 没接授权层 → 邀请来的员工会无权限;realm role 保留(dev 租户权唯一来源,删了回归)（#351）** — **Mini-ADR R-7（已修正）** ✅
+- [x] **R-3 `tenant_member` 表(migration 0051,状态机+partial-unique 幂等键+RLS)+ audit Literal 两处同改 + `TenantMemberStore`（#351）** — **Mini-ADR R-6/R-10** ✅
+- [x] **R-4 `POST /v1/tenants` 加 first_admin(DB-first+幂等补偿跨系统事务;cross-tenant role_binding 写;Keycloak 建号+发设密码邮件)（#351）** — **Mini-ADR R-4/R-5/R-11** ✅
 
-**W2 — 成员 onboarding**
-- [ ] **R-5 邀请 API `/v1/members`(invite batch/list/resend 幂等补偿/revoke;Keycloak 原生 execute-actions-email)** — **Mini-ADR R-3**
-- [ ] **R-6 成员 UI `SettingsMembers.tsx`(邀请 drawer+status badge+resend/revoke;envelope 对账;Playwright/axe)**
+**W2 — 成员 onboarding（PR #352）**
+- [x] **R-5 邀请 API `/v1/members`(invite batch/list/resend 幂等补偿/revoke;Keycloak 原生 execute-actions-email)（#352）** — **Mini-ADR R-3** ✅
+- [x] **R-6 成员 UI `SettingsMembers.tsx`(邀请 drawer+status badge+resend/revoke;envelope 对账;Playwright/axe)（#352）** ✅
 
-**W3 — per-user agent 编排**
-- [ ] **R-7 租户默认 agent(migration 0052 `tenant_config.default_agent_name`+thread 创建读默认 fallback canonical-agent)** — **Mini-ADR R-9**
-- [ ] **R-8 per-user 惰性编排(`ensure_user_instance`:workspace.resolve+member 首登 invited→active;接入 trigger_run)** — **Mini-ADR R-8**
+**W3 — per-user agent 编排（PR #353）**
+- [x] **R-7 租户默认 agent(migration 0052 `tenant_config.default_agent_name`+session 创建读默认 fallback canonical-agent;agent_name/version 改可选,version 缺省取最新 ACTIVE)（#353）** — **Mini-ADR R-9** ✅
+- [x] **R-8 per-user 惰性编排 → 实施期纠正:`ensure_member_active`(member 首登 invited→active,经 kc_user_id 反查)。**workspace.resolve 砍掉**——`UserWorkspaceStore` 是 supervisor 域+无 RLS,且 supervisor 已在首次 exec 惰性建行(`supervisor.py:158`),control-plane 不跨界重复建（#353）** — **Mini-ADR R-8（已修正）** ✅
 
-**Stream R Verification**：单测 Keycloak client(token 过期重取/409 映射/unavailable)+`TenantMemberStore`(状态机+幂等键+kc 反查)+`ensure_user_instance` 幂等;集成(FakeKeycloak)W1 建租户+first_admin 全链+各失败点补偿/W2 invite/resend/revoke/W3 首 run 建 workspace+member→active;**端到端**:建公司(填首admin email)→ admin 邀请员工 → 员工收 Keycloak 邮件设密码登录 → 员工 Playground 真实回话(全程 web,人只在网页填过 email)。每 PR 零债 6 条。email 用普通 str 校验(不引 email-validator)。
+**B 层（交互入口）显式化（2026-06-01）**：员工跑 agent 的**最低可用角色 = operator**(viewer 只有 `session:read` 发不了 run);本轮**交互入口 = admin-ui Playground**(员工登录→打开默认 agent Playground→发对话);**专属员工产品 UI 留后续独立 Stream**(别再犯 STREAM-H §0 假装 B 层不存在的错)。
 
-**PR 拆分(按 wave 合并,减 CI 等待)**：A(设计) → W1 PR(R-1+2+3+4 合) → W2 PR(R-5+6 合) → W3 PR(R-7+8 合)。关键路径 A→W1→W2→W3。
+**Stream R Verification**：单测 Keycloak client(token 过期重取/409 映射/unavailable)+`TenantMemberStore`(状态机+幂等键+kc 反查)+`resolve_tenant_roles`(merge/隔离)+`ensure_member_active` 幂等 + session 默认 agent 解析;集成(FakeKeycloak)W1 建租户+first_admin 全链+各失败点补偿/W2 invite/resend/revoke;**端到端**:建公司(填首admin email)→ admin 邀请员工(operator)→ 员工收 Keycloak 邮件设密码登录 → 员工 Playground 真实回话(全程 web,人只在网页填过 email)。每 PR 零债 6 条。email 用普通 str 校验(不引 email-validator)。
+
+**PR 拆分(按 wave 合并,减 CI 等待)**：A(设计 #350) → W1 PR(R-1+2+3+4 #351) → W2 PR(R-5+6 #352) → W3 PR(R-7+8 #353)。关键路径 A→W1→W2→W3 全部 shipped。
 
 **后续(不在本迭代)**：真 KMS-wrap Keycloak secret;member 角色变更端点+suspended 反激活(本版单向);SCIM/SSO 联邦/Keycloak group 同步;per-员工 agent 模板;`ensure_user_instance` 进程内缓存。
 

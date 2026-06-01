@@ -176,6 +176,10 @@ class TenantConfigRecord(BaseModel):
     # ``server_name`` (platform-defined, never tenant input) → tenant
     # secret_ref backing that server's bearer auth in ``tenant`` mode.
     mcp_credentials: dict[str, str] = Field(default_factory=dict)
+    # Stream R — Mini-ADR R-9. The agent a tenant's members get by default
+    # when a thread is created without an explicit agent. ``None`` → platform
+    # fallback (``canonical-agent``).
+    default_agent_name: str | None = None
     created_at: datetime
     updated_at: datetime
     updated_by: str
@@ -247,3 +251,7 @@ class TenantConfigPatch(BaseModel):
     tool_credentials: dict[Tool, str] | None = None
     # Stream O — Mini-ADR O-14. Per-tenant MCP server credentials.
     mcp_credentials: dict[str, str] | None = None
+    # Stream R — Mini-ADR R-9. Tenant default agent (None in a patch means
+    # "leave unchanged"; clearing it back to platform fallback is out of scope
+    # this iteration — an admin re-points it instead).
+    default_agent_name: str | None = None

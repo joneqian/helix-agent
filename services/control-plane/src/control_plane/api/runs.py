@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from control_plane.api._quota_admission import check_admission
 from control_plane.api._user_scope import (
     caller_owns_thread,
+    ensure_member_active,
     get_user_repo,
     resolve_caller_user_id,
 )
@@ -254,6 +255,8 @@ def build_runs_router() -> APIRouter:
             meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
         ):
             raise HTTPException(status_code=404, detail="session not found")
+        # Stream R (R-8) — first run promotes an invited member to active.
+        await ensure_member_active(request, caller_user_id=caller_user_id)
         if meta.status is not ThreadStatus.ACTIVE:
             raise HTTPException(
                 status_code=409,

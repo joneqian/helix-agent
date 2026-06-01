@@ -11,13 +11,19 @@ or machine-triggered) keep the legacy tenant-scoped behaviour.
 
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 from starlette.requests import Request
 
 from control_plane.auth.rbac import is_admin
+from control_plane.tenant_scope import bypass_rls_session
+from helix_agent.persistence.tenant_member import TenantMemberStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import Principal, ThreadMeta
+
+logger = logging.getLogger("helix.control_plane.api.user_scope")
 
 
 def get_user_repo(request: Request) -> TenantUserStore:
@@ -41,6 +47,45 @@ async def resolve_caller_user_id(request: Request, users: TenantUserStore) -> UU
         subject_id=principal.subject_id,
     )
     return user.id
+
+
+async def ensure_member_active(
+    request: Request,
+    *,
+    caller_user_id: UUID | None,
+) -> None:
+    """Promote a member ``invited → active`` on their first run (Stream R, R-8).
+
+    The W2 invite flow leaves a ``tenant_member`` row in ``invited`` until the
+    employee actually shows up. The first run is that signal: we look the member
+    up by their Keycloak subject id and, if still ``invited``, flip them to
+    ``active`` (back-filling ``subject_id`` with the resolved ``tenant_user.id``,
+    Mini-ADR R-6). Idempotent — a no-op once active, and skipped entirely for
+    machine principals or when no roster row exists (e.g. the bootstrap admin,
+    who was never invited).
+
+    The reverse lookup runs inside ``bypass_rls_session()`` because the member
+    row is keyed by Keycloak id, not the request's tenant scope.
+    """
+    if caller_user_id is None:
+        return
+    principal: Principal = request.state.principal
+    member_repo: TenantMemberStore | None = getattr(request.app.state, "tenant_member_repo", None)
+    if member_repo is None:
+        return
+    async with bypass_rls_session():
+        member = await member_repo.get_by_keycloak_user_id(keycloak_user_id=principal.subject_id)
+        if member is None or member.status != "invited":
+            return
+        moved = await member_repo.transition(
+            member_id=member.id,
+            tenant_id=member.tenant_id,
+            to="active",
+            now=datetime.now(UTC),
+            subject_id=caller_user_id,
+        )
+    if moved:
+        logger.info("member.activated member_id=%s tenant_id=%s", member.id, member.tenant_id)
 
 
 def caller_owns_thread(
