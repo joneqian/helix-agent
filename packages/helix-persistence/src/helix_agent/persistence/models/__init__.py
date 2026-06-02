@@ -25,6 +25,9 @@ from helix_agent.persistence.models.knowledge import (
 )
 from helix_agent.persistence.models.memory_item import MemoryItemRow
 from helix_agent.persistence.models.memory_writeback_dlq import MemoryWritebackDLQRow
+from helix_agent.persistence.models.platform_embedding_config import (
+    PlatformEmbeddingConfigRow,
+)
 from helix_agent.persistence.models.platform_secret import (
     PlatformProviderSecretRow,
     PlatformToolSecretRow,
@@ -67,6 +70,7 @@ __all__ = [
     "KnowledgeDocumentRow",
     "MemoryItemRow",
     "MemoryWritebackDLQRow",
+    "PlatformEmbeddingConfigRow",
     "PlatformProviderSecretRow",
     "PlatformToolSecretRow",
     "RoleBindingRow",
