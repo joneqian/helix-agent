@@ -15,6 +15,7 @@ import { SettingsServiceAccounts } from "./pages/SettingsServiceAccounts";
 import { SettingsTenantConfig } from "./pages/SettingsTenantConfig";
 import { SettingsTenantCredentials } from "./pages/SettingsTenantCredentials";
 import { SettingsTenantQuotas } from "./pages/SettingsTenantQuotas";
+import { SettingsTenants } from "./pages/SettingsTenants";
 import { SkillDetail } from "./pages/SkillDetail";
 import { SkillsList } from "./pages/SkillsList";
 import { TriggersList } from "./pages/TriggersList";
@@ -40,6 +41,7 @@ export function AppRouter() {
       <Route path="/settings/members" element={<SettingsMembers />} />
       <Route path="/settings/tenant-quotas" element={<SettingsTenantQuotas />} />
       <Route path="/settings/tenant-config" element={<SettingsTenantConfig />} />
+      <Route path="/settings/tenants" element={<SettingsTenants />} />
       <Route path="/settings/credentials" element={<SettingsTenantCredentials />} />
       <Route path="/settings/create-tenant" element={<SettingsCreateTenant />} />
       <Route path="/settings/platform" element={<SettingsPlatformConfig />} />
