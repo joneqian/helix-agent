@@ -25,9 +25,23 @@ import {
   signIn,
 } from "../oidc";
 
+// Fake UserManager so we can count code exchanges without a real IdP.
+const { signinSpy } = vi.hoisted(() => ({ signinSpy: vi.fn() }));
+vi.mock("oidc-client-ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("oidc-client-ts")>();
+  return {
+    ...actual,
+    UserManager: class {
+      constructor(_settings: unknown) {}
+      signinRedirectCallback = signinSpy;
+    },
+  };
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
   _resetUserManagerForTests();
+  signinSpy.mockReset();
 });
 
 describe("OIDC config detection", () => {
@@ -89,5 +103,39 @@ describe("OIDC short-circuit when unconfigured", () => {
 
   it("handleCallback rejects with a clear error", async () => {
     await expect(handleCallback()).rejects.toThrow(/OIDC is not configured/);
+  });
+});
+
+describe("handleCallback single-use code guard (StrictMode double-invoke)", () => {
+  it("exchanges the one-time code only once across duplicate calls", async () => {
+    vi.stubEnv("VITE_OIDC_ISSUER", "https://idp.example");
+    vi.stubEnv("VITE_OIDC_CLIENT_ID", "ui");
+    signinSpy.mockResolvedValue({
+      id_token: "tok-1",
+      state: { returnPath: "/agents" },
+    });
+
+    const [a, b] = await Promise.all([handleCallback(), handleCallback()]);
+
+    expect(signinSpy).toHaveBeenCalledTimes(1);
+    expect(a.idToken).toBe("tok-1");
+    expect(b.idToken).toBe("tok-1");
+    expect(a.returnPath).toBe("/agents");
+  });
+
+  it("a sequential second call also reuses the cached exchange", async () => {
+    vi.stubEnv("VITE_OIDC_ISSUER", "https://idp.example");
+    vi.stubEnv("VITE_OIDC_CLIENT_ID", "ui");
+    signinSpy.mockResolvedValue({
+      id_token: "tok-2",
+      state: { returnPath: "/runs" },
+    });
+
+    const first = await handleCallback();
+    const second = await handleCallback();
+
+    expect(signinSpy).toHaveBeenCalledTimes(1);
+    expect(first.idToken).toBe("tok-2");
+    expect(second.idToken).toBe("tok-2");
   });
 });
