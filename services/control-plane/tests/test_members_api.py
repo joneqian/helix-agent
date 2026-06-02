@@ -172,3 +172,127 @@ async def test_resend_non_invited_409(
     resp = await client.post(f"/v1/members/{member_id}/resend", headers=_admin_headers(tenant_id))
     assert resp.status_code == 409
     assert resp.json()["detail"]["code"] == "MEMBER_NOT_RESENDABLE"
+
+
+# --- reset-password (Stream U PR F) -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reset_password_happy_path(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, app, kc = admin_app
+    member = await app.state.tenant_member_repo.create(
+        tenant_id=tenant_id,
+        email="a@co.com",
+        role="viewer",
+        invited_by=str(uuid4()),
+        keycloak_user_id="kc-user-1",
+    )
+    resp = await client.post(
+        f"/v1/members/{member.id}/reset-password",
+        json={"password": "hunter2pass"},
+        headers=_admin_headers(tenant_id),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["member_id"] == str(member.id)
+    assert kc.password_resets == [("kc-user-1", "hunter2pass", True)]
+
+
+@pytest.mark.asyncio
+async def test_reset_password_no_keycloak_user_409(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, app, kc = admin_app
+    member = await app.state.tenant_member_repo.create(
+        tenant_id=tenant_id,
+        email="a@co.com",
+        role="viewer",
+        invited_by=str(uuid4()),
+        keycloak_user_id=None,
+    )
+    resp = await client.post(
+        f"/v1/members/{member.id}/reset-password",
+        json={"password": "hunter2pass"},
+        headers=_admin_headers(tenant_id),
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "MEMBER_NO_KEYCLOAK_USER"
+    assert kc.password_resets == []
+
+
+@pytest.mark.asyncio
+async def test_reset_password_unknown_member_404(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, _app, _kc = admin_app
+    resp = await client.post(
+        f"/v1/members/{uuid4()}/reset-password",
+        json={"password": "hunter2pass"},
+        headers=_admin_headers(tenant_id),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "MEMBER_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_reset_password_viewer_forbidden(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, app, _kc = admin_app
+    member = await app.state.tenant_member_repo.create(
+        tenant_id=tenant_id,
+        email="a@co.com",
+        role="viewer",
+        invited_by=str(uuid4()),
+        keycloak_user_id="kc-user-1",
+    )
+    resp = await client.post(
+        f"/v1/members/{member.id}/reset-password",
+        json={"password": "hunter2pass"},
+        headers=_viewer_headers(tenant_id),
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reset_password_keycloak_unavailable_502(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, app, kc = admin_app
+    kc.reset_password_unavailable = True
+    member = await app.state.tenant_member_repo.create(
+        tenant_id=tenant_id,
+        email="a@co.com",
+        role="viewer",
+        invited_by=str(uuid4()),
+        keycloak_user_id="kc-user-1",
+    )
+    resp = await client.post(
+        f"/v1/members/{member.id}/reset-password",
+        json={"password": "hunter2pass"},
+        headers=_admin_headers(tenant_id),
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["code"] == "KEYCLOAK_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_reset_password_too_short_422(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    client, tenant_id, app, kc = admin_app
+    member = await app.state.tenant_member_repo.create(
+        tenant_id=tenant_id,
+        email="a@co.com",
+        role="viewer",
+        invited_by=str(uuid4()),
+        keycloak_user_id="kc-user-1",
+    )
+    resp = await client.post(
+        f"/v1/members/{member.id}/reset-password",
+        json={"password": "short"},
+        headers=_admin_headers(tenant_id),
+    )
+    assert resp.status_code == 422
+    assert kc.password_resets == []

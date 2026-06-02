@@ -77,6 +77,7 @@ class AuditAction(StrEnum):
     MEMBER_REVOKE = "member:revoke"
     MEMBER_SUSPEND = "member:suspend"
     MEMBER_ACTIVATE = "member:activate"
+    MEMBER_PASSWORD_RESET = "member:password_reset"
     KEYCLOAK_USER_CREATE = "keycloak_user:create"
     KEYCLOAK_USER_CREATE_FAILED = "keycloak_user:create_failed"
     # tenant credentials — Stream O Mini-ADR O-8.

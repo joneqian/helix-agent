@@ -18,7 +18,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from control_plane.api._authz import require
 from control_plane.api.member_ops import (
@@ -63,6 +63,11 @@ class InvitationItem(BaseModel):
 class InviteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invitations: list[InvitationItem] = Field(min_length=1, max_length=_MAX_BATCH)
+
+
+class ResetPasswordBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: SecretStr = Field(min_length=8, max_length=256)
 
 
 def _get_member_repo(request: Request) -> TenantMemberStore:
@@ -216,6 +221,48 @@ def build_members_router() -> APIRouter:
             },
             "error": None,
         }
+
+    @router.post("/{member_id}/reset-password")
+    async def reset_password(
+        member_id: UUID,
+        body: ResetPasswordBody,
+        principal: Annotated[Principal, Depends(require("user", "write"))],
+        member_repo: Annotated[TenantMemberStore, Depends(_get_member_repo)],
+        keycloak: Annotated[KeycloakAdminClient, Depends(_get_keycloak)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> dict[str, object]:
+        member = await member_repo.get(tenant_id=principal.tenant_id, member_id=member_id)
+        if member is None:
+            raise HTTPException(status_code=404, detail={"code": "MEMBER_NOT_FOUND"})
+        if member.keycloak_user_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "MEMBER_NO_KEYCLOAK_USER",
+                    "message": "member has no keycloak account yet",
+                },
+            )
+        try:
+            await keycloak.reset_password(
+                user_id=member.keycloak_user_id,
+                password=body.password.get_secret_value(),
+                temporary=True,
+            )
+        except KeycloakUnavailableError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "KEYCLOAK_UNAVAILABLE", "message": "keycloak unreachable; retry"},
+            ) from exc
+        await emit(
+            audit,
+            tenant_id=principal.tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.MEMBER_PASSWORD_RESET,
+            resource_type="user",
+            resource_id=str(member_id),
+            trace_id=current_trace_id_hex(),
+        )
+        return {"success": True, "data": {"member_id": str(member_id)}, "error": None}
 
     @router.delete("/{member_id}", status_code=204)
     async def revoke(
