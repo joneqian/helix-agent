@@ -15,8 +15,10 @@
  */
 import { Select, Tag } from "antd";
 import { Globe2, Building2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { listTenants, type TenantSummary } from "../api/tenants";
 import { useAuth } from "../auth/AuthContext";
 import {
   SCOPE_ALL,
@@ -37,6 +39,25 @@ export function TenantSwitcher() {
   const { scope, setScope } = useTenantScope();
 
   const isSystemAdmin = identity?.isSystemAdmin ?? false;
+
+  const [tenants, setTenants] = useState<TenantSummary[]>([]);
+
+  useEffect(() => {
+    if (!isSystemAdmin) return;
+    let alive = true;
+    listTenants().then(
+      (rows) => {
+        if (alive) setTenants(rows);
+      },
+      () => {
+        /* non-fatal: switcher still offers home + all */
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [isSystemAdmin]);
+
   const homeLabel = identity?.homeTenantId
     ? `${t("tenant.home_label_prefix")} · ${identity.homeTenantId.slice(0, 8)}…`
     : t("tenant.home_tenant");
@@ -54,6 +75,14 @@ export function TenantSwitcher() {
       label: t("tenant.all_tenants"),
       hint: t("tenant.system_admin_hint"),
     });
+    for (const tnt of tenants) {
+      if (tnt.tenant_id === identity?.homeTenantId) continue;
+      options.push({
+        value: tnt.tenant_id,
+        label: tnt.display_name,
+        hint: `${tnt.tenant_id.slice(0, 8)}…`,
+      });
+    }
   }
 
   return (
