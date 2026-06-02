@@ -139,6 +139,7 @@ from control_plane.skill_activity import ThrottledActivityRecorder
 from control_plane.skill_curator import SkillCurator
 from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
+from control_plane.tenant_status import TenantStatusService
 from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.common.health import DefaultHealthProvider
 from helix_agent.common.lifecycle import Lifecycle
@@ -486,6 +487,13 @@ def create_app(
         store=resolved_tenant_config_repo,
         audit_logger=resolved_audit,
         ttl_s=float(resolved_settings.tenant_config_cache_ttl_s),
+    )
+    # Stream U (PR E) — per-tenant suspended-status cache. AuthMiddleware reads
+    # it on the hot path to 403 a suspended tenant's members; the
+    # deactivate/activate endpoints call ``invalidate`` for immediate effect.
+    resolved_tenant_status_service = TenantStatusService(
+        store=resolved_tenant_config_repo,
+        ttl_seconds=float(resolved_settings.tenant_config_cache_ttl_s),
     )
     # Stream R — member roster + Keycloak Admin client. The client is a Fake
     # unless ``keycloak_enabled`` (dev/CI never depend on a live Keycloak).
@@ -942,6 +950,7 @@ def create_app(
     app.state.quota_reaper = reaper
     app.state.tenant_config_repo = resolved_tenant_config_repo
     app.state.tenant_config_service = resolved_tenant_config_service
+    app.state.tenant_status_service = resolved_tenant_status_service
     # Stream R — member onboarding roster + Keycloak Admin client.
     app.state.tenant_member_repo = resolved_tenant_member_repo
     app.state.keycloak_admin_client = resolved_keycloak_admin_client
@@ -1020,6 +1029,8 @@ def create_app(
         # Stream N — AuthMiddleware queries this store to populate
         # ``Principal.is_system_admin`` from a platform-scope role binding.
         role_binding_store=resolved_role_bindings,
+        # Stream U (PR E) — 403 a suspended tenant's members (never system_admin).
+        tenant_status=resolved_tenant_status_service,
     )
     app.add_middleware(ObservabilityMiddleware)
 

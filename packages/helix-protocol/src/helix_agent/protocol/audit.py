@@ -64,6 +64,9 @@ class AuditAction(StrEnum):
     # tenant lifecycle — Stream P Mini-ADR P-1 (POST /v1/tenants creates the
     # first tenant_config row; system_admin-gated).
     TENANT_CREATE = "tenant:create"
+    # Stream U — PR E. Tenant lifecycle deactivate/activate (system_admin-gated).
+    TENANT_DEACTIVATE = "tenant:deactivate"
+    TENANT_ACTIVATE = "tenant:activate"
     # tenant member onboarding — Stream R (Mini-ADR R-3/R-6). MEMBER_INVITE
     # on invite; RESEND on the idempotent compensation path; REVOKE/SUSPEND
     # on DELETE (invited→revoked / active→suspended); ACTIVATE on the W3

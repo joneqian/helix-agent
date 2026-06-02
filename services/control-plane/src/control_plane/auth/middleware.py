@@ -34,6 +34,7 @@ from control_plane.auth.jwt_verifier import JWTVerifier
 from control_plane.auth.mtls import MTLSVerifier
 from control_plane.auth.system_admin import resolve_system_admin
 from control_plane.auth.tenant_roles import resolve_tenant_roles
+from control_plane.tenant_status import TenantStatusService
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.auth import RoleBindingStore
 from helix_agent.protocol import AuditAction, AuditResult, Principal
@@ -64,6 +65,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         mtls_header_name: str = _DEFAULT_XFCC_HEADER,
         api_key_verifier: ApiKeyVerifier | None = None,
         role_binding_store: RoleBindingStore | None = None,
+        tenant_status: TenantStatusService | None = None,
     ) -> None:
         super().__init__(app)
         self._verifier = verifier
@@ -80,6 +82,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # internal service principals are not platform admins
         # (they already carry ``allowed_tenants=(system_tenant_id,)``).
         self._role_binding_store = role_binding_store
+        # Stream U (PR E) — when set, a SUSPENDED tenant's members are 403'd.
+        # system_admin principals carry the system tenant_id, which is never
+        # suspended, so they pass through and can reactivate the tenant.
+        self._tenant_status = tenant_status
 
     async def dispatch(
         self,
@@ -134,8 +140,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             path_clean == prefix or path_clean.startswith(prefix + "/") for prefix in self._exempt
         )
 
-    @staticmethod
     async def _call_with_principal(
+        self,
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
         principal: Principal,
@@ -145,6 +151,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # builder, runs.py) read these and continue to work unchanged.
         request.state.tenant_id = principal.tenant_id
         request.state.actor_id = principal.subject_id
+        # Stream U (PR E) — block a suspended tenant's members. system_admin's
+        # principal.tenant_id is the system tenant, never suspended.
+        if self._tenant_status is not None and await self._tenant_status.is_suspended(
+            principal.tenant_id
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": "TENANT_SUSPENDED",
+                        "message": "this tenant is suspended",
+                    },
+                },
+            )
         return await call_next(request)
 
     async def _reject(self, request: Request, error: AuthError) -> JSONResponse:
