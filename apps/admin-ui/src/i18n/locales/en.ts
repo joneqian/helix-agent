@@ -106,6 +106,7 @@ export interface TranslationKeys {
     vision_on: string;
     vision_off: string;
     no_embeddings: string;
+    advanced: string;
   };
   playground: {
     session_label: string;
@@ -877,6 +878,7 @@ const en: TranslationKeys = {
     vision_off: "Vision: not supported",
     no_embeddings:
       "This provider has no embedding model — long-term memory won't work with it.",
+    advanced: "Advanced",
   },
   playground: {
     session_label: "Session",

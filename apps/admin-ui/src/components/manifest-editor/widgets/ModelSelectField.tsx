@@ -117,7 +117,7 @@ export function ModelSelectField(props: FieldProps) {
           items={[
             {
               key: "advanced",
-              label: "Advanced",
+              label: t("model_select.advanced"),
               children: (
                 <div data-testid="model-select-advanced">
                   {advanced.map((f) => (

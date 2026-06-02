@@ -144,6 +144,10 @@ export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawe
         />
       )}
 
+      {/* ManifestEditor seeds from initialYaml only at mount, so key-remount it
+          when the catalog-derived default arrives. The brief pre-catalog window
+          (one cached round-trip on a freshly-opened drawer) discards edits made
+          before the seed lands — deliberate; the seed is the intended start. */}
       <ManifestEditor
         key={initialYaml}
         mode="create"
