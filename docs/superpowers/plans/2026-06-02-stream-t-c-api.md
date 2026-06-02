@@ -54,7 +54,7 @@ async def test_put_writes_and_invalidates() -> None:
 ```
 (Match the store's `put` signature from PR B.)
 
-- [ ] **Step 5: Run — confirm PASS** (existing + new). 
+- [ ] **Step 5: Run — confirm PASS** (existing + new).
 
 - [ ] **Step 6: pre-commit + commit**
 ```bash
