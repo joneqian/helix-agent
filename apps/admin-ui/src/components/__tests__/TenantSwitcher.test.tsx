@@ -12,18 +12,28 @@
  * Server-side ``ensure_tenant_scope`` is the real gate; this verifies
  * the UI doesn't accidentally offer cross-tenant to a non-admin.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { AuthProvider, _identityFromTokenForTests } from "../../auth/AuthContext";
 import { TenantScopeProvider } from "../../tenant/TenantScopeContext";
 import { TenantSwitcher } from "../TenantSwitcher";
 import { setStoredToken } from "../../api/client";
+import { listTenants } from "../../api/tenants";
+
+vi.mock("../../api/tenants", () => ({ listTenants: vi.fn() }));
+
+beforeEach(() => {
+  // Default: empty list so existing tests (which don't mock it) still
+  // resolve the async fetch without adding concrete-tenant options.
+  (listTenants as Mock).mockResolvedValue([]);
+});
 
 afterEach(() => {
   setStoredToken(null);
   window.sessionStorage.clear();
+  vi.clearAllMocks();
 });
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -74,6 +84,79 @@ describe("TenantSwitcher — Stream N integration", () => {
     // userEvent.click is imported but only needed by the negative
     // tenant_admin test; reference it to silence unused-import lint.
     void userEvent;
+  });
+
+  it("non-admin never fetches the tenant list", async () => {
+    const token = makeJwt({
+      sub: "00000000-0000-0000-0000-0000000000aa",
+      sub_type: "user",
+      tenant_id: "00000000-0000-0000-0000-0000000000a1",
+      roles: ["admin"],
+    });
+    renderWith(token);
+    await screen.findByTestId("tenant-switcher");
+    expect(listTenants).not.toHaveBeenCalled();
+    // Only the home option exists (no "all tenants" entry for non-admins).
+    expect(screen.queryByTestId("tenant-switcher-option-*")).toBeNull();
+  });
+
+  it("system_admin lists concrete tenants from listTenants()", async () => {
+    const tenantId = "11111111-1111-1111-1111-111111111111";
+    (listTenants as Mock).mockResolvedValue([
+      {
+        tenant_id: tenantId,
+        display_name: "乐毅大公司",
+        plan: "free",
+        created_at: "2026-06-02T00:00:00Z",
+      },
+    ]);
+    const token = makeJwt({
+      sub: "00000000-0000-0000-0000-0000000000aa",
+      sub_type: "user",
+      tenant_id: "00000000-0000-0000-0000-0000000000a1",
+      roles: ["system_admin"],
+    });
+    const user = userEvent.setup();
+    renderWith(token);
+    const select = await screen.findByTestId("tenant-switcher");
+    const combobox = within(select).getByRole("combobox");
+    await user.click(combobox);
+    // Await the async fetch + render of the concrete-tenant option.
+    const option = await screen.findByTestId(`tenant-switcher-option-${tenantId}`);
+    expect(option).toBeInTheDocument();
+    expect(option.textContent).toContain("乐毅大公司");
+  });
+
+  it("selecting a concrete tenant persists the UUID scope", async () => {
+    const tenantId = "11111111-1111-1111-1111-111111111111";
+    (listTenants as Mock).mockResolvedValue([
+      {
+        tenant_id: tenantId,
+        display_name: "乐毅大公司",
+        plan: "free",
+        created_at: "2026-06-02T00:00:00Z",
+      },
+    ]);
+    const token = makeJwt({
+      sub: "00000000-0000-0000-0000-0000000000aa",
+      sub_type: "user",
+      tenant_id: "00000000-0000-0000-0000-0000000000a1",
+      roles: ["system_admin"],
+    });
+    const user = userEvent.setup();
+    renderWith(token);
+    const select = await screen.findByTestId("tenant-switcher");
+    const combobox = within(select).getByRole("combobox");
+    await user.click(combobox);
+    await screen.findByTestId(`tenant-switcher-option-${tenantId}`);
+    // Click the visible option content (Antd renders a hidden a11y mirror too).
+    const item = await screen.findByText(
+      (_content, el) =>
+        el?.classList.contains("ant-select-item-option-content") === true &&
+        el.textContent?.includes("乐毅大公司") === true,
+    );
+    await user.click(item);
+    expect(window.sessionStorage.getItem("helix.admin.tenantScope")).toBe(tenantId);
   });
 });
 
