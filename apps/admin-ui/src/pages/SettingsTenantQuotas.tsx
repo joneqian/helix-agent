@@ -12,7 +12,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Empty,
   Form,
@@ -26,9 +25,10 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, Gauge, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Gauge, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
 import {
   deleteTenantQuota,
   listTenantQuotas,
@@ -224,43 +224,38 @@ export function SettingsTenantQuotas() {
 
   return (
     <div data-testid="quotas-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("settings_ops.quotas_page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <Gauge size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_ops.quotas_page_title")}</h1>
-          {effectiveTenantId !== null && (
-            <Tag color="default" data-testid="quota-tenant-tag">
-              tenant:{" "}
-              <Text code style={{ fontSize: 11 }}>{effectiveTenantId.slice(0, 8)}…</Text>
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Button
-            onClick={refresh}
-            loading={loading}
-            icon={<RefreshCw size={14} strokeWidth={1.5} />}
-            disabled={effectiveTenantId === null}
-          >
-            {t("common.refresh")}
-          </Button>
-          <Button
-            type="primary"
-            icon={<Plus size={14} strokeWidth={1.75} />}
-            onClick={() => setCreateOpen(true)}
-            disabled={effectiveTenantId === null}
-            data-testid="quota-create-btn"
-          >
-            {t("settings_ops.quota_create")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_ops.quotas_subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Gauge size={18} strokeWidth={1.5} />}
+        title={t("settings_ops.quotas_page_title")}
+        subtitle={t("settings_ops.quotas_subtitle")}
+        actions={
+          <>
+            {effectiveTenantId !== null && (
+              <Tag color="default" data-testid="quota-tenant-tag">
+                tenant:{" "}
+                <Text code style={{ fontSize: 11 }}>{effectiveTenantId.slice(0, 8)}…</Text>
+              </Tag>
+            )}
+            <Button
+              onClick={refresh}
+              loading={loading}
+              icon={<RefreshCw size={14} strokeWidth={1.5} />}
+              disabled={effectiveTenantId === null}
+            >
+              {t("common.refresh")}
+            </Button>
+            <Button
+              type="primary"
+              icon={<Plus size={14} strokeWidth={1.75} />}
+              onClick={() => setCreateOpen(true)}
+              disabled={effectiveTenantId === null}
+              data-testid="quota-create-btn"
+            >
+              {t("settings_ops.quota_create")}
+            </Button>
+          </>
+        }
+      />
 
       {effectiveTenantId === null && (
         <Alert

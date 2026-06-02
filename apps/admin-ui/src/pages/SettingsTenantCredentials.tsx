@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Card,
   Empty,
@@ -29,10 +28,11 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, KeyRound, Pencil, RefreshCw } from "lucide-react";
+import { KeyRound, Pencil, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   dryRunCredentialsMode,
   getCredentialsView,
@@ -281,47 +281,31 @@ export function SettingsTenantCredentials() {
 
   return (
     <div data-testid="credentials-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[
-            { title: t("common.home") },
-            { title: t("settings_credentials.page_title") },
-          ]}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            marginTop: 8,
-            marginBottom: 16,
-          }}
-        >
-          <KeyRound size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_credentials.page_title")}</h1>
-          {effectiveTenantId !== null && (
-            <Tag color="default" data-testid="credentials-tenant-tag">
-              tenant:{" "}
-              <Text code style={{ fontSize: 11 }}>
-                {effectiveTenantId.slice(0, 8)}…
-              </Text>
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Button
-            onClick={refresh}
-            loading={loading}
-            icon={<RefreshCw size={14} strokeWidth={1.5} />}
-            disabled={effectiveTenantId === null}
-          >
-            {t("common.refresh")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_credentials.subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<KeyRound size={18} strokeWidth={1.5} />}
+        title={t("settings_credentials.page_title")}
+        subtitle={t("settings_credentials.subtitle")}
+        actions={
+          <>
+            {effectiveTenantId !== null && (
+              <Tag color="default" data-testid="credentials-tenant-tag">
+                tenant:{" "}
+                <Text code style={{ fontSize: 11 }}>
+                  {effectiveTenantId.slice(0, 8)}…
+                </Text>
+              </Tag>
+            )}
+            <Button
+              onClick={refresh}
+              loading={loading}
+              icon={<RefreshCw size={14} strokeWidth={1.5} />}
+              disabled={effectiveTenantId === null}
+            >
+              {t("common.refresh")}
+            </Button>
+          </>
+        }
+      />
 
       {effectiveTenantId === null && (
         <Alert

@@ -10,7 +10,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Empty,
   Form,
@@ -24,9 +23,10 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, Globe2, KeyRound, Plus, RefreshCw, Trash2, UserCog } from "lucide-react";
+import { Globe2, KeyRound, Plus, RefreshCw, Trash2, UserCog } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
 import {
   createServiceAccount,
   deleteServiceAccount,
@@ -173,45 +173,37 @@ export function SettingsServiceAccounts() {
 
   return (
     <div data-testid="sa-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[
-            { title: t("common.home") },
-            { title: t("settings_iam.sa_page_title") },
-          ]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <UserCog size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_iam.sa_page_title")}</h1>
-          {isCrossTenant && (
-            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="sa-cross-banner">
-              {t("settings_iam.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
-            {t("common.refresh")}
-          </Button>
-          <Button
-            type="primary"
-            icon={<Plus size={14} strokeWidth={1.75} />}
-            onClick={() => setCreateOpen(true)}
-            data-testid="sa-create-btn"
-          >
-            {t("settings_iam.sa_create")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_iam.sa_subtitle")}
-        </p>
-        <p style={{ fontSize: 12, color: "var(--hx-text-tertiary)", margin: "0 0 12px" }}>
-          <Space size={6}>
-            <KeyRound size={12} strokeWidth={1.75} />
-            {t("settings_iam.sa_api_keys_hint")}
-          </Space>
-        </p>
-      </div>
+      <PageHeader
+        icon={<UserCog size={18} strokeWidth={1.5} />}
+        title={t("settings_iam.sa_page_title")}
+        subtitle={t("settings_iam.sa_subtitle")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="sa-cross-banner">
+                {t("settings_iam.cross_tenant_banner")}
+              </Tag>
+            )}
+            <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+              {t("common.refresh")}
+            </Button>
+            <Button
+              type="primary"
+              icon={<Plus size={14} strokeWidth={1.75} />}
+              onClick={() => setCreateOpen(true)}
+              data-testid="sa-create-btn"
+            >
+              {t("settings_iam.sa_create")}
+            </Button>
+          </>
+        }
+      />
+      <p style={{ fontSize: 12, color: "var(--hx-text-tertiary)", margin: "0 0 12px" }}>
+        <Space size={6}>
+          <KeyRound size={12} strokeWidth={1.75} />
+          {t("settings_iam.sa_api_keys_hint")}
+        </Space>
+      </p>
 
       {error !== null && (
         <Alert

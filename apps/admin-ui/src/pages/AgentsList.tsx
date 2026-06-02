@@ -11,9 +11,9 @@
  * loads. Cmd+K real routes + manifest upload are deferred follow-ups.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Breadcrumb, Empty, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, Empty, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { TableColumnsType } from "antd";
-import { Bot, ChevronRight, Globe2, Plus, RefreshCw } from "lucide-react";
+import { Bot, Globe2, Plus, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -21,6 +21,7 @@ import { listAgents, type AgentRecord, type AgentList } from "../api/agents";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
 import { CreateAgentDrawer } from "../components/CreateAgentDrawer";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -117,75 +118,65 @@ export function AgentsList() {
 
   return (
     <div>
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("agents_page.page_title") }]}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            marginTop: 8,
-            marginBottom: 16,
-          }}
-        >
-          <h1 style={{ margin: 0 }}>{t("agents_page.page_title")}</h1>
-          {isCrossTenant && (
-            <Tag
-              icon={<Globe2 size={12} strokeWidth={1.5} />}
-              color="purple"
-              data-testid="cross-tenant-banner"
+      <PageHeader
+        icon={<Bot size={18} strokeWidth={1.5} />}
+        title={t("agents_page.page_title")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag
+                icon={<Globe2 size={12} strokeWidth={1.5} />}
+                color="purple"
+                data-testid="cross-tenant-banner"
+              >
+                {t("agents_page.cross_tenant_banner")}
+              </Tag>
+            )}
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={loading}
+              aria-label={t("common.refresh")}
+              data-testid="agents-refresh"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                border: "1px solid var(--hx-border-default)",
+                borderRadius: 6,
+                background: "var(--hx-surface-raised)",
+                color: "var(--hx-text-primary)",
+                fontSize: 13,
+                cursor: loading ? "wait" : "pointer",
+              }}
             >
-              {t("agents_page.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={refresh}
-            disabled={loading}
-            aria-label={t("common.refresh")}
-            data-testid="agents-refresh"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "4px 10px",
-              border: "1px solid var(--hx-border-default)",
-              borderRadius: 6,
-              background: "var(--hx-surface-raised)",
-              color: "var(--hx-text-primary)",
-              fontSize: 13,
-              cursor: loading ? "wait" : "pointer",
-            }}
-          >
-            <RefreshCw size={14} strokeWidth={1.5} />
-            {loading ? t("common.loading") : t("common.refresh")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            data-testid="agents-create"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "4px 10px",
-              border: "1px solid var(--hx-color-brand-500)",
-              borderRadius: 6,
-              background: "var(--hx-color-brand-500)",
-              color: "var(--hx-on-brand)",
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            <Plus size={14} strokeWidth={1.75} />
-            {t("agents_page.create")}
-          </button>
-        </div>
-      </div>
+              <RefreshCw size={14} strokeWidth={1.5} />
+              {loading ? t("common.loading") : t("common.refresh")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              data-testid="agents-create"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                border: "1px solid var(--hx-color-brand-500)",
+                borderRadius: 6,
+                background: "var(--hx-color-brand-500)",
+                color: "var(--hx-on-brand)",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              <Plus size={14} strokeWidth={1.75} />
+              {t("agents_page.create")}
+            </button>
+          </>
+        }
+      />
 
       {error && (
         <Alert

@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -31,7 +30,7 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import Editor from "@monaco-editor/react";
-import { Brain, ChevronRight, Globe2, RefreshCw, Trash2 } from "lucide-react";
+import { Brain, Globe2, RefreshCw, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -44,6 +43,7 @@ import {
 } from "../api/memory";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -209,47 +209,42 @@ export function MemoryAdmin() {
 
   return (
     <div data-testid="memory-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("memory.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <Brain size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("memory.page_title")}</h1>
-          {isCrossTenant && (
-            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="memory-cross-banner">
-              {t("memory.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Input.Search
-            placeholder={t("memory.search_placeholder")}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            style={{ width: 240 }}
-            data-testid="memory-search"
-            allowClear
-          />
-          <Select<MemoryKind | "all">
-            value={kindFilter ?? "all"}
-            onChange={(v) => setKindFilter(v === "all" ? undefined : v as MemoryKind)}
-            style={{ width: 140 }}
-            aria-label={t("memory.filter_kind")}
-            data-testid="memory-kind-filter"
-            options={[
-              { value: "all", label: t("memory.filter_kind_all") },
-              ...KIND_OPTIONS.map((k) => ({ value: k, label: k })),
-            ]}
-          />
-          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
-            {t("common.refresh")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("memory.subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Brain size={18} strokeWidth={1.5} />}
+        title={t("memory.page_title")}
+        subtitle={t("memory.subtitle")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="memory-cross-banner">
+                {t("memory.cross_tenant_banner")}
+              </Tag>
+            )}
+            <Input.Search
+              placeholder={t("memory.search_placeholder")}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              style={{ width: 240 }}
+              data-testid="memory-search"
+              allowClear
+            />
+            <Select<MemoryKind | "all">
+              value={kindFilter ?? "all"}
+              onChange={(v) => setKindFilter(v === "all" ? undefined : v as MemoryKind)}
+              style={{ width: 140 }}
+              aria-label={t("memory.filter_kind")}
+              data-testid="memory-kind-filter"
+              options={[
+                { value: "all", label: t("memory.filter_kind_all") },
+                ...KIND_OPTIONS.map((k) => ({ value: k, label: k })),
+              ]}
+            />
+            <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+              {t("common.refresh")}
+            </Button>
+          </>
+        }
+      />
 
       {error !== null && (
         <Alert type="error" showIcon message={t("memory.failed_to_load")} description={error} style={{ marginBottom: 12 }} data-testid="memory-error" />

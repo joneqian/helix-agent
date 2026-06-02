@@ -21,7 +21,6 @@ export interface TranslationKeys {
     search_or_jump: string;
     notifications: string;
     user_menu: string;
-    home: string;
     anonymous: string;
   };
   theme: {
@@ -838,7 +837,6 @@ const en: TranslationKeys = {
     search_or_jump: "Search or jump",
     notifications: "Notifications",
     user_menu: "User menu",
-    home: "Home",
     anonymous: "anonymous",
   },
   theme: {

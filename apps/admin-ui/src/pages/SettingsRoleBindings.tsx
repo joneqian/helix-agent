@@ -11,7 +11,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Checkbox,
   Drawer,
@@ -27,9 +26,10 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, Globe2, RefreshCw, Shield, Trash2 } from "lucide-react";
+import { Globe2, RefreshCw, Shield, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
 import {
   createRoleBinding,
   deleteRoleBinding,
@@ -238,44 +238,39 @@ export function SettingsRoleBindings() {
 
   return (
     <div data-testid="rb-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("settings_iam.rb_page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <Shield size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_iam.rb_page_title")}</h1>
-          {isCrossTenant && (
-            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="rb-cross-banner">
-              {t("settings_iam.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          {isSystemAdmin && (
-            <Checkbox
-              checked={platformScopeFilter}
-              onChange={(e) => setPlatformScopeFilter(e.target.checked)}
-              data-testid="rb-platform-scope-filter"
+      <PageHeader
+        icon={<Shield size={18} strokeWidth={1.5} />}
+        title={t("settings_iam.rb_page_title")}
+        subtitle={t("settings_iam.rb_subtitle")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="rb-cross-banner">
+                {t("settings_iam.cross_tenant_banner")}
+              </Tag>
+            )}
+            {isSystemAdmin && (
+              <Checkbox
+                checked={platformScopeFilter}
+                onChange={(e) => setPlatformScopeFilter(e.target.checked)}
+                data-testid="rb-platform-scope-filter"
+              >
+                {t("settings_iam.rb_filter_platform_scope")}
+              </Checkbox>
+            )}
+            <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+              {t("common.refresh")}
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => setCreateOpen(true)}
+              data-testid="rb-create-btn"
             >
-              {t("settings_iam.rb_filter_platform_scope")}
-            </Checkbox>
-          )}
-          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
-            {t("common.refresh")}
-          </Button>
-          <Button
-            type="primary"
-            onClick={() => setCreateOpen(true)}
-            data-testid="rb-create-btn"
-          >
-            {t("settings_iam.rb_create")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_iam.rb_subtitle")}
-        </p>
-      </div>
+              {t("settings_iam.rb_create")}
+            </Button>
+          </>
+        }
+      />
 
       {error !== null && (
         <Alert

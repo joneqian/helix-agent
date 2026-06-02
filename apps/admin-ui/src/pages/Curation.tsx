@@ -8,12 +8,13 @@
  * outer file small (Mini-ADR style file org).
  */
 import { useState } from "react";
-import { Breadcrumb, Tabs } from "antd";
-import { ChevronRight, CheckSquare } from "lucide-react";
+import { Tabs } from "antd";
+import { CheckSquare } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { CandidatesPanel } from "./curation/CandidatesPanel";
 import { EvalDatasetsPanel } from "./curation/EvalDatasetsPanel";
+import { PageHeader } from "../components/PageHeader";
 
 type CurationTab = "candidates" | "datasets";
 
@@ -23,29 +24,11 @@ export function Curation() {
 
   return (
     <div data-testid="curation-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("curation.page_title") }]}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            marginTop: 8,
-            marginBottom: 16,
-          }}
-        >
-          <CheckSquare size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("curation.page_title")}</h1>
-        </div>
-        <p
-          style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}
-        >
-          {t("curation.subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<CheckSquare size={18} strokeWidth={1.5} />}
+        title={t("curation.page_title")}
+        subtitle={t("curation.subtitle")}
+      />
 
       <Tabs
         activeKey={activeTab}

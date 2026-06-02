@@ -12,7 +12,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -27,7 +26,6 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import {
-  ChevronRight,
   FileCode2,
   Globe2,
   Pin,
@@ -48,6 +46,7 @@ import {
 } from "../api/skills";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -262,53 +261,48 @@ export function SkillsList() {
 
   return (
     <div data-testid="skills-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("skills.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <FileCode2 size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("skills.page_title")}</h1>
-          {isCrossTenant && (
-            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="skills-cross-banner">
-              {t("skills.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Select<SkillStatus | "all">
-            value={statusFilter ?? "all"}
-            onChange={(v) => setStatusFilter(v === "all" ? undefined : (v as SkillStatus))}
-            style={{ width: 140 }}
-            aria-label={t("skills.filter_status")}
-            data-testid="skills-status-filter"
-            options={[
-              { value: "all", label: t("skills.filter_status_all") },
-              ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
-            ]}
-          />
-          <Input
-            placeholder={t("skills.filter_category")}
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            style={{ width: 160 }}
-            allowClear
-            data-testid="skills-category-filter"
-          />
-          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
-            {t("common.refresh")}
-          </Button>
-          <Button onClick={onImportClick} icon={<Upload size={14} strokeWidth={1.75} />} data-testid="skills-import-btn">
-            {t("skills.import_zip")}
-          </Button>
-          <Button type="primary" icon={<Plus size={14} strokeWidth={1.75} />} onClick={() => setCreateOpen(true)} data-testid="skills-create-btn">
-            {t("skills.create")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("skills.subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<FileCode2 size={18} strokeWidth={1.5} />}
+        title={t("skills.page_title")}
+        subtitle={t("skills.subtitle")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="skills-cross-banner">
+                {t("skills.cross_tenant_banner")}
+              </Tag>
+            )}
+            <Select<SkillStatus | "all">
+              value={statusFilter ?? "all"}
+              onChange={(v) => setStatusFilter(v === "all" ? undefined : (v as SkillStatus))}
+              style={{ width: 140 }}
+              aria-label={t("skills.filter_status")}
+              data-testid="skills-status-filter"
+              options={[
+                { value: "all", label: t("skills.filter_status_all") },
+                ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
+              ]}
+            />
+            <Input
+              placeholder={t("skills.filter_category")}
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              style={{ width: 160 }}
+              allowClear
+              data-testid="skills-category-filter"
+            />
+            <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+              {t("common.refresh")}
+            </Button>
+            <Button onClick={onImportClick} icon={<Upload size={14} strokeWidth={1.75} />} data-testid="skills-import-btn">
+              {t("skills.import_zip")}
+            </Button>
+            <Button type="primary" icon={<Plus size={14} strokeWidth={1.75} />} onClick={() => setCreateOpen(true)} data-testid="skills-create-btn">
+              {t("skills.create")}
+            </Button>
+          </>
+        }
+      />
 
       <input
         ref={fileInputRef}

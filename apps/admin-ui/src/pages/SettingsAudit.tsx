@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   DatePicker,
   Drawer,
@@ -33,7 +32,6 @@ import type { Dayjs } from "dayjs";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronRight,
   Globe2,
   ShieldAlert,
   ShieldOff,
@@ -41,6 +39,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   listAudit,
   type AuditEntry,
@@ -176,24 +175,18 @@ export function SettingsAudit() {
 
   return (
     <div data-testid="audit-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("audit.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 4 }}>
-          <ShieldAlert size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("audit.page_title")}</h1>
-          {isCrossTenant && (
+      <PageHeader
+        icon={<ShieldAlert size={18} strokeWidth={1.5} />}
+        title={t("audit.page_title")}
+        subtitle={t("audit.subtitle")}
+        actions={
+          isCrossTenant && (
             <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="audit-cross-banner">
               {t("audit.cross_tenant_banner")}
             </Tag>
-          )}
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "4px 0 16px" }}>
-          {t("audit.subtitle")}
-        </p>
-      </div>
+          )
+        }
+      />
 
       <div
         style={{

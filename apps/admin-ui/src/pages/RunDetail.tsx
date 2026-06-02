@@ -16,12 +16,12 @@
  * H.4 wires the Tempo / Grafana embed.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Breadcrumb, Button, Card, Empty, Skeleton, Space, Tag, Typography } from "antd";
-import { Link, useParams } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { Alert, Button, Card, Empty, Skeleton, Space, Tag, Typography } from "antd";
+import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   getRun,
   type RunDetail as RunDetailModel,
@@ -133,36 +133,28 @@ export function RunDetail() {
 
   return (
     <div data-testid="run-detail-root">
-      <Breadcrumb
-        items={[
-          { title: <Link to="/runs">{t("cmdk.label_runs")}</Link> },
-          { title: <Text code style={{ fontSize: 12 }}>{run.run_id.slice(0, 8)}…</Text> },
-        ]}
-        style={{ marginBottom: 8, fontSize: 13 }}
-        separator={<ChevronRight size={12} strokeWidth={1.5} style={{ verticalAlign: "middle" }} />}
-      />
-
-      <div className="hx-page-header">
-        <div>
-          <Space size={8} align="center">
-            <h1 style={{ fontFamily: "var(--hx-font-mono)", margin: 0 }}>
-              {run.run_id.slice(0, 12)}…
-            </h1>
+      <PageHeader
+        title={`${run.run_id.slice(0, 12)}…`}
+        backTo={{ label: t("nav.runs"), to: "/runs" }}
+        subtitle={
+          <Space size={8} align="center" wrap>
             <Tag color={STATUS_COLOR[run.status] ?? "default"} bordered={false}>
               {run.status}
             </Tag>
+            <span>
+              {t("run_detail.thread_label")}:{" "}
+              <Text code style={{ fontSize: 12 }}>
+                {run.thread_id.slice(0, 12)}…
+              </Text>
+            </span>
           </Space>
-          <p style={{ margin: "8px 0 0", color: "var(--hx-text-secondary)", fontSize: 13 }}>
-            {t("run_detail.thread_label")}:{" "}
-            <Text code style={{ fontSize: 12 }}>
-              {run.thread_id.slice(0, 12)}…
-            </Text>
-          </p>
-        </div>
-        <Button onClick={() => void refresh()} loading={loading}>
-          {t("common.refresh")}
-        </Button>
-      </div>
+        }
+        actions={
+          <Button onClick={() => void refresh()} loading={loading}>
+            {t("common.refresh")}
+          </Button>
+        }
+      />
 
       {approval !== null && (
         <ApprovalCard
