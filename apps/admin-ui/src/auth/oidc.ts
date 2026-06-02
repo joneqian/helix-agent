@@ -113,6 +113,7 @@ export function getUserManager(): UserManager | null {
 /** Test-only: reset the singleton between cases. */
 export function _resetUserManagerForTests(): void {
   cachedManager = null;
+  callbackPromise = null;
 }
 
 export async function signIn(returnPath = "/agents"): Promise<void> {
@@ -130,13 +131,24 @@ export interface SignInResult {
   returnPath: string;
 }
 
+/** In-flight (and settled) code-exchange promise. The authorization code
+ *  is single-use, but React StrictMode mounts the callback effect twice in
+ *  dev (and a stray re-render could re-invoke it anywhere), so a second
+ *  ``signinRedirectCallback`` would hit the IdP with an already-redeemed
+ *  code and fail "Code not valid". Caching the promise makes duplicate
+ *  calls share one exchange. A full-page redirect from the IdP reloads the
+ *  module, so the cache is naturally scoped to a single callback navigation. */
+let callbackPromise: Promise<SignInResult> | null = null;
+
 export async function handleCallback(): Promise<SignInResult> {
+  if (callbackPromise !== null) return callbackPromise;
   const manager = getUserManager();
   if (manager === null) {
+    // Not cached: a misconfiguration isn't a consumed-code situation.
     throw new Error("OIDC is not configured");
   }
-  const user = await manager.signinRedirectCallback();
-  return extractSignInResult(user);
+  callbackPromise = manager.signinRedirectCallback().then(extractSignInResult);
+  return callbackPromise;
 }
 
 export async function signOut(): Promise<void> {
