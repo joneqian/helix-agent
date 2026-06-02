@@ -3,10 +3,11 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../../../i18n";
 import * as sdk from "../../../api/platform_embedding_config";
+import type { PlatformEmbeddingConfigView } from "../../../api/platform_embedding_config";
 import { ApiError } from "../../../api/client";
 import { PlatformEmbeddingSection } from "../PlatformEmbeddingSection";
 
-const VIEW = {
+const VIEW: PlatformEmbeddingConfigView = {
   embedding: { provider: "qwen", model: "text-embedding-v4" },
   rerank: null,
   available_embedding: [
@@ -55,6 +56,20 @@ describe("PlatformEmbeddingSection", () => {
         expect.objectContaining({ embedding_provider: "glm", embedding_model: "embedding-3" }),
       ),
     );
+  });
+
+  it("warns and disables Save when embedding is unconfigured", async () => {
+    const unconfigured: PlatformEmbeddingConfigView = {
+      embedding: null,
+      rerank: null,
+      available_embedding: VIEW.available_embedding,
+      available_rerank: VIEW.available_rerank,
+    };
+    vi.spyOn(sdk, "getPlatformEmbeddingConfig").mockResolvedValueOnce(unconfigured);
+    render(<PlatformEmbeddingSection />);
+    await screen.findByTestId("pe-root");
+    expect(screen.getByTestId("pe-unconfigured")).toBeInTheDocument();
+    expect(screen.getByTestId("pe-save")).toBeDisabled();
   });
 
   it("surfaces a 422 error code as a message", async () => {

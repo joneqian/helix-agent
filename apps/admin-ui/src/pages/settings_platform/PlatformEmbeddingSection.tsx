@@ -269,7 +269,13 @@ export function PlatformEmbeddingSection({ onSaved }: PlatformEmbeddingSectionPr
         )}
 
         <div>
-          <Button type="primary" loading={saving} onClick={onSave} data-testid="pe-save">
+          <Button
+            type="primary"
+            loading={saving}
+            disabled={!embeddingProvider || !embeddingModel || saving}
+            onClick={onSave}
+            data-testid="pe-save"
+          >
             {t("settings_platform.embedding_save")}
           </Button>
         </div>
