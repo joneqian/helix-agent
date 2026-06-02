@@ -8,9 +8,9 @@
  * config page, where config / quotas / credentials are edited.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Breadcrumb, Button, Popconfirm, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Popconfirm, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { Building, ChevronRight } from "lucide-react";
+import { Building } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -23,6 +23,7 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { useTenantScope } from "../tenant/TenantScopeContext";
 import { CreateTenantDrawer } from "../components/CreateTenantDrawer";
+import { PageHeader } from "../components/PageHeader";
 
 export function SettingsTenants() {
   const { t } = useTranslation();
@@ -154,29 +155,22 @@ export function SettingsTenants() {
 
   return (
     <div data-testid="st-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("settings_tenants.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <Building size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_tenants.page_title")}</h1>
-          {isSystemAdmin && (
+      <PageHeader
+        icon={<Building size={18} strokeWidth={1.5} />}
+        title={t("settings_tenants.page_title")}
+        subtitle={t("settings_tenants.subtitle")}
+        actions={
+          isSystemAdmin && (
             <Button
               type="primary"
               data-testid="tenants-create"
-              style={{ marginLeft: "auto" }}
               onClick={() => setCreateOpen(true)}
             >
               {t("settings_tenants.create")}
             </Button>
-          )}
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_tenants.subtitle")}
-        </p>
-      </div>
+          )
+        }
+      />
 
       {!isSystemAdmin ? (
         <Alert

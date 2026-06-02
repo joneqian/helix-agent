@@ -20,7 +20,6 @@ import { useSearchParams } from "react-router-dom";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Checkbox,
   Col,
@@ -42,7 +41,6 @@ import {
 import type { TableColumnsType } from "antd";
 import {
   AlertTriangle,
-  ChevronRight,
   Copy,
   Key,
   RotateCcw,
@@ -53,6 +51,7 @@ import { useTranslation } from "react-i18next";
 import type { Dayjs } from "dayjs";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   API_KEY_SCOPES,
   createApiKey,
@@ -308,29 +307,21 @@ export function SettingsApiKeys() {
 
   return (
     <div>
-      <Breadcrumb
-        items={[{ title: "Settings" }, { title: "API Keys" }]}
-        style={{ marginBottom: 8, fontSize: 13 }}
-        separator={<ChevronRight size={12} strokeWidth={1.5} style={{ verticalAlign: "middle" }} />}
+      <PageHeader
+        title={t("api_keys.page_title")}
+        subtitle={t("api_keys.subtitle")}
+        actions={
+          <Button
+            type="primary"
+            icon={<Key size={14} strokeWidth={1.5} />}
+            disabled={accounts.length === 0}
+            onClick={() => setCreateOpen(true)}
+            data-testid="api-key-create-open"
+          >
+            {t("api_keys.create")}
+          </Button>
+        }
       />
-
-      <div className="hx-page-header">
-        <div>
-          <h1>{t("api_keys.page_title")}</h1>
-          <p style={{ margin: "8px 0 0", color: "var(--hx-text-secondary)" }}>
-            {t("api_keys.subtitle")}
-          </p>
-        </div>
-        <Button
-          type="primary"
-          icon={<Key size={14} strokeWidth={1.5} />}
-          disabled={accounts.length === 0}
-          onClick={() => setCreateOpen(true)}
-          data-testid="api-key-create-open"
-        >
-          {t("api_keys.create")}
-        </Button>
-      </div>
 
       <Row gutter={24}>
         <Col flex="200px">

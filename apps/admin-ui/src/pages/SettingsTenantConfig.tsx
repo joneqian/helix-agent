@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Card,
   Empty,
@@ -26,10 +25,11 @@ import {
   Typography,
 } from "antd";
 import Editor from "@monaco-editor/react";
-import { ChevronRight, Edit3, Save, Settings2, X } from "lucide-react";
+import { Edit3, Save, Settings2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   getTenantConfig,
   upsertTenantConfig,
@@ -173,56 +173,51 @@ export function SettingsTenantConfig() {
 
   return (
     <div data-testid="config-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("settings_ops.config_page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <Settings2 size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_ops.config_page_title")}</h1>
-          {effectiveTenantId !== null && (
-            <Tag color="default" data-testid="config-tenant-tag">
-              tenant:{" "}
-              <Text code style={{ fontSize: 11 }}>{effectiveTenantId.slice(0, 8)}…</Text>
-            </Tag>
-          )}
-          {isDirty && editing && (
-            <Tag color="warning" data-testid="config-dirty-tag">{t("settings_ops.dirty")}</Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          {editing ? (
-            <Space>
-              <Button onClick={onCancel} icon={<X size={14} strokeWidth={1.75} />}>
-                {t("common.cancel")}
-              </Button>
+      <PageHeader
+        icon={<Settings2 size={18} strokeWidth={1.5} />}
+        title={t("settings_ops.config_page_title")}
+        subtitle={t("settings_ops.config_subtitle")}
+        actions={
+          <>
+            {effectiveTenantId !== null && (
+              <Tag color="default" data-testid="config-tenant-tag">
+                tenant:{" "}
+                <Text code style={{ fontSize: 11 }}>{effectiveTenantId.slice(0, 8)}…</Text>
+              </Tag>
+            )}
+            {isDirty && editing && (
+              <Tag color="warning" data-testid="config-dirty-tag">{t("settings_ops.dirty")}</Tag>
+            )}
+            {editing ? (
+              <Space>
+                <Button onClick={onCancel} icon={<X size={14} strokeWidth={1.75} />}>
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={onSave}
+                  loading={submitting}
+                  disabled={!parseResult.ok || !isDirty}
+                  icon={<Save size={14} strokeWidth={1.75} />}
+                  data-testid="config-save-btn"
+                >
+                  {t("common.save")}
+                </Button>
+              </Space>
+            ) : (
               <Button
                 type="primary"
-                onClick={onSave}
-                loading={submitting}
-                disabled={!parseResult.ok || !isDirty}
-                icon={<Save size={14} strokeWidth={1.75} />}
-                data-testid="config-save-btn"
+                onClick={onEdit}
+                icon={<Edit3 size={14} strokeWidth={1.75} />}
+                disabled={effectiveTenantId === null || record === null}
+                data-testid="config-edit-btn"
               >
-                {t("common.save")}
+                {t("common.edit")}
               </Button>
-            </Space>
-          ) : (
-            <Button
-              type="primary"
-              onClick={onEdit}
-              icon={<Edit3 size={14} strokeWidth={1.75} />}
-              disabled={effectiveTenantId === null || record === null}
-              data-testid="config-edit-btn"
-            >
-              {t("common.edit")}
-            </Button>
-          )}
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_ops.config_subtitle")}
-        </p>
-      </div>
+            )}
+          </>
+        }
+      />
 
       {effectiveTenantId === null && (
         <Alert

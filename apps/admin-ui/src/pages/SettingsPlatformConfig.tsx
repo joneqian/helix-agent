@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Form,
   Input,
@@ -28,9 +27,10 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, KeyRound, RefreshCw } from "lucide-react";
+import { KeyRound, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
 import {
   deletePlatformProvider,
   deletePlatformTool,
@@ -277,25 +277,18 @@ export function SettingsPlatformConfig() {
 
   return (
     <div data-testid="pc-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("settings_platform.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          <KeyRound size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_platform.page_title")}</h1>
-          <span style={{ flex: 1 }} />
-          {isSystemAdmin && (
+      <PageHeader
+        icon={<KeyRound size={18} strokeWidth={1.5} />}
+        title={t("settings_platform.page_title")}
+        subtitle={t("settings_platform.subtitle")}
+        actions={
+          isSystemAdmin && (
             <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
               {t("common.refresh")}
             </Button>
-          )}
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("settings_platform.subtitle")}
-        </p>
-      </div>
+          )
+        }
+      />
 
       {!isSystemAdmin ? (
         <Alert

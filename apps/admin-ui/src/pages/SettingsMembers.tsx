@@ -12,7 +12,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -29,9 +28,10 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { ChevronRight, KeyRound, RefreshCw, Send, Trash2, UserPlus, Users } from "lucide-react";
+import { KeyRound, RefreshCw, Send, Trash2, UserPlus, Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
 import {
   inviteMembers,
   listMembers,
@@ -332,64 +332,42 @@ export function SettingsMembers() {
 
   return (
     <div data-testid="members-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[
-            { title: t("common.home") },
-            { title: t("settings_members.page_title") },
-          ]}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            marginTop: 8,
-            marginBottom: 16,
-          }}
-        >
-          <Users size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0 }}>{t("settings_members.page_title")}</h1>
-          <span style={{ flex: 1 }} />
-          <Segmented<StatusFilter>
-            value={statusFilter}
-            onChange={(value) => setStatusFilter(value)}
-            options={STATUS_FILTERS.map((s) => ({
-              value: s,
-              label:
-                s === "all"
-                  ? t("settings_members.filter_all")
-                  : t(`settings_members.status_${s}`),
-            }))}
-            data-testid="members-status-filter"
-          />
-          <Button
-            onClick={refresh}
-            loading={loading}
-            icon={<RefreshCw size={14} strokeWidth={1.5} />}
-          >
-            {t("common.refresh")}
-          </Button>
-          <Button
-            type="primary"
-            icon={<UserPlus size={14} strokeWidth={1.5} />}
-            onClick={() => setInviteOpen(true)}
-            data-testid="members-invite-btn"
-          >
-            {t("settings_members.invite")}
-          </Button>
-        </div>
-        <p
-          style={{
-            color: "var(--hx-text-secondary)",
-            fontSize: 13,
-            margin: "0 0 12px",
-          }}
-        >
-          {t("settings_members.subtitle")}
-        </p>
-      </div>
+      <PageHeader
+        icon={<Users size={18} strokeWidth={1.5} />}
+        title={t("settings_members.page_title")}
+        subtitle={t("settings_members.subtitle")}
+        actions={
+          <>
+            <Segmented<StatusFilter>
+              value={statusFilter}
+              onChange={(value) => setStatusFilter(value)}
+              options={STATUS_FILTERS.map((s) => ({
+                value: s,
+                label:
+                  s === "all"
+                    ? t("settings_members.filter_all")
+                    : t(`settings_members.status_${s}`),
+              }))}
+              data-testid="members-status-filter"
+            />
+            <Button
+              onClick={refresh}
+              loading={loading}
+              icon={<RefreshCw size={14} strokeWidth={1.5} />}
+            >
+              {t("common.refresh")}
+            </Button>
+            <Button
+              type="primary"
+              icon={<UserPlus size={14} strokeWidth={1.5} />}
+              onClick={() => setInviteOpen(true)}
+              data-testid="members-invite-btn"
+            >
+              {t("settings_members.invite")}
+            </Button>
+          </>
+        }
+      />
 
       {error !== null && (
         <Alert
