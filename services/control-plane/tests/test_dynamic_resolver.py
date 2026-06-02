@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from control_plane.runtime import DynamicResolvingEmbedder, DynamicResolvingReranker
+from helix_agent.common.credentials import CredentialsResolverError
 from orchestrator.errors import AgentFactoryError
 
 
@@ -77,6 +78,24 @@ async def test_reranker_degrades_to_identity_when_unconfigured():
     cfg.rerank = None
     rr = DynamicResolvingReranker(
         config_service=cfg, resolver=_Resolver(), secret_store=_SecretStore()
+    )
+    out = await rr.rerank(query="q", documents=["a", "b", "c"], top_k=2, tenant_id=uuid4())
+    assert out == [0, 1]  # identity order, no error
+
+
+class _RaisingResolver:
+    async def resolve_provider(self, *, tenant_id, provider):
+        raise CredentialsResolverError(
+            "no credential", mode="tenant", kind="provider", key=provider
+        )
+
+
+@pytest.mark.asyncio
+async def test_reranker_degrades_to_identity_when_credential_missing():
+    cfg = _Cfg()
+    cfg.rerank = ("qwen", "qwen3-vl-rerank")  # configured, but credential resolve fails
+    rr = DynamicResolvingReranker(
+        config_service=cfg, resolver=_RaisingResolver(), secret_store=_SecretStore()
     )
     out = await rr.rerank(query="q", documents=["a", "b", "c"], top_k=2, tenant_id=uuid4())
     assert out == [0, 1]  # identity order, no error
