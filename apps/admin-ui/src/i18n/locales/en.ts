@@ -37,6 +37,7 @@ export interface TranslationKeys {
     memory: string;
     skills: string;
     triggers: string;
+    tenants: string;
     create_tenant: string;
     platform_credentials: string;
     api_keys: string;
@@ -320,6 +321,20 @@ export interface TranslationKeys {
     edit_modal_title: string;
     secret_ref_label: string;
     secret_ref_hint: string;
+  };
+  settings_tenants: {
+    page_title: string;
+    subtitle: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    col_display_name: string;
+    col_plan: string;
+    col_tenant_id: string;
+    col_created: string;
+    col_actions: string;
+    manage: string;
+    failed_to_load: string;
+    empty: string;
   };
   settings_create_tenant: {
     page_title: string;
@@ -822,6 +837,7 @@ const en: TranslationKeys = {
     memory: "Memory",
     skills: "Skills",
     triggers: "Triggers",
+    tenants: "Tenants",
     create_tenant: "Create Tenant",
     platform_credentials: "Platform Credentials",
     api_keys: "API Keys",
@@ -1123,6 +1139,21 @@ const en: TranslationKeys = {
     secret_ref_label: "Secret reference (KMS URI)",
     secret_ref_hint:
       "A secret manager reference (e.g. kms://tenant/provider-key) — never the raw API key. Leave empty to clear.",
+  },
+  settings_tenants: {
+    page_title: "Tenants",
+    subtitle:
+      "All tenants on the platform. Click Manage to switch into a tenant and edit its config, quotas, and credentials.",
+    not_admin_title: "System admin only",
+    not_admin_body: "Listing all tenants is a platform-level action available to system admins.",
+    col_display_name: "Display name",
+    col_plan: "Plan",
+    col_tenant_id: "Tenant id",
+    col_created: "Created",
+    col_actions: "Actions",
+    manage: "Manage",
+    failed_to_load: "Failed to load tenants",
+    empty: "No tenants yet — create one from Create Tenant.",
   },
   settings_create_tenant: {
     page_title: "Create Tenant",
