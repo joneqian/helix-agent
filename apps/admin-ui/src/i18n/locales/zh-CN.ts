@@ -23,7 +23,6 @@ const zhCN: TranslationKeys = {
     search_or_jump: "搜索或跳转",
     notifications: "通知",
     user_menu: "用户菜单",
-    home: "首页",
     anonymous: "匿名用户",
   },
   theme: {

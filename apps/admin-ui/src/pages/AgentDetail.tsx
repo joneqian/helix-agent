@@ -15,10 +15,9 @@
  * agent_name=…``).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
-  Breadcrumb,
   Card,
   Col,
   Empty,
@@ -29,11 +28,12 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { Bot, ChevronRight } from "lucide-react";
+import { Bot } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { getAgent, type AgentDetailResponse } from "../api/agents";
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import { ManifestTab } from "./agent_detail/ManifestTab";
 import { PlaygroundTab } from "./agent_detail/PlaygroundTab";
 
@@ -115,38 +115,12 @@ export function AgentDetail() {
 
   return (
     <div data-testid="agent-detail-root">
-      <Breadcrumb
-        items={[
-          { title: <Link to="/agents">{t("agents_page.page_title")}</Link> },
-          { title: record.name },
-        ]}
-        style={{ marginBottom: 8, fontSize: 13 }}
-        separator={
-          <ChevronRight size={12} strokeWidth={1.5} style={{ verticalAlign: "middle" }} />
-        }
-      />
-
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 16, paddingBottom: 16 }}>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 6,
-            background: "var(--hx-surface-selected)",
-            color: "var(--hx-color-brand-500)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          <Bot size={20} strokeWidth={1.5} />
-        </div>
-        <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600, lineHeight: 1.2 }}>
-            {record.name}
-          </h1>
-          <Space size={12} style={{ marginTop: 6, fontSize: 13, color: "var(--hx-text-secondary)" }}>
+      <PageHeader
+        title={record.name}
+        icon={<Bot size={20} strokeWidth={1.5} />}
+        backTo={{ label: t("nav.agents"), to: "/agents" }}
+        subtitle={
+          <Space size={12} align="center" wrap>
             <Tag color={STATUS_COLOR[record.status] ?? "default"} bordered={false}>
               {record.status}
             </Tag>
@@ -157,8 +131,8 @@ export function AgentDetail() {
               {record.spec_sha256.slice(0, 12)}…
             </Text>
           </Space>
-        </div>
-      </div>
+        }
+      />
 
       <Tabs
         activeKey={activeTab}
