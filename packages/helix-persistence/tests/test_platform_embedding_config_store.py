@@ -1,4 +1,5 @@
 import pytest
+
 from helix_agent.persistence.platform_embedding_config.memory import (
     InMemoryPlatformEmbeddingConfigStore,
 )
@@ -31,7 +32,19 @@ async def test_put_then_get_round_trips() -> None:
 @pytest.mark.asyncio
 async def test_put_is_idempotent_singleton() -> None:
     store = InMemoryPlatformEmbeddingConfigStore()
-    await store.put(embedding_provider="glm", embedding_model="embedding-3", rerank_provider=None, rerank_model=None, updated_by="a")
-    await store.put(embedding_provider="qwen", embedding_model="text-embedding-v4", rerank_provider=None, rerank_model=None, updated_by="b")
+    await store.put(
+        embedding_provider="glm",
+        embedding_model="embedding-3",
+        rerank_provider=None,
+        rerank_model=None,
+        updated_by="a",
+    )
+    await store.put(
+        embedding_provider="qwen",
+        embedding_model="text-embedding-v4",
+        rerank_provider=None,
+        rerank_model=None,
+        updated_by="b",
+    )
     row = await store.get()
     assert row is not None and row.embedding_provider == "qwen"  # last write wins, single row

@@ -761,9 +761,7 @@ def create_app(
                     # ``embedder is None`` gate can't fire; the builder checks
                     # the effective config and rejects a memory.long_term
                     # manifest when platform embedding is unconfigured.
-                    platform_embedding_config_service=(
-                        resolved_platform_embedding_config_service
-                    ),
+                    platform_embedding_config_service=(resolved_platform_embedding_config_service),
                 )
                 # Stream T (PR B) — these background workers (ingestion runner,
                 # DLQ worker, consolidator) are ALWAYS started. ``embedder`` is a
@@ -916,9 +914,7 @@ def create_app(
     app.state.skill_store = resolved_skill_store
     # Stream T (PR B) — PR C's write endpoint resolves the config service off
     # app.state to upsert the row + invalidate the cache for immediate effect.
-    app.state.platform_embedding_config_service = (
-        resolved_platform_embedding_config_service
-    )
+    app.state.platform_embedding_config_service = resolved_platform_embedding_config_service
     # Capability Uplift Sprint #4 — exposed on app.state so a future
     # PR (when skill_resolver is wired into ``make_agent_builder``) can
     # thread it through to ``_load_skills`` + ``SkillViewTool`` for

@@ -43,9 +43,7 @@ async def test_env_fallback_none_when_provider_unsupported() -> None:
     class S(_Settings):
         embedding_provider = "doubao"  # not in supported
 
-    svc = PlatformEmbeddingConfigService(
-        store=InMemoryPlatformEmbeddingConfigStore(), settings=S()
-    )
+    svc = PlatformEmbeddingConfigService(store=InMemoryPlatformEmbeddingConfigStore(), settings=S())
     assert await svc.effective_embedding_config() is None
 
 
