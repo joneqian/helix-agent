@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -271,3 +272,14 @@ class SqlTenantConfigStore(TenantConfigStore):
             await session.commit()
             await session.refresh(existing)
             return _row_to_record(existing)
+
+    async def list_all(self, *, limit: int = 50, offset: int = 0) -> list[TenantConfigRecord]:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(TenantConfigRow)
+                .order_by(TenantConfigRow.created_at)
+                .limit(limit)
+                .offset(offset)
+            )
+            rows = result.scalars().all()
+        return [_row_to_record(r) for r in rows]

@@ -66,3 +66,11 @@ class TenantConfigStore(abc.ABC):
         actor_id: str,
     ) -> TenantConfigRecord:
         """Insert-or-merge the patch. ``display_name`` is required for first insert."""
+
+    @abc.abstractmethod
+    async def list_all(self, *, limit: int = 50, offset: int = 0) -> list[TenantConfigRecord]:
+        """Return tenant config rows ordered by ``created_at`` (oldest first).
+
+        Platform-level cross-tenant read behind ``GET /v1/tenants``
+        (system_admin only). Paginated via ``limit``/``offset``.
+        """

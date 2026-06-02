@@ -173,3 +173,8 @@ class InMemoryTenantConfigStore(TenantConfigStore):
                 row = TenantConfigRecord.model_validate(row.model_dump())
             self._rows[tenant_id] = row
             return row
+
+    async def list_all(self, *, limit: int = 50, offset: int = 0) -> list[TenantConfigRecord]:
+        async with self._lock:
+            ordered = sorted(self._rows.values(), key=lambda r: r.created_at)
+        return ordered[offset : offset + limit]

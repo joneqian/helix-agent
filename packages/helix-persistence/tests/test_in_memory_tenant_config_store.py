@@ -61,3 +61,27 @@ async def test_create_rejects_existing_tenant() -> None:
     fetched = await store.get(tenant_id=tenant_id)
     assert fetched is not None
     assert fetched.display_name == "First"
+
+
+@pytest.mark.asyncio
+async def test_list_all_empty() -> None:
+    store = InMemoryTenantConfigStore()
+    assert await store.list_all() == []
+
+
+@pytest.mark.asyncio
+async def test_list_all_returns_created_tenants() -> None:
+    store = InMemoryTenantConfigStore()
+    a = await store.create(tenant_id=uuid4(), display_name="Acme", actor_id="sys")
+    b = await store.create(tenant_id=uuid4(), display_name="Beta", actor_id="sys")
+    got = {r.tenant_id for r in await store.list_all()}
+    assert got == {a.tenant_id, b.tenant_id}
+
+
+@pytest.mark.asyncio
+async def test_list_all_paginates() -> None:
+    store = InMemoryTenantConfigStore()
+    for i in range(3):
+        await store.create(tenant_id=uuid4(), display_name=f"T{i}", actor_id="sys")
+    assert len(await store.list_all(limit=2, offset=0)) == 2
+    assert len(await store.list_all(limit=2, offset=2)) == 1
