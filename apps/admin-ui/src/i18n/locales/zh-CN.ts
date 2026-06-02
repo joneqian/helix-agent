@@ -39,6 +39,7 @@ const zhCN: TranslationKeys = {
     memory: "记忆",
     skills: "技能",
     triggers: "触发器",
+    tenants: "租户",
     create_tenant: "创建租户",
     platform_credentials: "平台凭证",
     api_keys: "API 密钥",
@@ -332,6 +333,20 @@ const zhCN: TranslationKeys = {
     secret_ref_label: "密钥引用(KMS URI)",
     secret_ref_hint:
       "密钥管理器引用(如 kms://tenant/provider-key)—— 绝不是明文 API 密钥。留空表示清除。",
+  },
+  settings_tenants: {
+    page_title: "租户",
+    subtitle: "平台上的所有租户。点「管理」切进某个租户，编辑其配置、配额与凭证。",
+    not_admin_title: "仅系统管理员",
+    not_admin_body: "列出所有租户是平台级操作，仅系统管理员可用。",
+    col_display_name: "显示名",
+    col_plan: "套餐",
+    col_tenant_id: "租户 id",
+    col_created: "创建时间",
+    col_actions: "操作",
+    manage: "管理",
+    failed_to_load: "租户列表加载失败",
+    empty: "还没有租户——去「创建租户」新建一个。",
   },
   settings_create_tenant: {
     page_title: "创建租户",

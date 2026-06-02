@@ -12,6 +12,7 @@ import {
   KeyRound,
   UserCircle2,
   Users,
+  Building,
   Building2,
   Shield,
 } from "lucide-react";
@@ -38,6 +39,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const SETTINGS_ITEMS: NavItem[] = [
+  { key: "settings-tenants", labelKey: "nav.tenants", icon: <Building size={16} strokeWidth={1.5} />, path: "/settings/tenants" },
   { key: "settings-create-tenant", labelKey: "nav.create_tenant", icon: <Building2 size={16} strokeWidth={1.5} />, path: "/settings/create-tenant" },
   { key: "settings-platform", labelKey: "nav.platform_credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/platform" },
   { key: "settings-api-keys", labelKey: "nav.api_keys", icon: <Key size={16} strokeWidth={1.5} />, path: "/settings/api-keys" },
