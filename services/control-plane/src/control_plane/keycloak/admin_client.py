@@ -50,6 +50,9 @@ class KeycloakAdminClient(Protocol):
     async def set_enabled(self, *, user_id: str, enabled: bool) -> None:
         """Enable/disable an account (member suspend / reactivate)."""
 
+    async def reset_password(self, *, user_id: str, password: str, temporary: bool) -> None:
+        """Set the user's password. ``temporary=True`` forces a change on next login."""
+
     async def delete_user(self, *, user_id: str) -> None:
         """Delete an account (invite revoke); a 404 is treated as success."""
 
@@ -152,6 +155,22 @@ class HttpKeycloakAdminClient:
         if resp.status_code not in (200, 204):
             raise KeycloakUnavailableError(
                 f"set_enabled unexpected status: HTTP {resp.status_code}"
+            )
+
+    async def reset_password(self, *, user_id: str, password: str, temporary: bool) -> None:
+        try:
+            resp = await self._http.put(
+                f"{self._admin}/users/{user_id}/reset-password",
+                json={"type": "password", "value": password, "temporary": temporary},
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as exc:
+            raise KeycloakUnavailableError(f"reset_password request failed: {exc}") from exc
+        if resp.status_code >= 500:
+            raise KeycloakUnavailableError(f"reset_password 5xx: HTTP {resp.status_code}")
+        if resp.status_code not in (200, 204):
+            raise KeycloakUnavailableError(
+                f"reset_password unexpected status: HTTP {resp.status_code}"
             )
 
     async def delete_user(self, *, user_id: str) -> None:

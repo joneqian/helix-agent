@@ -14,7 +14,10 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from control_plane.keycloak.admin_client import KeycloakUser
-from control_plane.keycloak.errors import KeycloakUserExistsError
+from control_plane.keycloak.errors import (
+    KeycloakUnavailableError,
+    KeycloakUserExistsError,
+)
 
 
 @dataclass
@@ -31,6 +34,10 @@ class FakeKeycloakAdminClient:
     users: dict[str, _StoredUser] = field(default_factory=dict)
     #: Emails (lower-cased) that ``create_user`` should reject with 409.
     raise_exists_for: set[str] = field(default_factory=set)
+    #: Recorded ``reset_password`` calls as ``(user_id, password, temporary)``.
+    password_resets: list[tuple[str, str, bool]] = field(default_factory=list)
+    #: When true, ``reset_password`` raises :class:`KeycloakUnavailableError`.
+    reset_password_unavailable: bool = False
 
     @staticmethod
     def _deterministic_id(email: str) -> str:
@@ -67,6 +74,11 @@ class FakeKeycloakAdminClient:
                 email=stored.user.email,
                 enabled=enabled,
             )
+
+    async def reset_password(self, *, user_id: str, password: str, temporary: bool) -> None:
+        if self.reset_password_unavailable:
+            raise KeycloakUnavailableError("reset_password forced-unavailable (fake)")
+        self.password_resets.append((user_id, password, temporary))
 
     async def delete_user(self, *, user_id: str) -> None:
         self.users.pop(user_id, None)  # idempotent
