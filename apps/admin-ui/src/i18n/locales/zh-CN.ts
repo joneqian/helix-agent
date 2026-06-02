@@ -40,7 +40,6 @@ const zhCN: TranslationKeys = {
     skills: "技能",
     triggers: "触发器",
     tenants: "租户",
-    create_tenant: "创建租户",
     platform_credentials: "平台凭证",
     api_keys: "API 密钥",
     credentials: "凭证",

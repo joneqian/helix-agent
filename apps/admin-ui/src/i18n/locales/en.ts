@@ -38,7 +38,6 @@ export interface TranslationKeys {
     skills: string;
     triggers: string;
     tenants: string;
-    create_tenant: string;
     platform_credentials: string;
     api_keys: string;
     credentials: string;
@@ -856,7 +855,6 @@ const en: TranslationKeys = {
     skills: "Skills",
     triggers: "Triggers",
     tenants: "Tenants",
-    create_tenant: "Create Tenant",
     platform_credentials: "Platform Credentials",
     api_keys: "API Keys",
     credentials: "Credentials",
