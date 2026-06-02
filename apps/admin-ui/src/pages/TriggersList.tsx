@@ -16,7 +16,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Drawer,
   Empty,
@@ -32,7 +31,7 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { Clock, ChevronRight, Copy, Globe2, Plus, RefreshCw, Trash2, Webhook } from "lucide-react";
+import { Clock, Copy, Globe2, Plus, RefreshCw, Trash2, Webhook } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -48,6 +47,7 @@ import {
 } from "../api/triggers";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
+import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
 
@@ -273,35 +273,32 @@ export function TriggersList() {
 
   return (
     <div data-testid="triggers-root">
-      <div className="hx-page-header">
-        <Breadcrumb
-          separator={<ChevronRight size={12} strokeWidth={1.5} />}
-          items={[{ title: t("common.home") }, { title: t("triggers.page_title") }]}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8, marginBottom: 16 }}>
-          {activeTab === "cron" ? (
-            <Clock size={20} strokeWidth={1.5} />
+      <PageHeader
+        icon={
+          activeTab === "cron" ? (
+            <Clock size={18} strokeWidth={1.5} />
           ) : (
-            <Webhook size={20} strokeWidth={1.5} />
-          )}
-          <h1 style={{ margin: 0 }}>{t("triggers.page_title")}</h1>
-          {isCrossTenant && (
-            <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="triggers-cross-banner">
-              {t("triggers.cross_tenant_banner")}
-            </Tag>
-          )}
-          <span style={{ flex: 1 }} />
-          <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
-            {t("common.refresh")}
-          </Button>
-          <Button type="primary" icon={<Plus size={14} strokeWidth={1.75} />} onClick={() => openCreate(activeTab)} data-testid="triggers-create-btn">
-            {t("triggers.create")}
-          </Button>
-        </div>
-        <p style={{ color: "var(--hx-text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
-          {t("triggers.subtitle")}
-        </p>
-      </div>
+            <Webhook size={18} strokeWidth={1.5} />
+          )
+        }
+        title={t("triggers.page_title")}
+        subtitle={t("triggers.subtitle")}
+        actions={
+          <>
+            {isCrossTenant && (
+              <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="triggers-cross-banner">
+                {t("triggers.cross_tenant_banner")}
+              </Tag>
+            )}
+            <Button onClick={refresh} loading={loading} icon={<RefreshCw size={14} strokeWidth={1.5} />}>
+              {t("common.refresh")}
+            </Button>
+            <Button type="primary" icon={<Plus size={14} strokeWidth={1.75} />} onClick={() => openCreate(activeTab)} data-testid="triggers-create-btn">
+              {t("triggers.create")}
+            </Button>
+          </>
+        }
+      />
 
       <Tabs
         activeKey={activeTab}

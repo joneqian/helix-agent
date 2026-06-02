@@ -25,7 +25,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
-  Breadcrumb,
   Button,
   Card,
   Select,
@@ -36,7 +35,6 @@ import {
   Typography,
 } from "antd";
 import {
-  ChevronRight,
   Download,
   FileCode2,
   Pin,
@@ -45,10 +43,11 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
 import {
   exportSkillVersion,
   getSkill,
@@ -280,47 +279,36 @@ export function SkillDetail() {
 
   return (
     <div data-testid="skill-detail-root">
-      <Breadcrumb
-        separator={<ChevronRight size={12} strokeWidth={1.5} />}
-        items={[
-          { title: <Link to="/skills">{t("skills.page_title")}</Link> },
-          {
-            title: (
-              <Text code style={{ fontSize: 12 }}>
-                {skill.name}
-              </Text>
-            ),
-          },
-        ]}
-        style={{ marginBottom: 8 }}
-      />
-
-      <div className="hx-page-header">
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <FileCode2 size={20} strokeWidth={1.5} />
-          <h1 style={{ margin: 0, fontFamily: "var(--hx-font-mono)" }}>{skill.name}</h1>
-          <Tag color={STATUS_COLOR[skill.status]}>{skill.status}</Tag>
-          {skill.latest_version !== null && skill.latest_version > 0 && (
-            <Tooltip title={t("skills.latest_version_hint")}>
-              <Tag bordered={false}>v{skill.latest_version}</Tag>
-            </Tooltip>
-          )}
-          {/* Hero-level high-risk badge sourced from the latest version
-              so the status select gate is visually obvious without
-              expanding the version picker. */}
-          {isLatestHighRisk && (
-            <Tooltip title={t("skills.detail_high_risk_tooltip")}>
-              <Tag
-                bordered={false}
-                color="error"
-                icon={<ShieldAlert size={11} strokeWidth={1.75} style={{ marginRight: 4 }} />}
-                data-testid="skill-hero-high-risk-badge"
-              >
-                🔒 {t("skills.detail_high_risk_badge")}
-              </Tag>
-            </Tooltip>
-          )}
-          <span style={{ flex: 1 }} />
+      <PageHeader
+        icon={<FileCode2 size={18} strokeWidth={1.5} />}
+        title={skill.name}
+        backTo={{ label: t("nav.skills"), to: "/skills" }}
+        subtitle={
+          <Space size={6} wrap>
+            <Tag color={STATUS_COLOR[skill.status]}>{skill.status}</Tag>
+            {skill.latest_version !== null && skill.latest_version > 0 && (
+              <Tooltip title={t("skills.latest_version_hint")}>
+                <Tag bordered={false}>v{skill.latest_version}</Tag>
+              </Tooltip>
+            )}
+            {/* Hero-level high-risk badge sourced from the latest version
+                so the status select gate is visually obvious without
+                expanding the version picker. */}
+            {isLatestHighRisk && (
+              <Tooltip title={t("skills.detail_high_risk_tooltip")}>
+                <Tag
+                  bordered={false}
+                  color="error"
+                  icon={<ShieldAlert size={11} strokeWidth={1.75} style={{ marginRight: 4 }} />}
+                  data-testid="skill-hero-high-risk-badge"
+                >
+                  🔒 {t("skills.detail_high_risk_badge")}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        }
+        actions={
           <Space size={6}>
             {/* Sprint #4 (Mini-ADR U-30) — pin button. Disabled for
                 non-admin callers on high-risk skills (mirrors the
@@ -386,8 +374,8 @@ export function SkillDetail() {
               })}
             />
           </Space>
-        </div>
-      </div>
+        }
+      />
 
       {selectedVersion !== null && (
         <MetadataPanel skill={skill} version={selectedVersion} />

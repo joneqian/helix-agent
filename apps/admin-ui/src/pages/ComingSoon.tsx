@@ -2,13 +2,13 @@ import { Empty } from "antd";
 import { Construction } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { PageHeader } from "../components/PageHeader";
+
 export function ComingSoon({ title }: { title: string }) {
   const { t } = useTranslation();
   return (
     <div>
-      <div className="hx-page-header">
-        <h1>{title}</h1>
-      </div>
+      <PageHeader title={title} />
       <Empty
         image={<Construction size={48} strokeWidth={1.5} style={{ color: "var(--hx-text-tertiary)", margin: "0 auto" }} />}
         description={
