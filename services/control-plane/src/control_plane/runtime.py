@@ -24,6 +24,7 @@ from uuid import UUID
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
+from control_plane.platform_embedding_config import PlatformEmbeddingConfigService
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
 from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
 from helix_agent.persistence import ArtifactStore, KnowledgeStore
@@ -157,6 +158,12 @@ def make_provider_key_resolver(
     return _resolve
 
 
+def _declares_long_term(spec: AgentSpec) -> bool:
+    """True when the manifest declares ``memory.long_term`` (Stream T)."""
+    memory = spec.spec.memory
+    return memory is not None and memory.long_term is not None
+
+
 def make_agent_builder(
     secret_store: SecretStore,
     checkpointer: BaseCheckpointSaver[Any],
@@ -167,6 +174,7 @@ def make_agent_builder(
     subagent_spec_resolver: SubagentSpecResolver | None = None,
     mcp_allowlist_provider: Callable[[UUID], Awaitable[Sequence[str]]] | None = None,
     credentials_resolver: CredentialsResolver | None = None,
+    platform_embedding_config_service: PlatformEmbeddingConfigService | None = None,
 ) -> AgentBuilder:
     """Production :data:`AgentBuilder` bound to a SecretStore + checkpointer.
 
@@ -184,9 +192,29 @@ def make_agent_builder(
     resolver so a cycle in production is rejected at build time
     (``AgentFactoryError``) rather than blowing the depth cap at run
     time.
+
+    ``platform_embedding_config_service`` (Stream T, PR B) hosts the
+    build-time embedding gate. The dynamic embedder is never ``None`` (it
+    resolves the live config per call), so the orchestrator's
+    ``embedder is None`` gate can no longer fire; this builder checks the
+    effective config instead — a manifest declaring ``memory.long_term``
+    with platform embedding unconfigured is rejected here at build time.
+    ``None`` skips the check (unit tests / the placeholder builder
+    ``make_agent_runtime`` installs before the lifespan swap); the
+    orchestrator gate stays as defense.
     """
 
     async def _build(spec: AgentSpec, *, tenant_id: UUID | None = None) -> BuiltAgent:
+        # Stream T (PR B) — build-time embedding gate. A manifest that
+        # declares long-term memory needs a configured platform embedder;
+        # the dynamic embedder object is always present, so we check the
+        # effective config rather than ``embedder is None``.
+        if platform_embedding_config_service is not None and _declares_long_term(spec):
+            if await platform_embedding_config_service.effective_embedding_config() is None:
+                raise AgentFactoryError(
+                    "manifest declares memory.long_term but platform embedding is not "
+                    "configured — configure it in platform settings"
+                )
         if subagent_spec_resolver is not None and spec.spec.subagents:
             detect_subagent_cycle(spec, resolve=subagent_spec_resolver)
         # Stream O (Mini-ADR O-14) — apply the tenant's MCP server allowlist
@@ -292,6 +320,70 @@ class ResolvingReranker:
             return list(range(len(documents)))[:top_k]
         model_spec = ModelSpec.model_validate(
             {"provider": self.provider, "name": self.model, "api_key_ref": secret_ref}
+        )
+        router = await build_llm_router(model_spec, secret_store=self.secret_store)
+        return await LLMReranker(llm_caller=router).rerank(
+            query=query, documents=documents, top_k=top_k, tenant_id=tenant_id
+        )
+
+
+@dataclass(frozen=True)
+class DynamicResolvingEmbedder:
+    """Embedder reading the live platform embedding config per call so an
+    admin's change takes effect without restart (Stream T, Mini-ADR T-3)."""
+
+    config_service: PlatformEmbeddingConfigService
+    resolver: CredentialsResolver
+    secret_store: SecretStore
+
+    async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        if not texts:
+            return []
+        cfg = await self.config_service.effective_embedding_config()
+        if cfg is None:
+            raise AgentFactoryError(
+                "platform embedding is not configured — configure it in platform settings"
+            )
+        provider, model = cfg
+        secret_ref = await self.resolver.resolve_provider(tenant_id=tenant_id, provider=provider)
+        api_key = await self.secret_store.get(parse_secret_ref(secret_ref))
+        delegate = OpenAICompatibleEmbedder(
+            client=HTTPEmbeddingClient(api_key=api_key), model=model
+        )
+        return await delegate.embed(texts, tenant_id=tenant_id)
+
+
+@dataclass(frozen=True)
+class DynamicResolvingReranker:
+    """Reranker reading the live platform rerank config per call; degrades to
+    identity order when rerank is unconfigured (Stream T, Mini-ADR T-3)."""
+
+    config_service: PlatformEmbeddingConfigService
+    resolver: CredentialsResolver
+    secret_store: SecretStore
+
+    async def rerank(
+        self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+    ) -> list[int]:
+        if not documents:
+            return []
+        cfg = await self.config_service.effective_rerank_config()
+        if cfg is None:
+            return list(range(len(documents)))[:top_k]
+        provider, model = cfg
+        try:
+            secret_ref = await self.resolver.resolve_provider(
+                tenant_id=tenant_id, provider=provider
+            )
+        except CredentialsResolverError:
+            logger.info(
+                "knowledge.rerank_skipped — no credential for provider=%s tenant=%s",
+                provider,
+                tenant_id,
+            )
+            return list(range(len(documents)))[:top_k]
+        model_spec = ModelSpec.model_validate(
+            {"provider": provider, "name": model, "api_key_ref": secret_ref}
         )
         router = await build_llm_router(model_spec, secret_store=self.secret_store)
         return await LLMReranker(llm_caller=router).rerank(
