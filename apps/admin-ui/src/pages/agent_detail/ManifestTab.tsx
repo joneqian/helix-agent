@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../../api/client";
 import { updateAgent, type AgentDetailResponse } from "../../api/agents";
+import { ManifestEditor } from "../../components/manifest-editor";
 
 const { Text } = Typography;
 
@@ -135,24 +136,27 @@ export function ManifestTab({ detail, onSaved }: ManifestTabProps) {
         />
       )}
 
-      <Editor
-        language="yaml"
-        value={mode === "view" ? snapshotYaml : buffer}
-        onChange={(v) => setBuffer(v ?? "")}
-        theme="vs-dark"
-        height="calc(100vh - 360px)"
-        options={{
-          readOnly: mode === "view",
-          minimap: { enabled: false },
-          fontFamily: "var(--hx-font-mono)",
-          fontSize: 12,
-          tabSize: 2,
-          scrollBeyondLastLine: false,
-          renderWhitespace: "boundary",
-          wordWrap: "on",
-        }}
-        data-testid="manifest-editor"
-      />
+      {mode === "view" ? (
+        <Editor
+          language="yaml"
+          value={snapshotYaml}
+          theme="vs-dark"
+          height="calc(100vh - 360px)"
+          options={{
+            readOnly: true,
+            minimap: { enabled: false },
+            fontFamily: "var(--hx-font-mono)",
+            fontSize: 12,
+            tabSize: 2,
+            scrollBeyondLastLine: false,
+            renderWhitespace: "boundary",
+            wordWrap: "on",
+          }}
+          data-testid="manifest-editor"
+        />
+      ) : (
+        <ManifestEditor mode="edit" initialYaml={snapshotYaml} onChange={setBuffer} />
+      )}
     </Card>
   );
 }

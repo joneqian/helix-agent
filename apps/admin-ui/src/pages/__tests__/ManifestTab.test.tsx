@@ -1,19 +1,14 @@
 /**
- * ManifestTab tests — Stream H.2 PR 1.
+ * ManifestTab tests — Stream S PR E.
  *
- * Monaco is mocked to a plain ``<textarea>`` so jsdom can exercise the
- * view ↔ edit ↔ save state machine without spinning up workers. The
- * ``updateAgent`` SDK call is stubbed so the test stays pure-frontend.
+ * View mode = read-only Monaco snapshot. Edit mode = the visual
+ * <ManifestEditor> (form/YAML). Monaco is mocked to a textarea; the schema
+ * and model-catalog SDKs are stubbed because edit mode mounts ManifestEditor.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../../i18n";
-
-import { ApiError } from "../../api/client";
-import * as agentsSdk from "../../api/agents";
-import { ManifestTab } from "../agent_detail/ManifestTab";
-import type { AgentDetailResponse } from "../../api/agents";
 
 vi.mock("@monaco-editor/react", () => {
   const Editor = ({
@@ -22,7 +17,7 @@ vi.mock("@monaco-editor/react", () => {
     options,
     ["data-testid"]: testId,
   }: {
-    value: string;
+    value?: string;
     onChange?: (v: string | undefined) => void;
     options?: { readOnly?: boolean };
     "data-testid"?: string;
@@ -36,6 +31,15 @@ vi.mock("@monaco-editor/react", () => {
   );
   return { default: Editor };
 });
+
+import { ApiError } from "../../api/client";
+import * as agentsSdk from "../../api/agents";
+import * as schemaSdk from "../../api/manifest_schema";
+import * as catalogSdk from "../../api/model_catalog";
+import { __resetSchemaCacheForTest } from "../../components/manifest-editor/schema";
+import { __resetCatalogCacheForTest } from "../../components/manifest-editor/catalog";
+import { ManifestTab } from "../agent_detail/ManifestTab";
+import type { AgentDetailResponse } from "../../api/agents";
 
 const sampleDetail: AgentDetailResponse = {
   record: {
@@ -52,22 +56,36 @@ const sampleDetail: AgentDetailResponse = {
       apiVersion: "helix.io/v1",
       kind: "Agent",
       metadata: { name: "demo-agent", version: "1.0.0" },
-      spec: { model: "claude-sonnet-4-6" },
+      spec: { model: { provider: "anthropic", name: "claude-sonnet-4-6" } },
     },
   },
-};
+} as AgentDetailResponse;
 
 const onSaved = vi.fn();
-const updateAgentMock = vi.spyOn(agentsSdk, "updateAgent");
+// Re-installed in beforeEach: afterEach() runs vi.restoreAllMocks(), which would
+// otherwise permanently restore a module-level spy after the first test.
+let updateAgentMock: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   onSaved.mockClear();
-  updateAgentMock.mockReset();
+  updateAgentMock = vi.spyOn(agentsSdk, "updateAgent");
+  __resetSchemaCacheForTest();
+  __resetCatalogCacheForTest();
+  vi.spyOn(schemaSdk, "fetchAgentSchema").mockResolvedValue({
+    type: "object",
+    properties: {
+      metadata: { type: "object", properties: { name: { type: "string" } } },
+      spec: { type: "object", properties: { model: { type: "object", properties: { provider: { type: "string" }, name: { type: "string" } } } } },
+    },
+  });
+  vi.spyOn(catalogSdk, "fetchModelCatalog").mockResolvedValue({
+    providers: [
+      { provider: "anthropic", models: [{ name: "claude-sonnet-4-6", vision: true, embeddings: false, context_window: 200000, deprecated: false }] },
+    ],
+  });
 });
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("ManifestTab", () => {
   it("starts in view mode with a read-only editor and an Edit button", () => {
@@ -80,12 +98,11 @@ describe("ManifestTab", () => {
     expect(screen.queryByTestId("manifest-save-btn")).not.toBeInTheDocument();
   });
 
-  it("clicking Edit reveals Save + Cancel and makes the editor writable", async () => {
+  it("clicking Edit reveals the visual ManifestEditor plus Save + Cancel", async () => {
     const user = userEvent.setup();
     render(<ManifestTab detail={sampleDetail} onSaved={onSaved} />);
     await user.click(screen.getByTestId("manifest-edit-btn"));
-    const editor = screen.getByTestId("manifest-editor") as HTMLTextAreaElement;
-    expect(editor.readOnly).toBe(false);
+    await waitFor(() => expect(screen.getByTestId("manifest-editor-edit")).toBeInTheDocument());
     expect(screen.getByTestId("manifest-save-btn")).toBeInTheDocument();
     expect(screen.getByTestId("manifest-cancel-btn")).toBeInTheDocument();
   });
@@ -95,26 +112,26 @@ describe("ManifestTab", () => {
     updateAgentMock.mockResolvedValue(sampleDetail);
     render(<ManifestTab detail={sampleDetail} onSaved={onSaved} />);
     await user.click(screen.getByTestId("manifest-edit-btn"));
-    const editor = screen.getByTestId("manifest-editor") as HTMLTextAreaElement;
-    await user.clear(editor);
-    await user.type(editor, "edited yaml");
+    await screen.findByTestId("manifest-editor-edit");
+    // edit via the YAML tab for a deterministic buffer
+    await user.click(screen.getByTestId("manifest-tab-yaml"));
+    const ta = screen.getByTestId("monaco-stub") as HTMLTextAreaElement;
+    await user.clear(ta);
+    await user.type(ta, "edited: yaml");
     await user.click(screen.getByTestId("manifest-save-btn"));
-    await waitFor(() => {
-      expect(updateAgentMock).toHaveBeenCalledWith("demo-agent", "1.0.0", {
-        manifest_yaml: "edited yaml",
-      });
-    });
+    await waitFor(() =>
+      expect(updateAgentMock).toHaveBeenCalledWith("demo-agent", "1.0.0", { manifest_yaml: "edited: yaml" }),
+    );
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("manifest-edit-btn")).toBeInTheDocument();
   });
 
   it("surfaces an error alert when updateAgent rejects, stays in edit mode", async () => {
     const user = userEvent.setup();
-    updateAgentMock.mockRejectedValue(
-      new ApiError("name mismatch", "MANIFEST_PATH_MISMATCH", 422),
-    );
+    updateAgentMock.mockRejectedValue(new ApiError("name mismatch", "MANIFEST_PATH_MISMATCH", 422));
     render(<ManifestTab detail={sampleDetail} onSaved={onSaved} />);
     await user.click(screen.getByTestId("manifest-edit-btn"));
+    await screen.findByTestId("manifest-editor-edit");
     await user.click(screen.getByTestId("manifest-save-btn"));
     const alert = await screen.findByTestId("manifest-error");
     expect(alert).toHaveTextContent("MANIFEST_PATH_MISMATCH");
@@ -122,18 +139,14 @@ describe("ManifestTab", () => {
     expect(screen.getByTestId("manifest-save-btn")).toBeInTheDocument();
   });
 
-  it("Cancel reverts buffer changes and returns to view mode", async () => {
+  it("Cancel returns to view mode without calling updateAgent", async () => {
     const user = userEvent.setup();
     render(<ManifestTab detail={sampleDetail} onSaved={onSaved} />);
     await user.click(screen.getByTestId("manifest-edit-btn"));
-    const editor = screen.getByTestId("manifest-editor") as HTMLTextAreaElement;
-    await user.clear(editor);
-    await user.type(editor, "discard-me");
+    await screen.findByTestId("manifest-editor-edit");
     await user.click(screen.getByTestId("manifest-cancel-btn"));
     expect(updateAgentMock).not.toHaveBeenCalled();
     expect(screen.getByTestId("manifest-edit-btn")).toBeInTheDocument();
-    expect(
-      (screen.getByTestId("manifest-editor") as HTMLTextAreaElement).value,
-    ).toContain("demo-agent");
+    expect((screen.getByTestId("manifest-editor") as HTMLTextAreaElement).value).toContain("demo-agent");
   });
 });
