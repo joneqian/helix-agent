@@ -197,4 +197,41 @@ def build_tenants_router() -> APIRouter:
             data["first_admin"] = first_admin
         return {"success": True, "data": data, "error": None}
 
+    @router.get("")
+    async def list_tenants(
+        principal: Annotated[Principal, Depends(_principal)],
+        repo: Annotated[TenantConfigStore, Depends(_get_repo)],
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        """List all tenants (summary). Platform-level: system_admin only."""
+        # Mirror create_tenant's gate (Mini-ADR P-2): listing tenants is a
+        # cross-tenant platform read, so it requires system admin and a
+        # bypass-RLS session (FORCE-RLS tenant_config would filter to the
+        # caller's home tenant otherwise).
+        if not principal.is_system_admin:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "PLATFORM_SCOPE_FORBIDDEN",
+                    "message": "only a system admin may list tenants",
+                },
+            )
+        capped = max(1, min(limit, 200))
+        async with bypass_rls_session():
+            records = await repo.list_all(limit=capped, offset=max(0, offset))
+        return {
+            "success": True,
+            "data": [
+                {
+                    "tenant_id": str(r.tenant_id),
+                    "display_name": r.display_name,
+                    "plan": r.plan.value,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in records
+            ],
+            "error": None,
+        }
+
     return router
