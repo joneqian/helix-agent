@@ -32,10 +32,12 @@ from control_plane.audit import emit
 from control_plane.keycloak import KeycloakAdminClient
 from control_plane.settings import Settings
 from control_plane.tenant_scope import bypass_rls_session
+from control_plane.tenant_status import TenantStatusService
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.auth import RoleBindingStore
 from helix_agent.persistence.tenant_config.base import (
     TenantConfigAlreadyExistsError,
+    TenantConfigNotFoundError,
     TenantConfigStore,
 )
 from helix_agent.persistence.tenant_member import TenantMemberStore
@@ -92,6 +94,10 @@ def _get_keycloak(request: Request) -> KeycloakAdminClient:
 
 def _get_settings(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
+
+
+def _get_tenant_status_service(request: Request) -> TenantStatusService:
+    return request.app.state.tenant_status_service  # type: ignore[no-any-return]
 
 
 def build_tenants_router() -> APIRouter:
@@ -227,11 +233,101 @@ def build_tenants_router() -> APIRouter:
                     "tenant_id": str(r.tenant_id),
                     "display_name": r.display_name,
                     "plan": r.plan.value,
+                    "status": r.status,
                     "created_at": r.created_at.isoformat(),
                 }
                 for r in records
             ],
             "error": None,
         }
+
+    async def _set_tenant_status(
+        tenant_id: UUID,
+        status: str,
+        action: AuditAction,
+        *,
+        principal: Principal,
+        repo: TenantConfigStore,
+        audit: AuditLogger,
+        status_svc: TenantStatusService,
+    ) -> dict[str, object]:
+        # Mirror create_tenant/list_tenants (Mini-ADR P-2): changing a tenant's
+        # lifecycle status is a platform-level action — system_admin only — and
+        # the write + its audit row bypass RLS (the target tenant is not the
+        # caller's home tenant; the FORCE-RLS tenant_config policy would reject
+        # the UPDATE otherwise).
+        if not principal.is_system_admin:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "PLATFORM_SCOPE_FORBIDDEN",
+                    "message": "only a system admin may change tenant status",
+                },
+            )
+        async with bypass_rls_session():
+            try:
+                await repo.set_status(
+                    tenant_id=tenant_id, status=status, actor_id=principal.subject_id
+                )
+            except TenantConfigNotFoundError as exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "TENANT_NOT_FOUND", "message": "tenant not found"},
+                ) from exc
+            await emit(
+                audit,
+                tenant_id=tenant_id,
+                actor_id=principal.subject_id,
+                action=action,
+                resource_type="tenant",
+                resource_id=str(tenant_id),
+                trace_id=current_trace_id_hex(),
+            )
+        # Immediate effect on the writing instance; other replicas pick it up
+        # within the cache TTL.
+        status_svc.invalidate(tenant_id)
+        return {
+            "success": True,
+            "data": {"tenant_id": str(tenant_id), "status": status},
+            "error": None,
+        }
+
+    @router.post("/{tenant_id}/deactivate")
+    async def deactivate_tenant(
+        tenant_id: UUID,
+        principal: Annotated[Principal, Depends(_principal)],
+        repo: Annotated[TenantConfigStore, Depends(_get_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        status_svc: Annotated[TenantStatusService, Depends(_get_tenant_status_service)],
+    ) -> dict[str, object]:
+        """Suspend a tenant — its members are 403'd until reactivated."""
+        return await _set_tenant_status(
+            tenant_id,
+            "suspended",
+            AuditAction.TENANT_DEACTIVATE,
+            principal=principal,
+            repo=repo,
+            audit=audit,
+            status_svc=status_svc,
+        )
+
+    @router.post("/{tenant_id}/activate")
+    async def activate_tenant(
+        tenant_id: UUID,
+        principal: Annotated[Principal, Depends(_principal)],
+        repo: Annotated[TenantConfigStore, Depends(_get_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        status_svc: Annotated[TenantStatusService, Depends(_get_tenant_status_service)],
+    ) -> dict[str, object]:
+        """Reactivate a suspended tenant."""
+        return await _set_tenant_status(
+            tenant_id,
+            "active",
+            AuditAction.TENANT_ACTIVATE,
+            principal=principal,
+            repo=repo,
+            audit=audit,
+            status_svc=status_svc,
+        )
 
     return router

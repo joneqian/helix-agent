@@ -129,7 +129,14 @@ async def test_list_tenants_system_admin_lists_all(
     assert body["success"] is True
     ids = {t["tenant_id"] for t in body["data"]}
     assert seeded_a in ids and seeded_b in ids
-    assert set(body["data"][0].keys()) == {"tenant_id", "display_name", "plan", "created_at"}
+    assert set(body["data"][0].keys()) == {
+        "tenant_id",
+        "display_name",
+        "plan",
+        "status",
+        "created_at",
+    }
+    assert all(t["status"] == "active" for t in body["data"])
 
 
 @pytest.mark.asyncio
@@ -158,3 +165,109 @@ async def test_list_tenants_pagination(
     resp = await client.get("/v1/tenants?limit=1&offset=0", headers=headers)
     assert resp.status_code == 200, resp.text
     assert len(resp.json()["data"]) == 1
+
+
+# --- Stream U (PR E) — deactivate / activate + suspended-tenant enforcement ---
+
+
+def _member_headers(tenant_id: UUID) -> dict[str, str]:
+    """A non-admin member whose JWT carries ``tenant_id`` as its home tenant."""
+    return {"Authorization": f"Bearer {make_test_jwt(tenant_id=tenant_id, subject=str(uuid4()))}"}
+
+
+async def _create_tenant(client: AsyncClient, sys_admin_id: UUID) -> str:
+    resp = await client.post(
+        "/v1/tenants",
+        json={"tenant_id": str(uuid4()), "display_name": "Tgt"},
+        headers=_admin_headers(sys_admin_id),
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["data"]["tenant_id"]  # type: ignore[no-any-return]
+
+
+@pytest.mark.asyncio
+async def test_system_admin_deactivate_then_activate(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, sys_admin_id = admin_client
+    headers = _admin_headers(sys_admin_id)
+    tid = await _create_tenant(client, sys_admin_id)
+
+    deact = await client.post(f"/v1/tenants/{tid}/deactivate", headers=headers)
+    assert deact.status_code == 200, deact.text
+    assert deact.json()["data"] == {"tenant_id": tid, "status": "suspended"}
+
+    listed = await client.get("/v1/tenants", headers=headers)
+    row = next(t for t in listed.json()["data"] if t["tenant_id"] == tid)
+    assert row["status"] == "suspended"
+
+    act = await client.post(f"/v1/tenants/{tid}/activate", headers=headers)
+    assert act.status_code == 200, act.text
+    assert act.json()["data"]["status"] == "active"
+
+    listed2 = await client.get("/v1/tenants", headers=headers)
+    row2 = next(t for t in listed2.json()["data"] if t["tenant_id"] == tid)
+    assert row2["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_deactivate(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, sys_admin_id = admin_client
+    tid = await _create_tenant(client, sys_admin_id)
+    resp = await client.post(f"/v1/tenants/{tid}/deactivate", headers=_non_admin_headers())
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "PLATFORM_SCOPE_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_deactivate_unknown_tenant_404(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, sys_admin_id = admin_client
+    resp = await client.post(
+        f"/v1/tenants/{uuid4()}/deactivate", headers=_admin_headers(sys_admin_id)
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "TENANT_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_suspended_tenant_member_is_blocked_but_system_admin_is_not(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    """CRITICAL: after suspending T, a member of T is 403 TENANT_SUSPENDED on
+    any authed route, while a system_admin can STILL act against T."""
+    client, sys_admin_id = admin_client
+    admin_headers = _admin_headers(sys_admin_id)
+    tid = await _create_tenant(client, sys_admin_id)
+    member_headers = _member_headers(UUID(tid))
+
+    # Baseline: before suspension, the member's authed request is NOT 403'd by
+    # the suspended-tenant gate (it may 404/other, but never TENANT_SUSPENDED).
+    pre = await client.get("/v1/tenants", headers=member_headers)
+    assert not (
+        pre.status_code == 403 and pre.json().get("error", {}).get("code") == "TENANT_SUSPENDED"
+    )
+
+    # Suspend T.
+    deact = await client.post(f"/v1/tenants/{tid}/deactivate", headers=admin_headers)
+    assert deact.status_code == 200, deact.text
+
+    # The member of T is now blocked on any authed route by the real middleware.
+    blocked = await client.get("/v1/tenants", headers=member_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "TENANT_SUSPENDED"
+
+    # system_admin is NOT blocked: it can list and reactivate T while suspended.
+    still_lists = await client.get("/v1/tenants", headers=admin_headers)
+    assert still_lists.status_code == 200, still_lists.text
+    act = await client.post(f"/v1/tenants/{tid}/activate", headers=admin_headers)
+    assert act.status_code == 200, act.text
+
+    # After reactivation the member is unblocked by the gate again.
+    after = await client.get("/v1/tenants", headers=member_headers)
+    assert not (
+        after.status_code == 403 and after.json().get("error", {}).get("code") == "TENANT_SUSPENDED"
+    )

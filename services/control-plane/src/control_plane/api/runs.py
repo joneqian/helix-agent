@@ -239,6 +239,24 @@ def build_runs_router() -> APIRouter:
         actor_id: str = request.state.actor_id
         trace_id = current_trace_id_hex()
 
+        # Stream U (PR E) — defense in depth. AuthMiddleware already 403s a
+        # suspended tenant's members, but the run-creation path is the one we
+        # most want to never serve for a suspended tenant, so re-check here.
+        # ``getattr`` guards test setups that don't wire the service.
+        status_svc = getattr(request.app.state, "tenant_status_service", None)
+        if status_svc is not None and await status_svc.is_suspended(tenant_id):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "success": False,
+                    "data": None,
+                    "error": {
+                        "code": "TENANT_SUSPENDED",
+                        "message": "this tenant is suspended",
+                    },
+                },
+            )
+
         # Stream K.K2 (Mini-ADR K-2) — SSE cross-tenant safety lives here.
         # ``threads.get(thread_id, tenant_id=tenant_id)`` 404s when the
         # thread belongs to a different tenant, so the SSE stream never
