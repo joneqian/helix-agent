@@ -1,16 +1,20 @@
 /**
  * Schema-driven form view — RJSF (antd theme) rendering the AgentSpec JSON
- * Schema. The whole manifest is editable here without custom code; ``uiSchema``
- * only nudges layout (collapse rarely-touched blocks, multiline the prompt).
- * The model picker stays on RJSF's default widgets in PR C — PR D swaps in a
- * provider/model linked widget.
+ * Schema. The whole manifest is editable here; ``uiSchema`` nudges layout and
+ * routes the model node to the custom ModelSelect field (Stream S PR D). The
+ * model catalog (configured providers + models) is loaded once and handed to
+ * the field via ``formContext``.
  */
+import { useEffect, useState } from "react";
 import Form from "@rjsf/antd";
 import validator from "@rjsf/validator-ajv8";
 import type { IChangeEvent } from "@rjsf/core";
 import type { UiSchema } from "@rjsf/utils";
 
 import type { JsonSchema } from "../../api/manifest_schema";
+import type { ModelCatalog } from "../../api/model_catalog";
+import { loadModelCatalog } from "./catalog";
+import { ModelSelectField } from "./widgets/ModelSelectField";
 
 interface FormViewProps {
   schema: JsonSchema;
@@ -18,22 +22,44 @@ interface FormViewProps {
   onChange: (data: unknown) => void;
 }
 
-/** Baseline layout polish. Keep minimal — PR D extends it for the model. */
 const UI_SCHEMA: UiSchema = {
   "ui:submitButtonOptions": { norender: true },
   spec: {
     system_prompt: {
       template: { "ui:widget": "textarea", "ui:options": { rows: 6 } },
     },
+    model: {
+      "ui:field": "ModelSelect",
+      fallback: { items: { "ui:field": "ModelSelect" } },
+    },
   },
 };
 
 export function FormView({ schema, formData, onChange }: FormViewProps) {
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | undefined>(undefined);
+
+  useEffect(() => {
+    let alive = true;
+    loadModelCatalog().then(
+      (c) => {
+        if (alive) setModelCatalog(c);
+      },
+      () => {
+        /* catalog optional — the field degrades to a disabled/loading select */
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   return (
     <div data-testid="manifest-form-view">
       <Form
         schema={schema}
         uiSchema={UI_SCHEMA}
+        fields={{ ModelSelect: ModelSelectField }}
+        formContext={{ modelCatalog }}
         formData={formData}
         validator={validator}
         liveValidate={false}
