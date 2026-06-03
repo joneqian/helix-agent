@@ -247,21 +247,21 @@ async def test_patch_violates_merged_invariant_422(ctx: _Ctx) -> None:
 async def test_tenant_admin_forbidden_on_every_endpoint(ctx: _Ctx) -> None:
     h = ctx.tenant_admin_headers
     some_id = str(uuid4())
-    assert (
-        await ctx.client.post("/v1/platform/mcp-catalog", json=_valid_entry(), headers=h)
-    ).status_code == 403
-    assert (await ctx.client.get("/v1/platform/mcp-catalog", headers=h)).status_code == 403
-    assert (
-        await ctx.client.get(f"/v1/platform/mcp-catalog/{some_id}", headers=h)
-    ).status_code == 403
-    assert (
-        await ctx.client.patch(
-            f"/v1/platform/mcp-catalog/{some_id}", json={"display_name": "x"}, headers=h
-        )
-    ).status_code == 403
-    assert (
-        await ctx.client.delete(f"/v1/platform/mcp-catalog/{some_id}", headers=h)
-    ).status_code == 403
+    # Bind each response before asserting: a request call inside an ``assert``
+    # expression is stripped under ``python -O`` (CodeQL py/side-effect-in-assert,
+    # [memory:no-side-effect-in-assert]).
+    created = await ctx.client.post("/v1/platform/mcp-catalog", json=_valid_entry(), headers=h)
+    listed = await ctx.client.get("/v1/platform/mcp-catalog", headers=h)
+    got = await ctx.client.get(f"/v1/platform/mcp-catalog/{some_id}", headers=h)
+    patched = await ctx.client.patch(
+        f"/v1/platform/mcp-catalog/{some_id}", json={"display_name": "x"}, headers=h
+    )
+    deleted = await ctx.client.delete(f"/v1/platform/mcp-catalog/{some_id}", headers=h)
+    assert created.status_code == 403
+    assert listed.status_code == 403
+    assert got.status_code == 403
+    assert patched.status_code == 403
+    assert deleted.status_code == 403
 
 
 # ---------------------------------------------------------------------------
