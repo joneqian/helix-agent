@@ -109,7 +109,7 @@ def test_invalid_catalog_name_rejected(bad_name: str) -> None:
 def test_frozen() -> None:
     rec = _record()
     with pytest.raises(ValidationError):
-        rec.name = "other"  # type: ignore[misc]
+        rec.name = "other"
 
 
 def test_upsert_validates_auth_consistency() -> None:
