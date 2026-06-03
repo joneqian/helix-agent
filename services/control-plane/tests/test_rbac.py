@@ -131,3 +131,45 @@ def test_service_account_scope_to_role_mapping(
 def test_collect_roles_for_audit_is_stable_sorted() -> None:
     p = _user(("viewer", "admin", "operator"))
     assert list(collect_roles_for_audit(p)) == ["admin", "operator", "viewer"]
+
+
+# ---------------------------------------------------------------------------
+# Stream V follow-up — system_admin gets tenant-ADMIN authority over
+# tenant-scoped resources (within allowed tenants). Fixes the matrix-gated
+# tenant pages (mcp_server / user / tenant_config …) that previously denied
+# a pure platform admin. Tenant data isolation stays enforced by tenant_id/RLS.
+# ---------------------------------------------------------------------------
+
+
+def _system_admin() -> Principal:
+    # No tenant roles — platform-scope only, as produced by Principal.as_system_admin().
+    return Principal(
+        subject_id="11111111-1111-1111-1111-111111111111",
+        subject_type="user",
+        tenant_id=_TENANT,
+        roles=(),
+        scopes=(),
+        auth_method="jwt",
+        allowed_tenants="*",
+        is_system_admin=True,
+    )
+
+
+def test_system_admin_can_manage_mcp_server() -> None:
+    p = _system_admin()
+    assert is_allowed(p, resource="mcp_server", action="read")
+    assert is_allowed(p, resource="mcp_server", action="write")
+    assert is_allowed(p, resource="mcp_server", action="delete")
+
+
+def test_system_admin_can_manage_other_tenant_resources() -> None:
+    p = _system_admin()
+    assert is_allowed(p, resource="user", action="write")
+    assert is_allowed(p, resource="tenant_config", action="write")
+    assert is_allowed(p, resource="role_binding", action="write")
+
+
+def test_non_system_admin_with_no_roles_still_denied() -> None:
+    p = _user(())
+    assert not is_allowed(p, resource="mcp_server", action="read")
+    assert not is_allowed(p, resource="user", action="write")
