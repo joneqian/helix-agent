@@ -23,6 +23,7 @@ import {
   readTopK,
   setDescription,
   setMcpAllowTools,
+  setMcpServers,
   setMemoryOn,
   setModel,
   setName,
@@ -30,6 +31,7 @@ import {
   setTool,
   setTopK,
 } from "./form_model";
+import { McpToolPicker } from "./widgets/McpToolPicker";
 
 const { Text } = Typography;
 
@@ -165,25 +167,12 @@ export function FormView({ formData, onChange }: FormViewProps) {
           </Checkbox>
         </div>
         {tools.mcp && (
-          <div style={{ ...FIELD, marginTop: 12 }} data-testid="af-mcp-allow">
-            <label style={LABEL}>{t("agent_form.tool_mcp_allow")}</label>
-            <Input
-              value={tools.mcpAllowTools.join(", ")}
-              placeholder={t("agent_form.tool_mcp_allow")}
-              aria-label={t("agent_form.tool_mcp_allow")}
-              onChange={(e) =>
-                onChange(
-                  setMcpAllowTools(
-                    formData,
-                    e.target.value
-                      .split(",")
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  ),
-                )
-              }
-            />
-          </div>
+          <McpToolPicker
+            servers={tools.mcpServers}
+            allowTools={tools.mcpAllowTools}
+            onServersChange={(next) => onChange(setMcpServers(formData, next))}
+            onAllowToolsChange={(next) => onChange(setMcpAllowTools(formData, next))}
+          />
         )}
       </section>
     </div>

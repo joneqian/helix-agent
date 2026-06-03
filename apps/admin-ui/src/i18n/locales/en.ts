@@ -124,7 +124,17 @@ export interface TranslationKeys {
     tool_web_search: string;
     tool_http: string;
     tool_mcp: string;
-    tool_mcp_allow: string;
+    mcp_servers_label: string;
+    mcp_servers_hint: string;
+    mcp_no_servers: string;
+    mcp_source_platform: string;
+    mcp_source_tenant: string;
+    mcp_tools_label: string;
+    mcp_tools_hint: string;
+    mcp_tools_loading: string;
+    mcp_tools_unreachable: string;
+    mcp_servers_loading: string;
+    mcp_servers_load_failed: string;
   };
   playground: {
     session_label: string;
@@ -1011,7 +1021,17 @@ const en: TranslationKeys = {
     tool_web_search: "Web search",
     tool_http: "HTTP tool",
     tool_mcp: "MCP tools",
-    tool_mcp_allow: "Allowed MCP tools (optional, comma-separated)",
+    mcp_servers_label: "MCP servers this agent can use",
+    mcp_servers_hint: "Leave all unchecked to allow every available server",
+    mcp_no_servers: "No MCP servers available. Register one under Settings → MCP Servers.",
+    mcp_source_platform: "platform",
+    mcp_source_tenant: "tenant",
+    mcp_tools_label: "Tools",
+    mcp_tools_hint: "Leave all unchecked to allow every tool from the selected servers",
+    mcp_tools_loading: "Loading tools…",
+    mcp_tools_unreachable: "Could not load tools",
+    mcp_servers_loading: "Loading servers…",
+    mcp_servers_load_failed: "Could not load servers",
   },
   playground: {
     session_label: "Session",
