@@ -141,6 +141,7 @@ ResourceType = Literal[
     "memory_item",
     "tenant_member",  # Stream R — Mini-ADR R-3 (member onboarding)
     "keycloak_user",  # Stream R — Mini-ADR R-3 (Keycloak account provisioning)
+    "tenant_mcp_server",  # Stream V — tenant remote MCP server registry
 ]
 
 
