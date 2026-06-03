@@ -77,4 +77,4 @@ def test_valid_server_name_accepted(good_name: str) -> None:
 def test_frozen() -> None:
     rec = _record()
     with pytest.raises(ValidationError):
-        rec.name = "other"  # type: ignore[misc]
+        rec.name = "other"

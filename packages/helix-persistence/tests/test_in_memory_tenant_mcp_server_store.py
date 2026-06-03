@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,9 +16,9 @@ from helix_agent.protocol import TenantMcpServerPatch, TenantMcpServerRecord
 
 
 async def _make(
-    store: InMemoryTenantMcpServerStore, tenant_id: UUID, **over: object
+    store: InMemoryTenantMcpServerStore, tenant_id: UUID, **over: Any
 ) -> TenantMcpServerRecord:
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "tenant_id": tenant_id,
         "name": "github",
         "transport": "streamable_http",

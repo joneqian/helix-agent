@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -107,7 +108,9 @@ def reset_rls() -> Iterator[None]:
 
 
 @pytest.mark.asyncio
-async def test_create_get_round_trip(tenant_mcp_server_store) -> None:
+async def test_create_get_round_trip(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     try:
         tid = uuid4()
@@ -130,7 +133,9 @@ async def test_create_get_round_trip(tenant_mcp_server_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rls_isolation_between_tenants(tenant_mcp_server_store) -> None:
+async def test_rls_isolation_between_tenants(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     a, b = uuid4(), uuid4()
 
@@ -160,12 +165,14 @@ async def test_rls_isolation_between_tenants(tenant_mcp_server_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_duplicate_name_rejected(tenant_mcp_server_store) -> None:
+async def test_duplicate_name_rejected(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     try:
         tid = uuid4()
         current_tenant_id_var.set(tid)
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "tenant_id": tid,
             "name": "github",
             "transport": "streamable_http",
@@ -183,7 +190,9 @@ async def test_duplicate_name_rejected(tenant_mcp_server_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_and_delete(tenant_mcp_server_store) -> None:
+async def test_update_and_delete(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     try:
         tid = uuid4()
@@ -212,7 +221,9 @@ async def test_update_and_delete(tenant_mcp_server_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_invalid_patch_rejects_atomically(tenant_mcp_server_store) -> None:
+async def test_update_invalid_patch_rejects_atomically(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     tid = uuid4()
     current_tenant_id_var.set(tid)
@@ -244,7 +255,9 @@ async def test_update_invalid_patch_rejects_atomically(tenant_mcp_server_store) 
 
 
 @pytest.mark.asyncio
-async def test_rls_blocks_cross_tenant_write(tenant_mcp_server_store) -> None:
+async def test_rls_blocks_cross_tenant_write(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
     store, engine = tenant_mcp_server_store
     a, b = uuid4(), uuid4()
     current_tenant_id_var.set(b)  # session scoped to tenant B
