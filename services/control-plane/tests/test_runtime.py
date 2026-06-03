@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 
 from control_plane.runtime import (
+    AgentRuntime,
     ResolvingEmbedder,
     ResolvingReranker,
     make_image_resolver,
@@ -17,13 +19,37 @@ from control_plane.runtime import (
 )
 from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.persistence import InMemoryKnowledgeStore
-from helix_agent.protocol import TenantConfigRecord
+from helix_agent.protocol import AgentSpec, TenantConfigRecord
+from helix_agent.runtime.runs import RunManager
 from helix_agent.runtime.secret_store import parse_secret_ref
 from helix_agent.runtime.storage import InMemoryObjectStore
+from helix_agent.runtime.stream_bridge import InMemoryStreamBridge
 from helix_agent.testing import InMemorySecretStore
 from orchestrator.llm import FakeEmbedder
 from orchestrator.multimodal import ObjectStoreImageResolver
 from orchestrator.tools import KnowledgeRetriever
+
+_MINIMAL_MANIFEST: dict[str, Any] = {
+    "apiVersion": "helix.io/v1",
+    "kind": "Agent",
+    "metadata": {"name": "x", "version": "1", "tenant": "test-tenant"},
+    "spec": {
+        "tenant_config": {},
+        "model": {"provider": "anthropic", "name": "claude-haiku-4-5"},
+        "system_prompt": {"template": "you help"},
+        "sandbox": {
+            "resources": {"cpu": "1.0", "memory": "1Gi"},
+            "network": {"egress": "none", "allowlist": []},
+            "filesystem": {"readonly_root": True, "writable": []},
+        },
+    },
+}
+
+
+def _make_spec(*, name: str = "x", version: str = "1") -> AgentSpec:
+    manifest = dict(_MINIMAL_MANIFEST)
+    manifest["metadata"] = dict(manifest["metadata"], name=name, version=version)
+    return AgentSpec.model_validate(manifest)
 
 
 class _NeverCalledTenantConfig:
@@ -164,3 +190,37 @@ async def test_resolve_object_store_config_s3_resolves_keys() -> None:
     assert config.endpoint_url == "http://minio:9000"
     assert config.access_key == "AKID"
     assert config.secret_key == "SKEY"
+
+
+# ---------------------------------------------------------------------------
+# AgentRuntime.invalidate_tenant (Stream V-D, Mini-ADR V-4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_invalidate_tenant_drops_only_that_tenants_cached_agents() -> None:
+    """invalidate_tenant(a) drops all entries for tenant a, leaves tenant b cached."""
+    builds: list[tuple[UUID | None, str | None]] = []
+
+    async def _builder(spec: AgentSpec, *, tenant_id: UUID | None = None) -> object:
+        builds.append((tenant_id, spec.metadata.name if spec is not None else None))
+        return object()  # stand-in BuiltAgent
+
+    runtime = AgentRuntime(
+        run_manager=RunManager(store=None),  # type: ignore[arg-type]
+        stream_bridge=InMemoryStreamBridge(),
+        agent_builder=_builder,  # type: ignore[arg-type]
+    )
+    a, b = uuid4(), uuid4()
+    spec = _make_spec(name="x", version="1")
+
+    await runtime.get_agent(tenant_id=a, name="x", version="1", spec=spec)
+    await runtime.get_agent(tenant_id=b, name="x", version="1", spec=spec)
+    assert len(builds) == 2
+
+    runtime.invalidate_tenant(a)
+
+    # tenant a rebuilds; tenant b still cached (no new build)
+    await runtime.get_agent(tenant_id=a, name="x", version="1", spec=spec)
+    await runtime.get_agent(tenant_id=b, name="x", version="1", spec=spec)
+    assert len(builds) == 3  # only a rebuilt

@@ -102,6 +102,29 @@ def _get_agent_spec_store(request: Request) -> object:
     return getattr(request.app.state, "agent_spec_repo", None)
 
 
+def _get_tenant_mcp_pool_service(request: Request) -> object:  # type: ignore[no-untyped-def]
+    return getattr(request.app.state, "tenant_mcp_pool_service", None)
+
+
+def _get_agent_runtime(request: Request) -> object:  # type: ignore[no-untyped-def]
+    return getattr(request.app.state, "agent_runtime", None)
+
+
+async def _invalidate_tenant_mcp(
+    pool_service: object, agent_runtime: object, tenant_id: UUID
+) -> None:
+    """Invalidate the tenant's MCP pool cache + any cached built-agents (Stream V-D).
+
+    Called after each successful registry mutation (POST/PATCH/DELETE) so the
+    next agent build picks up the changed server list. Both services are optional
+    so existing tests that don't wire them continue to pass.
+    """
+    if pool_service is not None:
+        await pool_service.invalidate(tenant_id)  # type: ignore[attr-defined]
+    if agent_runtime is not None:
+        agent_runtime.invalidate_tenant(tenant_id)  # type: ignore[attr-defined]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -135,6 +158,8 @@ def build_mcp_servers_router() -> APIRouter:
         store: Annotated[TenantMcpServerStore, Depends(_get_store)],
         secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        pool_service: Annotated[object, Depends(_get_tenant_mcp_pool_service)],
+        agent_runtime: Annotated[object, Depends(_get_agent_runtime)],
     ) -> dict[str, object]:
         tenant_id = principal.tenant_id
         # 1) SSRF check — fail fast with a clear error code before any I/O.
@@ -230,6 +255,7 @@ def build_mcp_servers_router() -> APIRouter:
                 "tool_count": len(tools),
             },  # NEVER include the token
         )
+        await _invalidate_tenant_mcp(pool_service, agent_runtime, tenant_id)
         return {
             "success": True,
             "data": {**_public(record), "tool_count": len(tools)},
@@ -252,6 +278,8 @@ def build_mcp_servers_router() -> APIRouter:
         store: Annotated[TenantMcpServerStore, Depends(_get_store)],
         secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        pool_service: Annotated[object, Depends(_get_tenant_mcp_pool_service)],
+        agent_runtime: Annotated[object, Depends(_get_agent_runtime)],
     ) -> dict[str, object]:
         tenant_id = principal.tenant_id
         existing = await store.get(tenant_id=tenant_id, name=name)
@@ -332,6 +360,7 @@ def build_mcp_servers_router() -> APIRouter:
             trace_id=current_trace_id_hex(),
             details={"name": record.name, "url": record.url, "enabled": record.enabled},
         )
+        await _invalidate_tenant_mcp(pool_service, agent_runtime, tenant_id)
         return {"success": True, "data": _public(record), "error": None}
 
     @router.delete("/{name}", status_code=204)
@@ -341,6 +370,8 @@ def build_mcp_servers_router() -> APIRouter:
         store: Annotated[TenantMcpServerStore, Depends(_get_store)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         agent_spec_store: Annotated[object, Depends(_get_agent_spec_store)],
+        pool_service: Annotated[object, Depends(_get_tenant_mcp_pool_service)],
+        agent_runtime: Annotated[object, Depends(_get_agent_runtime)],
     ) -> None:
         tenant_id = principal.tenant_id
         # (a) Resolve row first so we have the UUID for the audit record and a clean 404.
@@ -386,5 +417,6 @@ def build_mcp_servers_router() -> APIRouter:
             trace_id=current_trace_id_hex(),
             details={"name": name},
         )
+        await _invalidate_tenant_mcp(pool_service, agent_runtime, tenant_id)
 
     return router

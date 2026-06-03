@@ -26,6 +26,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from control_plane.platform_embedding_config import PlatformEmbeddingConfigService
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
+from control_plane.tenant_mcp_pool import TenantMcpPoolProvider
 from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
 from helix_agent.persistence import ArtifactStore, KnowledgeStore
 from helix_agent.persistence.token_usage_store import TokenUsageStore
@@ -134,6 +135,16 @@ class AgentRuntime:
         self._cache[key] = built
         return built
 
+    def invalidate_tenant(self, tenant_id: UUID) -> None:
+        """Drop every cached built-agent for ``tenant_id``.
+
+        Called when the tenant's MCP server registry changes so the next run
+        rebuilds the agent against the refreshed tenant MCP pool (Stream V-D).
+        The cache key is ``(tenant_id, name, version)``.
+        """
+        for key in [k for k in self._cache if k[0] == tenant_id]:
+            del self._cache[key]
+
 
 def make_provider_key_resolver(
     *, resolver: CredentialsResolver, tenant_id: UUID
@@ -173,6 +184,7 @@ def make_agent_builder(
     memory_env: MemoryEnv | None = None,
     subagent_spec_resolver: SubagentSpecResolver | None = None,
     mcp_allowlist_provider: Callable[[UUID], Awaitable[Sequence[str]]] | None = None,
+    tenant_mcp_pool_provider: TenantMcpPoolProvider | None = None,
     credentials_resolver: CredentialsResolver | None = None,
     platform_embedding_config_service: PlatformEmbeddingConfigService | None = None,
 ) -> AgentBuilder:
@@ -229,6 +241,12 @@ def make_agent_builder(
             allowlist = await mcp_allowlist_provider(tenant_id)
             if allowlist:
                 build_tool_env = replace(tool_env, mcp_allowlist=tuple(allowlist))
+        # Stream V (Mini-ADR V-4) — attach the tenant's own remote MCP pool.
+        if tenant_mcp_pool_provider is not None and tenant_id is not None:
+            tenant_pool = await tenant_mcp_pool_provider(tenant_id)
+            if tenant_pool.names():
+                base_env = build_tool_env if build_tool_env is not None else ToolEnv()
+                build_tool_env = replace(base_env, tenant_mcp_pool=tenant_pool)
         # Stream Q (Mini-ADR Q-5) — when the manifest model omits api_key_ref,
         # resolve its key from the tenant's platform-configured credential.
         # Needs a tenant; preview/validation builds (tenant_id None) keep the

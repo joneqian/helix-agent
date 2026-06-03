@@ -305,3 +305,106 @@ async def test_delete_succeeds_when_unreferenced(monkeypatch: pytest.MonkeyPatch
         # Verify it's gone from the list
         lst = await client.get("/v1/mcp-servers", headers=admin_headers)
         assert lst.json()["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_post_and_delete_invalidate_tenant_mcp_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST and DELETE both call pool_service.invalidate + agent_runtime.invalidate_tenant."""
+    app, admin_headers, tenant_id = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+
+    class _PoolSpy:
+        def __init__(self) -> None:
+            self.invalidated: list[UUID] = []
+
+        async def invalidate(self, tid: UUID) -> None:
+            self.invalidated.append(tid)
+
+    class _RuntimeSpy:
+        def __init__(self) -> None:
+            self.invalidated: list[UUID] = []
+
+        def invalidate_tenant(self, tid: UUID) -> None:
+            self.invalidated.append(tid)
+
+    pool_spy = _PoolSpy()
+    rt_spy = _RuntimeSpy()
+    app.state.tenant_mcp_pool_service = pool_spy
+    app.state.agent_runtime = rt_spy
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        post_resp = await client.post(
+            "/v1/mcp-servers",
+            json={
+                "name": "github",
+                "transport": "sse",
+                "url": "https://x.example.com/sse",
+                "auth_type": "none",
+            },
+            headers=admin_headers,
+        )
+        assert post_resp.status_code == 201
+        delete_resp = await client.delete("/v1/mcp-servers/github", headers=admin_headers)
+        assert delete_resp.status_code == 204
+
+    assert pool_spy.invalidated.count(tenant_id) == 2
+    assert rt_spy.invalidated.count(tenant_id) == 2
+
+
+@pytest.mark.asyncio
+async def test_patch_invalidates_tenant_mcp_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH calls pool_service.invalidate + agent_runtime.invalidate_tenant."""
+    app, admin_headers, tenant_id = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+
+    class _PoolSpy:
+        def __init__(self) -> None:
+            self.invalidated: list[UUID] = []
+
+        async def invalidate(self, tid: UUID) -> None:
+            self.invalidated.append(tid)
+
+    class _RuntimeSpy:
+        def __init__(self) -> None:
+            self.invalidated: list[UUID] = []
+
+        def invalidate_tenant(self, tid: UUID) -> None:
+            self.invalidated.append(tid)
+
+    pool_spy = _PoolSpy()
+    rt_spy = _RuntimeSpy()
+    app.state.tenant_mcp_pool_service = pool_spy
+    app.state.agent_runtime = rt_spy
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        # Register first
+        post_resp = await client.post(
+            "/v1/mcp-servers",
+            json={
+                "name": "github",
+                "transport": "sse",
+                "url": "https://x.example.com/sse",
+                "auth_type": "none",
+            },
+            headers=admin_headers,
+        )
+        assert post_resp.status_code == 201
+        # Reset spy counts after POST
+        pool_spy.invalidated.clear()
+        rt_spy.invalidated.clear()
+        # PATCH to disable
+        patch_resp = await client.patch(
+            "/v1/mcp-servers/github",
+            json={"enabled": False},
+            headers=admin_headers,
+        )
+        assert patch_resp.status_code == 200
+
+    assert pool_spy.invalidated.count(tenant_id) == 1
+    assert rt_spy.invalidated.count(tenant_id) == 1

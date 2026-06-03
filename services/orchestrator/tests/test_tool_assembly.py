@@ -349,3 +349,147 @@ async def test_no_vision_block_registers_no_ask_image_tool() -> None:
     env = ToolEnv(image_resolver=InMemoryImageResolver())
     registry = await build_tool_registry([], tool_env=env)
     assert registry.get("ask_image") is None
+
+
+# ---------------------------------------------------------------------------
+# tenant_mcp_pool — Stream V-D union registration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tenant_pool_tools_registered_alongside_platform() -> None:
+    platform = MCPServerPool()
+    await platform.add(
+        "ops",
+        RecordingMCPClient(tools=(MCPToolDef(name="deploy", description="", input_schema={}),)),
+    )
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="create_issue", description="", input_schema={}),)
+        ),
+    )
+    registry = await build_tool_registry(
+        [MCPToolSpec()], tool_env=ToolEnv(mcp_pool=platform, tenant_mcp_pool=tenant)
+    )
+    assert registry.get("mcp:ops.deploy") is not None
+    assert registry.get("mcp:github.create_issue") is not None
+
+
+@pytest.mark.asyncio
+async def test_tenant_pool_not_filtered_by_platform_allowlist() -> None:
+    # The allowlist gates the PLATFORM pool only; tenant servers are the
+    # tenant's own and are always visible.
+    platform = MCPServerPool()
+    await platform.add(
+        "ops",
+        RecordingMCPClient(tools=(MCPToolDef(name="deploy", description="", input_schema={}),)),
+    )
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="create_issue", description="", input_schema={}),)
+        ),
+    )
+    registry = await build_tool_registry(
+        [MCPToolSpec()],
+        tool_env=ToolEnv(mcp_pool=platform, tenant_mcp_pool=tenant, mcp_allowlist=("ops",)),
+    )
+    assert registry.get("mcp:ops.deploy") is not None  # platform, on allowlist
+    assert registry.get("mcp:github.create_issue") is not None  # tenant, not gated
+
+
+@pytest.mark.asyncio
+async def test_allow_tools_filters_tenant_pool_too() -> None:
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(
+                MCPToolDef(name="create_issue", description="", input_schema={}),
+                MCPToolDef(name="delete_repo", description="", input_schema={}),
+            )
+        ),
+    )
+    registry = await build_tool_registry(
+        [MCPToolSpec(allow_tools=["create_issue"])],
+        tool_env=ToolEnv(tenant_mcp_pool=tenant),
+    )
+    assert registry.get("mcp:github.create_issue") is not None
+    assert registry.get("mcp:github.delete_repo") is None
+
+
+@pytest.mark.asyncio
+async def test_tenant_pool_only_no_platform_pool_ok() -> None:
+    # mcp tool declared with only a tenant pool (no platform pool) must work.
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="create_issue", description="", input_schema={}),)
+        ),
+    )
+    registry = await build_tool_registry([MCPToolSpec()], tool_env=ToolEnv(tenant_mcp_pool=tenant))
+    assert registry.get("mcp:github.create_issue") is not None
+
+
+@pytest.mark.asyncio
+async def test_name_collision_platform_wins() -> None:
+    platform = MCPServerPool()
+    await platform.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="from_platform", description="", input_schema={}),)
+        ),
+    )
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="from_tenant", description="", input_schema={}),)
+        ),
+    )
+    registry = await build_tool_registry(
+        [MCPToolSpec()], tool_env=ToolEnv(mcp_pool=platform, tenant_mcp_pool=tenant)
+    )
+    # platform registered first; the colliding tenant server is skipped.
+    assert registry.get("mcp:github.from_platform") is not None
+    assert registry.get("mcp:github.from_tenant") is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_declared_but_no_pools_raises() -> None:
+    with pytest.raises(AgentFactoryError, match="MCP server pool"):
+        await build_tool_registry([MCPToolSpec()], tool_env=ToolEnv())
+
+
+@pytest.mark.asyncio
+async def test_platform_reserves_name_even_when_all_its_tools_filtered() -> None:
+    # Platform reserves the server NAME unconditionally even when allow_tools
+    # filters out every one of its tools for this build.  A tenant server with
+    # the same name must NOT be registered — otherwise a tenant could shadow a
+    # platform server by crafting allow_tools to exclude all platform tools.
+    platform = MCPServerPool()
+    await platform.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="platform_tool", description="", input_schema={}),)
+        ),
+    )
+    tenant = MCPServerPool()
+    await tenant.add(
+        "github",
+        RecordingMCPClient(
+            tools=(MCPToolDef(name="tenant_tool", description="", input_schema={}),)
+        ),
+    )
+    # allow_tools excludes the platform server's only tool; tenant has a matching name.
+    registry = await build_tool_registry(
+        [MCPToolSpec(allow_tools=["tenant_tool"])],
+        tool_env=ToolEnv(mcp_pool=platform, tenant_mcp_pool=tenant),
+    )
+    # Platform reserved "github" → tenant's mcp:github.tenant_tool is NOT registered.
+    assert registry.get("mcp:github.tenant_tool") is None
+    assert registry.get("mcp:github.platform_tool") is None  # filtered out by allow_tools
