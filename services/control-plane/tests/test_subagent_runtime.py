@@ -169,3 +169,75 @@ async def test_soft_deleted_agent_ref_raises(build_calls: list[dict[str, Any]]) 
     )
     with pytest.raises(SubAgentNotFoundError):
         await builder(tenant_id=tenant, name="researcher", version="1.0.0", depth=1)
+
+
+# ---------------------------------------------------------------------------
+# Stream V-D — tenant_mcp_pool_provider wiring in make_child_agent_builder
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_child_builder_sets_tenant_mcp_pool_from_provider(
+    build_calls: list[dict[str, Any]],
+) -> None:
+    """When a tenant_mcp_pool_provider is given and returns a non-empty pool,
+    the pool reaches build_agent via tool_env.tenant_mcp_pool."""
+    from orchestrator.tools import MCPServerPool, RecordingMCPClient
+
+    tenant_pool = MCPServerPool()
+    client = RecordingMCPClient()
+    await tenant_pool.add("github", client)
+
+    async def _provider(tid: object) -> MCPServerPool:
+        return tenant_pool
+
+    tenant = uuid4()
+    store = InMemoryAgentSpecStore()
+    await store.create(
+        tenant_id=tenant, spec=_spec("researcher"), spec_sha256=_SHA, created_by="test"
+    )
+    builder = make_child_agent_builder(
+        spec_store=store,
+        secret_store=InMemorySecretStore(),
+        checkpointer=InMemorySaver(),
+        base_tool_env=ToolEnv(),
+        tenant_mcp_pool_provider=_provider,
+    )
+
+    await builder(tenant_id=tenant, name="researcher", version="1.0.0", depth=1)
+
+    assert len(build_calls) == 1
+    tool_env = build_calls[0]["tool_env"]
+    assert tool_env.tenant_mcp_pool is tenant_pool
+
+
+@pytest.mark.asyncio
+async def test_child_builder_skips_empty_tenant_pool(
+    build_calls: list[dict[str, Any]],
+) -> None:
+    """When the tenant pool is empty, tenant_mcp_pool stays None in the child ToolEnv."""
+    from orchestrator.tools import MCPServerPool
+
+    empty_pool = MCPServerPool()  # no servers
+
+    async def _provider(tid: object) -> MCPServerPool:
+        return empty_pool
+
+    tenant = uuid4()
+    store = InMemoryAgentSpecStore()
+    await store.create(
+        tenant_id=tenant, spec=_spec("researcher"), spec_sha256=_SHA, created_by="test"
+    )
+    builder = make_child_agent_builder(
+        spec_store=store,
+        secret_store=InMemorySecretStore(),
+        checkpointer=InMemorySaver(),
+        base_tool_env=ToolEnv(),
+        tenant_mcp_pool_provider=_provider,
+    )
+
+    await builder(tenant_id=tenant, name="researcher", version="1.0.0", depth=1)
+
+    assert len(build_calls) == 1
+    tool_env = build_calls[0]["tool_env"]
+    assert tool_env.tenant_mcp_pool is None

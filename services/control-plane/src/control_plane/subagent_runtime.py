@@ -17,6 +17,7 @@ from uuid import UUID
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from control_plane.runtime import make_provider_key_resolver
+from control_plane.tenant_mcp_pool import TenantMcpPoolProvider
 from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.persistence.agent_spec import AgentSpecStore
 from helix_agent.runtime.secret_store import SecretStore
@@ -53,6 +54,7 @@ def make_child_agent_builder(
     middleware_env: MiddlewareEnv | None = None,
     memory_env: MemoryEnv | None = None,
     credentials_resolver: CredentialsResolver | None = None,
+    tenant_mcp_pool_provider: TenantMcpPoolProvider | None = None,
 ) -> ChildAgentBuilder:
     """Build the :class:`ChildAgentBuilder` the orchestrator's ``ToolEnv`` carries.
 
@@ -86,11 +88,18 @@ def make_child_agent_builder(
             if credentials_resolver is not None
             else None
         )
+        # Stream V (Mini-ADR V-4) — attach the tenant's own remote MCP pool
+        # per-call so delegated sub-agents can also use tenant MCP servers.
+        call_tool_env = child_tool_env
+        if tenant_mcp_pool_provider is not None:
+            tenant_pool = await tenant_mcp_pool_provider(tenant_id)
+            if tenant_pool.names():
+                call_tool_env = replace(child_tool_env, tenant_mcp_pool=tenant_pool)
         built = await build_agent(
             record.spec,
             secret_store=secret_store,
             checkpointer=checkpointer,
-            tool_env=child_tool_env,
+            tool_env=call_tool_env,
             middleware_env=middleware_env,
             memory_env=memory_env,
             subagent_depth=depth,

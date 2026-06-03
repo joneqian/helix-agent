@@ -299,3 +299,130 @@ async def test_build_tool_env_carries_mcp_pool() -> None:
     async with build_mcp_pool(None) as pool:
         env = build_tool_env(_FakeTenantConfigService(allowlist=[]), mcp_pool=pool)
         assert env.mcp_pool is pool
+
+
+# ---------------------------------------------------------------------------
+# Stream V-D — tenant_mcp_pool_provider wiring in make_agent_builder
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_builder_sets_tenant_mcp_pool_from_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a tenant_mcp_pool_provider is supplied and returns a non-empty
+    pool, the pool reaches build_agent via tool_env.tenant_mcp_pool."""
+    from copy import deepcopy
+    from uuid import uuid4
+
+    from orchestrator import BuiltAgent, ToolEnv
+    from orchestrator.tools import MCPServerPool, RecordingMCPClient
+
+    tenant_pool = MCPServerPool()
+    # Add a server so names() is non-empty — the builder skips empty pools.
+    client = RecordingMCPClient()
+    await tenant_pool.add("github", client)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_build_agent(spec: object, **kwargs: object) -> BuiltAgent:
+        captured["tool_env"] = kwargs.get("tool_env")
+        return BuiltAgent(graph=object(), system_prompt="", max_steps=1)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("control_plane.runtime.build_agent", _fake_build_agent)
+
+    async def _provider(tid: object) -> MCPServerPool:
+        return tenant_pool
+
+    from helix_agent.protocol import AgentSpec
+
+    spec = AgentSpec.model_validate(
+        deepcopy(
+            {
+                "apiVersion": "helix.io/v1",
+                "kind": "Agent",
+                "metadata": {"name": "test-agent", "version": "1.0.0", "tenant": "t"},
+                "spec": {
+                    "tenant_config": {},
+                    "model": {"provider": "anthropic", "name": "claude"},
+                    "system_prompt": {"template": "x"},
+                    "sandbox": {
+                        "resources": {"cpu": "1", "memory": "1Gi"},
+                        "network": {"egress": "proxy", "allowlist": ["a.com"]},
+                        "filesystem": {},
+                    },
+                },
+            }
+        )
+    )
+
+    builder = make_agent_builder(
+        _secret_store(),
+        InMemorySaver(),
+        tool_env=ToolEnv(),
+        tenant_mcp_pool_provider=_provider,
+    )
+    await builder(spec, tenant_id=uuid4())
+
+    tool_env = captured.get("tool_env")
+    assert tool_env is not None
+    assert tool_env.tenant_mcp_pool is tenant_pool  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_agent_builder_skips_empty_tenant_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the tenant pool is empty (no servers), tenant_mcp_pool stays None."""
+    from copy import deepcopy
+    from uuid import uuid4
+
+    from orchestrator import BuiltAgent, ToolEnv
+    from orchestrator.tools import MCPServerPool
+
+    captured: dict[str, object] = {}
+
+    async def _fake_build_agent(spec: object, **kwargs: object) -> BuiltAgent:
+        captured["tool_env"] = kwargs.get("tool_env")
+        return BuiltAgent(graph=object(), system_prompt="", max_steps=1)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("control_plane.runtime.build_agent", _fake_build_agent)
+
+    empty_pool = MCPServerPool()  # no servers added
+
+    async def _provider(tid: object) -> MCPServerPool:
+        return empty_pool
+
+    from helix_agent.protocol import AgentSpec
+
+    spec = AgentSpec.model_validate(
+        deepcopy(
+            {
+                "apiVersion": "helix.io/v1",
+                "kind": "Agent",
+                "metadata": {"name": "test-agent", "version": "1.0.0", "tenant": "t"},
+                "spec": {
+                    "tenant_config": {},
+                    "model": {"provider": "anthropic", "name": "claude"},
+                    "system_prompt": {"template": "x"},
+                    "sandbox": {
+                        "resources": {"cpu": "1", "memory": "1Gi"},
+                        "network": {"egress": "proxy", "allowlist": ["a.com"]},
+                        "filesystem": {},
+                    },
+                },
+            }
+        )
+    )
+
+    builder = make_agent_builder(
+        _secret_store(),
+        InMemorySaver(),
+        tool_env=ToolEnv(),
+        tenant_mcp_pool_provider=_provider,
+    )
+    await builder(spec, tenant_id=uuid4())
+
+    tool_env = captured.get("tool_env")
+    assert tool_env is not None
+    assert tool_env.tenant_mcp_pool is None  # type: ignore[union-attr]
