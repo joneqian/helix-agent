@@ -899,6 +899,59 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
+## 平台中心化治理 + 变现路线图（Stream W/X/Y/Z；2026-06-03 拍板）— [memory:project_platform_centralized_governance]
+
+**触发（2026-06-03）**：用户质疑"租户自配 LLM KEY / 自建 MCP / SKILL / TOOLS 导致结构混乱，平台统一供给更利变现"。核实后：LLM key 与内置 tool **已平台默认/平台定义**，真正放任租户的只有 MCP（刚 V 上线）与 Skills。**用户拍板四项**：① MCP=平台目录+租户实例化；② LLM Key=平台独占+计量加价（移除 BYOK）；③ Skills=混合（平台库+租户自建）；④ 治理层+计费层一起、拆多 Stream。**目标**：把 helix 从"自助工具"推向"可变现多租户 PaaS"，同时保留 per-company 定制。
+
+**两个改变设计的发现**（见 [memory:reference_billing_meter_and_entitlement]）：① entitlement 原语 `tenant_config.plan`（free/pro/enterprise）已存在但从未用于 gating → 加 `tier_satisfies` 复用，不建新表；② 真正在线计量是 G.9 `token_usage`（带 input/output 拆分），C.5 quota 引擎根本没被 run loop 调用 → 成本从 `token_usage` 派生为可重算 rollup，不碰热路径。
+
+**依赖**：`W（含 entitlement 地基）→ X（Skills，复用）∥ Y（LLM 锁+rate card+计量）→ Z（chargeback 面）`。
+
+### Stream W — MCP Connector Catalog（平台精选目录 + 租户实例化 + entitlement 地基）— 设计 [STREAM-W-DESIGN](./streams/STREAM-W-DESIGN.md)
+
+**演进 Stream V，不破坏已上线行/端点**。平台维护精选连接器目录（system_admin），租户从目录实例化、填自己凭证；premium 项按档位门控。保留自定义逃生口（per-tenant kill-switch）。
+
+- [ ] **W0 设计先行**（STREAM-W-DESIGN + 本 backlog）— **Mini-ADR W-1~W-11**
+- [ ] **W1 协议 + entitlement 原语**：`protocol/mcp_connector_catalog.py`（records + `McpConnectorAuthSchema`）+ `TenantMcpServerRecord.catalog_id` + `TenantConfigRecord/Patch.allow_custom_mcp_servers` + `helix-common` `TIER_ORDER`/`tier_satisfies`；纯 schema 单测
+- [ ] **W2 持久化**：迁移 `0055_mcp_connector_catalog`（NULL-tenant RLS，照抄 0050）+ `0056_mcp_server_catalog_id`（加列）+ ORM + `McpConnectorCatalogStore`(base/sql/memory) + store `catalog_id` kwarg + `tenant_config` 列；**RLS 测（租户读目录须 bypass）+ 迁移安全测（V 旧行→catalog_id=NULL）**
+- [ ] **W3 平台目录 CRUD API + RBAC**：`mcp_catalog` 资源 + `api/mcp_catalog.py`（system_admin，bypass_rls）+ delete-in-use 409 + 审计双 Literal；authz 测
+- [ ] **W4 租户实例化 + 档位门控 + `/available` + 自定义 kill-switch**：`GET /catalog`（带 entitled）+ `POST /catalog/{id}/instances`（复用 probe/secret/invalidate）+ `tier_satisfies` 门控 + `allow_custom_mcp_servers` enforce；**复跑 V pool 测验证运行时零改动**
+- [ ] **W5 Admin UI**：平台目录管理页 + 租户"从目录添加"向导（auth_schema 驱动表单 + entitlement 锁标 + 测试连接）+ 自定义降级为 Advanced + i18n
+- [ ] **W6（可选）初始目录 seed**：GitHub/Postgres 官方连接器（config flag 后）
+
+**关键路径** W0→W1→W2→W3→W4→W5。**完成 = system_admin 维护连接器目录，租户从目录实例化（含 premium 档位门控）并在 agent 里使用**；entitlement 地基（tier_satisfies）就绪供 X/Y/Z 复用。
+
+### Stream X — Platform Skill Library（平台精选库 + 租户自建，混合）
+
+平台发布精选 skill 库（`tenant_id NULL`，可 premium），租户继续自建；manifest 同时可绑平台/租户 skill。复用 W 的 `tier_satisfies`、Stream U 的 moderation/curator。
+
+- [ ] **X0 设计先行**（STREAM-X-DESIGN + Mini-ADR）
+- [ ] **X1 协议**：`required_tier` + 平台 skill 语义
+- [ ] **X2 持久化 + 迁移**：NULL-tenant 平台行 + RLS
+- [ ] **X3 resolver 双查 + 门控**：`agent_factory._load_skills` 先租户后平台 + `tier_satisfies`
+- [ ] **X4 平台 skill CRUD API**（system_admin，bypass_rls）
+- [ ] **X5 Admin UI**：平台库管理 + 租户库合并视图（source/entitled 标记）
+
+### Stream Y — LLM 平台独占 + Rate Card + 计量（治理 + 成本地基）
+
+锁死 LLM 平台独占（移除租户 BYOK + manifest `api_key_ref` override）；在 G.9 `token_usage` 上建 rate card + 成本派生 rollup + 按租户分月 billing ledger（**不碰 C.5 热路径**）。
+
+- [ ] **Y0 设计先行**（STREAM-Y-DESIGN + Mini-ADR）
+- [ ] **Y1 平台独占锁**：resolver 删 tenant 分支 + `credentials_mode` 收窄/switch gate 硬拒 + 移除 `api_key_ref` override（过渡 ignore+warn）+ 防御性迁移
+- [ ] **Y2 Rate Card**：`model_rate_card` 表（整数 micro-USD + markup_bps + 时序版本 + plan_tier）+ store + admin API + `billing` RBAC 资源
+- [ ] **Y3 成本派生 + billing ledger**：`tenant_billing_ledger`（不扩展 token_budget_ledger）+ rollup job（读 token_usage→定价→幂等 upsert）
+
+### Stream Z — Chargeback / 用量面（计费层出口）
+
+租户看自己用量/成本，system_admin 看跨租户分账，成本可观测。发票推迟 M2。
+
+- [ ] **Z0 设计先行**（STREAM-Z-DESIGN + Mini-ADR）
+- [ ] **Z1 租户用量/成本 API**：`GET /v1/usage/cost`（RLS 自隔离）+ `/v1/usage/tokens`（当月实时）+ `billing:read`
+- [ ] **Z2 admin chargeback API + 指标**：`GET /v1/admin/billing/chargeback`（跨租户，bypass_rls，显 margin）+ `helix_llm_cost_micros_total` counter
+- [ ] **Z3 看板 UI**（前端）：月选择 + 按 agent/model 拆分 + 环比
+
+---
+
 ## Phase M1 — 生产化（6-8 个月）
 
 ### 目标
