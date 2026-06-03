@@ -15,9 +15,12 @@ IPs, localhost, metadata IP).
 from __future__ import annotations
 
 import ipaddress
+import re
 from urllib.parse import urlparse
 
-_LOCALHOST_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
+_LOCALHOST_NAMES = frozenset(
+    {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+)
 
 
 class RemoteURLError(ValueError):
@@ -61,6 +64,8 @@ def validate_remote_url(
         msg = f"URL has no hostname: {url!r}"
         raise RemoteURLError(msg)
 
+    hostname = hostname.rstrip(".")  # FQDN trailing dot resolves identically
+
     if hostname.lower() in _LOCALHOST_NAMES:
         msg = f"localhost address {hostname!r} not allowed"
         raise RemoteURLError(msg)
@@ -68,7 +73,12 @@ def validate_remote_url(
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
-        # Hostname is a DNS name, not an IP literal — static check passes.
+        # Non-canonical IP literals (decimal 2130706433, hex 0x7f000001,
+        # shortened/octal dotted 127.1 / 0177.0.0.1) parse as private addrs in
+        # many HTTP stacks but not in ``ipaddress`` — reject them explicitly.
+        if re.fullmatch(r"[0-9.]+", hostname) or re.fullmatch(r"0[xX][0-9a-fA-F]+", hostname):
+            msg = f"non-canonical IP literal {hostname!r} not allowed"
+            raise RemoteURLError(msg) from None
         return url
 
     if _ip_is_blocked(ip):

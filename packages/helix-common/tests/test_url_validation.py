@@ -59,3 +59,23 @@ def test_rejects_missing_hostname() -> None:
 def test_https_only_mode_rejects_http() -> None:
     with pytest.raises(RemoteURLError):
         validate_remote_url("http://public.example.org/mcp", allowed_schemes=("https",))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost./mcp",  # trailing-dot FQDN resolves as localhost
+        "http://127.1/mcp",  # shortened dotted-decimal
+        "http://0x7f000001/mcp",  # hex literal for 127.0.0.1
+        "http://2130706433/mcp",  # decimal literal for 127.0.0.1
+        "http://0177.0.0.1/mcp",  # octal dotted-decimal
+    ],
+)
+def test_rejects_ssrf_bypass_variants(url: str) -> None:
+    with pytest.raises(RemoteURLError):
+        validate_remote_url(url)
+
+
+def test_accepts_public_dns_name_with_digits() -> None:
+    url = "https://api2.example.com/mcp"
+    assert validate_remote_url(url) == url
