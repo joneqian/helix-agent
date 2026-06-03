@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import {
   readDescription,
   readMemoryOn,
@@ -9,6 +9,7 @@ import {
   readTopK,
   setDescription,
   setMcpAllowTools,
+  setMcpServers,
   setMemoryOn,
   setModel,
   setName,
@@ -45,6 +46,7 @@ describe("form_model readers", () => {
       http: false,
       mcp: false,
       mcpAllowTools: [],
+      mcpServers: [],
     });
   });
 });
@@ -117,6 +119,29 @@ describe("form_model writers preserve siblings", () => {
     const allowed = setMcpAllowTools(withMcp, ["a", "b"]);
     expect(readTools(allowed).mcpAllowTools).toEqual(["a", "b"]);
   });
+});
+
+const withMcp = () => setTool({ apiVersion: "v1", kind: "Agent", spec: {} }, "mcp", true);
+
+test("readTools defaults mcpServers to empty", () => {
+  expect(readTools(withMcp()).mcpServers).toEqual([]);
+});
+
+test("setMcpServers sets the servers list on the mcp tool entry", () => {
+  const m = setMcpServers(withMcp(), ["github", "linear"]);
+  expect(readTools(m).mcpServers).toEqual(["github", "linear"]);
+});
+
+test("setMcpServers preserves allow_tools (merge-preserving)", () => {
+  let m = setMcpAllowTools(withMcp(), ["create_issue"]);
+  m = setMcpServers(m, ["github"]);
+  expect(readTools(m).mcpAllowTools).toEqual(["create_issue"]);
+  expect(readTools(m).mcpServers).toEqual(["github"]);
+});
+
+test("setMcpServers no-ops when there is no mcp tool", () => {
+  const m = setMcpServers({ apiVersion: "v1", kind: "Agent", spec: {} }, ["github"]);
+  expect(readTools(m).mcp).toBe(false);
 });
 
 describe("form_model preserve chain + immutability", () => {

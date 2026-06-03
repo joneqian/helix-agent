@@ -16,6 +16,7 @@ export type ToolEntry = {
   type: string;
   name?: string;
   allow_tools?: string[];
+  servers?: string[];
   config?: Record<string, unknown>;
   [k: string]: unknown;
 };
@@ -59,6 +60,7 @@ export interface ToolFlags {
   http: boolean;
   mcp: boolean;
   mcpAllowTools: string[];
+  mcpServers: string[];
 }
 export function readTools(m: unknown): ToolFlags {
   const tools = specOf(m).tools ?? [];
@@ -68,6 +70,7 @@ export function readTools(m: unknown): ToolFlags {
     http: tools.some((t) => t.type === "http"),
     mcp: mcp !== undefined,
     mcpAllowTools: mcp?.allow_tools ?? [],
+    mcpServers: mcp?.servers ?? [],
   };
 }
 
@@ -123,6 +126,12 @@ export function setTool(m: unknown, kind: "webSearch" | "http" | "mcp", on: bool
 export function setMcpAllowTools(m: unknown, allow: string[]): AgentManifest {
   const tools = (specOf(m).tools ?? []).map((t) =>
     t.type === "mcp" ? { ...t, allow_tools: allow } : t,
+  );
+  return patchSpec(m, { tools });
+}
+export function setMcpServers(m: unknown, servers: string[]): AgentManifest {
+  const tools = (specOf(m).tools ?? []).map((t) =>
+    t.type === "mcp" ? { ...t, servers } : t,
   );
   return patchSpec(m, { tools });
 }
