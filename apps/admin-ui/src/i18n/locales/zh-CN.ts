@@ -107,6 +107,7 @@ const zhCN: TranslationKeys = {
     model_placeholder: "选择模型",
     vision_on: "视觉：支持",
     vision_off: "视觉：不支持",
+    temperature: "温度",
     advanced: "高级",
   },
   playground: {

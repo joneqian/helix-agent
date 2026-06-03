@@ -104,6 +104,7 @@ export interface TranslationKeys {
     model_placeholder: string;
     vision_on: string;
     vision_off: string;
+    temperature: string;
     advanced: string;
   };
   playground: {
@@ -924,6 +925,7 @@ const en: TranslationKeys = {
     model_placeholder: "Select a model",
     vision_on: "Vision: supported",
     vision_off: "Vision: not supported",
+    temperature: "Temperature",
     advanced: "Advanced",
   },
   playground: {

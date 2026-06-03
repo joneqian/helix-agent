@@ -14,7 +14,6 @@ import type { UiSchema } from "@rjsf/utils";
 import type { JsonSchema } from "../../api/manifest_schema";
 import type { ModelCatalog } from "../../api/model_catalog";
 import { loadModelCatalog } from "./catalog";
-import { ModelSelectField } from "./widgets/ModelSelectField";
 
 interface FormViewProps {
   schema: JsonSchema;
@@ -27,10 +26,6 @@ const UI_SCHEMA: UiSchema = {
   spec: {
     system_prompt: {
       template: { "ui:widget": "textarea", "ui:options": { rows: 6 } },
-    },
-    model: {
-      "ui:field": "ModelSelect",
-      fallback: { items: { "ui:field": "ModelSelect" } },
     },
   },
 };
@@ -58,7 +53,6 @@ export function FormView({ schema, formData, onChange }: FormViewProps) {
       <Form
         schema={schema}
         uiSchema={UI_SCHEMA}
-        fields={{ ModelSelect: ModelSelectField }}
         formContext={{ modelCatalog }}
         formData={formData}
         validator={validator}
