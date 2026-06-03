@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import pytest
+import sqlalchemy.exc
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
@@ -207,4 +208,26 @@ async def test_update_and_delete(tenant_mcp_server_store) -> None:
         await store.delete(tenant_id=tid, name="github")
         assert await store.get(tenant_id=tid, name="github") is None
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rls_blocks_cross_tenant_write(tenant_mcp_server_store) -> None:
+    store, engine = tenant_mcp_server_store
+    a, b = uuid4(), uuid4()
+    current_tenant_id_var.set(b)  # session scoped to tenant B
+    try:
+        with pytest.raises(sqlalchemy.exc.DBAPIError):  # INSERT WITH CHECK rejects tenant_id=a
+            await store.create(
+                tenant_id=a,  # claims tenant A while the session is B
+                name="injected",
+                transport="streamable_http",
+                url="https://evil.example.com/mcp",
+                auth_type="none",
+                token_secret_ref=None,
+                timeout_s=30.0,
+                created_by="attacker",
+            )
+    finally:
+        current_tenant_id_var.set(None)
         await engine.dispose()
