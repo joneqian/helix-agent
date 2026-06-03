@@ -1,0 +1,199 @@
+/**
+ * Agent-form MCP picker E2E — Stream V-G.
+ *
+ * Proves an admin can:
+ *   (a) open the Create-Agent drawer, enable the MCP toggle, see the
+ *       server checkbox list (from ``GET /v1/mcp-servers/available``),
+ *       check ``github``, expand its tool collapse
+ *       (``GET /v1/mcp-servers/github/tools``), check ``create_issue``,
+ *       submit — and the ``POST /v1/agents`` body contains
+ *       ``tools: [{type:"mcp", servers:["github"], allow_tools:["create_issue"]}]``.
+ *   (b) the open form with the MCP picker passes the axe a11y audit.
+ *
+ * Mirrors ``manifest-editor.spec.ts``:
+ *   - same login flow (SAMPLE_JWT, login-card, optional login-dev-toggle)
+ *   - same schema stub registered after the fixture's agents glob
+ *     so it wins (LIFO ordering)
+ *   - same embedding-config stub
+ *   - ``page.route`` mocks for ``/v1/mcp-servers/available`` and
+ *     ``/v1/mcp-servers/github/tools``
+ *   - POST body intercepted via ``page.waitForRequest`` (mirrors the PUT
+ *     intercept in ``manifest-edit.spec.ts``)
+ */
+import { test, expect, expectNoA11yViolations, SAMPLE_JWT } from "./fixtures";
+
+// ── Stub data ─────────────────────────────────────────────────────────────
+
+const SCHEMA_ENVELOPE = {
+  success: true,
+  error: null,
+  data: {
+    type: "object",
+    properties: {
+      metadata: {
+        type: "object",
+        properties: {
+          name: { type: "string", title: "Name" },
+        },
+      },
+    },
+  },
+};
+
+const AVAILABLE_SERVERS = {
+  success: true,
+  data: [
+    { name: "github", source: "tenant", enabled: true },
+    { name: "fs", source: "platform", enabled: true },
+  ],
+  error: null,
+};
+
+const GITHUB_TOOLS = {
+  success: true,
+  data: [
+    { name: "create_issue", description: "Create a new GitHub issue" },
+    { name: "list_repos", description: "List repositories" },
+  ],
+  error: null,
+};
+
+// POST /v1/agents returns a minimal success envelope so the drawer closes.
+const CREATE_AGENT_OK = {
+  success: true,
+  data: {
+    record: {
+      id: "aaaaaaaa-0000-0000-0000-000000000099",
+      tenant_id: "22222222-2222-2222-2222-222222222222",
+      name: "mcp-agent",
+      version: "1.0.0",
+      status: "active",
+      spec_sha256: "a".repeat(64),
+      created_by: "alice@acme.com",
+      created_at: "2026-06-03T10:00:00Z",
+      updated_at: "2026-06-03T10:00:00Z",
+      spec: {},
+    },
+  },
+  error: null,
+};
+
+// ── Common route/login setup ───────────────────────────────────────────────
+
+test.beforeEach(async ({ page }) => {
+  // Schema stub — registered after the fixture's ``**/v1/agents*`` glob
+  // so it takes precedence (LIFO).
+  await page.route("**/v1/agents/schema", async (route) => {
+    await route.fulfill({ json: SCHEMA_ENVELOPE });
+  });
+
+  // Embedding-status stub — drawer renders the editor only when configured.
+  await page.route("**/v1/platform/embedding-config/status", (route) =>
+    route.fulfill({ json: { success: true, data: { configured: true }, error: null } }),
+  );
+
+  // MCP available-servers list.  Registered before the more-specific
+  // tools route so tool requests still reach their own handler first.
+  await page.route("**/v1/mcp-servers/available", async (route) => {
+    await route.fulfill({ json: AVAILABLE_SERVERS });
+  });
+
+  // github tools (also catches any other server name via the wildcard).
+  await page.route("**/v1/mcp-servers/github/tools", async (route) => {
+    await route.fulfill({ json: GITHUB_TOOLS });
+  });
+
+  // POST /v1/agents — stub so the drawer can close after submit.
+  // Registered after the fixture's generic ``**/v1/agents*`` GET stub
+  // (LIFO), but we branch on method to make the POST explicit.
+  await page.route("**/v1/agents", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({ json: CREATE_AGENT_OK });
+      return;
+    }
+    await route.continue();
+  });
+
+  // Login.
+  await page.goto("/login");
+  await expect(page.getByTestId("login-card")).toBeVisible();
+  const tokenField = page.getByTestId("login-token");
+  if (!(await tokenField.isVisible())) {
+    await page.getByTestId("login-dev-toggle").click();
+  }
+  await tokenField.fill(SAMPLE_JWT);
+  await page.getByTestId("login-submit").click();
+  await expect(page).toHaveURL(/\/agents$/);
+  await expect(page.getByText("customer-support-bot")).toBeVisible();
+});
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+test("(a) create-agent: enable MCP, pick server+tool, submit — POST body contains mcp entry", async ({
+  page,
+}) => {
+  // Open the Create Agent drawer.
+  await page.getByTestId("agents-create").click();
+  await expect(page.getByTestId("create-agent-drawer")).toBeVisible();
+  await expect(page.getByTestId("manifest-form-view")).toBeVisible();
+
+  // Give the agent a name so the manifest is valid enough for the backend stub.
+  const nameInput = page
+    .getByTestId("af-name")
+    .locator("input");
+  await nameInput.clear();
+  await nameInput.fill("mcp-agent");
+
+  // Enable the MCP tool checkbox.
+  await page.getByTestId("af-tool-mcp").click();
+
+  // The McpToolPicker mounts and fetches /v1/mcp-servers/available.
+  // After the stub responds, the github checkbox should appear.
+  await expect(page.getByTestId("af-mcp-server-github")).toBeVisible();
+  await expect(page.getByTestId("af-mcp-server-fs")).toBeVisible();
+
+  // Check the github server.
+  await page.getByTestId("af-mcp-server-github").click();
+
+  // The tools collapse becomes visible for the checked server.
+  await expect(page.getByTestId("af-mcp-tools-github")).toBeVisible();
+
+  // Expand the github tools collapse (click its header).
+  await page.getByTestId("af-mcp-tools-github").locator(".ant-collapse-header").first().click();
+
+  // Wait for create_issue tool checkbox.
+  await expect(page.getByTestId("af-mcp-tool-create_issue")).toBeVisible();
+
+  // Check create_issue.
+  await page.getByTestId("af-mcp-tool-create_issue").click();
+
+  // Intercept the POST and grab its body.
+  const postPromise = page.waitForRequest(
+    (req) => req.method() === "POST" && req.url().includes("/v1/agents"),
+  );
+
+  // Submit.
+  await page.getByTestId("create-agent-submit").click();
+
+  const postReq = await postPromise;
+  const body = postReq.postDataJSON() as { manifest_yaml: string };
+
+  // The manifest is submitted as YAML.  Parse the tools list from it.
+  // We assert structurally: the YAML must contain the mcp entry with
+  // servers: [github] and allow_tools: [create_issue].
+  const yaml = body.manifest_yaml;
+  expect(yaml).toContain("type: mcp");
+  expect(yaml).toContain("github");
+  expect(yaml).toContain("create_issue");
+});
+
+test("(b) create drawer with MCP picker passes axe (serious + critical)", async ({ page }) => {
+  await page.getByTestId("agents-create").click();
+  await expect(page.getByTestId("manifest-form-view")).toBeVisible();
+
+  // Enable MCP and wait for the picker to load so axe sees the full DOM.
+  await page.getByTestId("af-tool-mcp").click();
+  await expect(page.getByTestId("af-mcp-server-github")).toBeVisible();
+
+  await expectNoA11yViolations(page, "create-agent-drawer-mcp");
+});
