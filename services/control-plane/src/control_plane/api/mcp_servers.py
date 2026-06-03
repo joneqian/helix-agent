@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from control_plane.api._authz import require
@@ -179,6 +179,8 @@ def build_mcp_servers_router() -> APIRouter:
                 detail={"code": exc.code, "message": exc.message},
             ) from exc
         # 5) persist token as a secret ref — only after probe success.
+        # Orphan-secret note: if store.create fails after this put, the secret version is
+        # orphaned — acceptable (no plaintext leak; same pattern as platform_config).
         token_secret_ref: str | None = None
         if raw_token is not None:
             sname = _token_secret_name(tenant_id, payload.name)
@@ -235,7 +237,7 @@ def build_mcp_servers_router() -> APIRouter:
 
     @router.patch("/{name}")
     async def update_mcp_server(
-        name: str,
+        name: Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")],
         payload: UpdateMcpServerRequest,
         principal: Annotated[Principal, Depends(require("mcp_server", "write"))],
         store: Annotated[TenantMcpServerStore, Depends(_get_store)],
@@ -259,7 +261,9 @@ def build_mcp_servers_router() -> APIRouter:
                     detail={"code": "MCP_SERVER_INVALID_URL", "message": str(exc)},
                 ) from exc
         # Re-probe when connectivity-affecting fields change (url or token).
-        token_secret_ref = existing.token_secret_ref
+        # next_token_secret_ref: will be set to the new ref only when rotating; else None
+        # (TenantMcpServerPatch treats None as "leave unchanged").
+        next_token_secret_ref: str | None = None
         if payload.url is not None or payload.token is not None:
             raw_token: str | None
             if payload.token is not None:
@@ -283,13 +287,13 @@ def build_mcp_servers_router() -> APIRouter:
                     status_code=422,
                     detail={"code": exc.code, "message": exc.message},
                 ) from exc
-            if payload.token is not None:
+            if payload.token is not None and raw_token is not None:
                 sname = _token_secret_name(tenant_id, name)
-                await secret_store.put(sname, payload.token.get_secret_value())
-                token_secret_ref = f"secret://{sname}"
+                await secret_store.put(sname, raw_token)  # already resolved above
+                next_token_secret_ref = f"secret://{sname}"
         patch = TenantMcpServerPatch(
             url=payload.url,
-            token_secret_ref=(token_secret_ref if payload.token is not None else None),
+            token_secret_ref=(next_token_secret_ref if payload.token is not None else None),
             timeout_s=payload.timeout_s,
             enabled=payload.enabled,
         )
@@ -314,14 +318,21 @@ def build_mcp_servers_router() -> APIRouter:
 
     @router.delete("/{name}", status_code=204)
     async def delete_mcp_server(
-        name: str,
+        name: Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")],
         principal: Annotated[Principal, Depends(require("mcp_server", "delete"))],
         store: Annotated[TenantMcpServerStore, Depends(_get_store)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         agent_spec_store: Annotated[object, Depends(_get_agent_spec_store)],
     ) -> None:
         tenant_id = principal.tenant_id
-        # Reference check: refuse if any active agent manifest references this server.
+        # (a) Resolve row first so we have the UUID for the audit record and a clean 404.
+        record = await store.get(tenant_id=tenant_id, name=name)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "MCP_SERVER_NOT_FOUND", "message": "not found"},
+            )
+        # (b) Reference check: refuse if any active agent manifest references this server.
         # agent_spec_repo may be None in minimal deployments (no spec store wired).
         if agent_spec_store is not None:
             specs = await agent_spec_store.list_by_tenant(  # type: ignore[attr-defined]
@@ -344,20 +355,16 @@ def build_mcp_servers_router() -> APIRouter:
                         ),
                     },
                 )
-        try:
-            await store.delete(tenant_id=tenant_id, name=name)
-        except TenantMcpServerNotFoundError as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "MCP_SERVER_NOT_FOUND", "message": "not found"},
-            ) from exc
+        # (c) Delete the row.
+        await store.delete(tenant_id=tenant_id, name=name)
+        # (d) Audit with the row UUID (consistent with POST/PATCH), name in details.
         await emit(
             audit,
             tenant_id=tenant_id,
             actor_id=principal.subject_id,
             action=AuditAction.MCP_SERVER_DELETE,
             resource_type="tenant_mcp_server",
-            resource_id=name,
+            resource_id=str(record.id),
             trace_id=current_trace_id_hex(),
             details={"name": name},
         )
