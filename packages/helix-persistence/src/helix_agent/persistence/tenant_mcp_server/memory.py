@@ -81,6 +81,8 @@ class InMemoryTenantMcpServerStore(TenantMcpServerStore):
             existing = self._rows.get(key)
             if existing is None:
                 raise TenantMcpServerNotFoundError(tenant_id=tenant_id, name=name)
+            # patch field == None means "leave unchanged" (not "clear");
+            # auth-type/token changes go via delete+recreate.
             changes: dict[str, object] = {"updated_at": _now()}
             if patch.url is not None:
                 changes["url"] = patch.url
@@ -90,7 +92,9 @@ class InMemoryTenantMcpServerStore(TenantMcpServerStore):
                 changes["timeout_s"] = patch.timeout_s
             if patch.enabled is not None:
                 changes["enabled"] = patch.enabled
-            updated = existing.model_copy(update=changes)
+            updated = TenantMcpServerRecord.model_validate(
+                existing.model_copy(update=changes).model_dump()
+            )
             self._rows[key] = updated
             return updated
 

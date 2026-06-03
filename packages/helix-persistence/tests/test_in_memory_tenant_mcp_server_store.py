@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -11,10 +11,12 @@ from helix_agent.persistence.tenant_mcp_server import (
     TenantMcpServerAlreadyExistsError,
     TenantMcpServerNotFoundError,
 )
-from helix_agent.protocol import TenantMcpServerPatch
+from helix_agent.protocol import TenantMcpServerPatch, TenantMcpServerRecord
 
 
-async def _make(store: InMemoryTenantMcpServerStore, tenant_id, **over):
+async def _make(
+    store: InMemoryTenantMcpServerStore, tenant_id: UUID, **over: object
+) -> TenantMcpServerRecord:
     kwargs = {
         "tenant_id": tenant_id,
         "name": "github",
@@ -82,6 +84,8 @@ async def test_update_applies_partial_fields() -> None:
     store = InMemoryTenantMcpServerStore()
     tid = uuid4()
     await _make(store, tid)
+    original = await store.get(tenant_id=tid, name="github")
+    assert original is not None
     updated = await store.update(
         tenant_id=tid,
         name="github",
@@ -90,6 +94,11 @@ async def test_update_applies_partial_fields() -> None:
     assert updated.url == "https://new.example.com/mcp"
     assert updated.enabled is False
     assert updated.updated_at >= updated.created_at
+    assert updated.timeout_s == original.timeout_s
+    assert updated.transport == original.transport
+    assert updated.auth_type == original.auth_type
+    assert updated.id == original.id
+    assert updated.created_at == original.created_at
 
 
 @pytest.mark.asyncio
@@ -115,3 +124,9 @@ async def test_delete_absent_raises() -> None:
     store = InMemoryTenantMcpServerStore()
     with pytest.raises(TenantMcpServerNotFoundError):
         await store.delete(tenant_id=uuid4(), name="nope")
+
+
+@pytest.mark.asyncio
+async def test_list_for_tenant_empty_when_no_rows() -> None:
+    store = InMemoryTenantMcpServerStore()
+    assert await store.list_for_tenant(tenant_id=uuid4()) == []
