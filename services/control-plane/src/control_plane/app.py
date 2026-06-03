@@ -41,6 +41,7 @@ from control_plane.api import (
     build_feedback_router,
     build_health_router,
     build_knowledge_router,
+    build_mcp_servers_router,
     build_me_router,
     build_members_router,
     build_memory_router,
@@ -236,6 +237,11 @@ from helix_agent.persistence.tenant_config import (
     InMemoryTenantConfigStore,
     SqlTenantConfigStore,
     TenantConfigStore,
+)
+from helix_agent.persistence.tenant_mcp_server import (
+    InMemoryTenantMcpServerStore,
+    SqlTenantMcpServerStore,
+    TenantMcpServerStore,
 )
 from helix_agent.persistence.tenant_member import (
     InMemoryTenantMemberStore,
@@ -499,6 +505,10 @@ def create_app(
     # unless ``keycloak_enabled`` (dev/CI never depend on a live Keycloak).
     resolved_tenant_member_repo = tenant_member_repo or (
         sql_stores.tenant_member if sql_stores else InMemoryTenantMemberStore()
+    )
+    # Stream V — tenant-registered remote MCP server registry.
+    resolved_tenant_mcp_server_store = (
+        sql_stores.tenant_mcp_server if sql_stores else InMemoryTenantMcpServerStore()
     )
     resolved_keycloak_admin_client = keycloak_admin_client or _build_keycloak_admin_client(
         resolved_settings, resolved_secret_store
@@ -954,6 +964,8 @@ def create_app(
     # Stream R — member onboarding roster + Keycloak Admin client.
     app.state.tenant_member_repo = resolved_tenant_member_repo
     app.state.keycloak_admin_client = resolved_keycloak_admin_client
+    # Stream V — tenant-registered remote MCP server registry.
+    app.state.tenant_mcp_server_store = resolved_tenant_mcp_server_store
     app.state.platform_secret_store = resolved_platform_secret_store
     app.state.platform_secrets_service = resolved_platform_secrets_service
     # Stream S (Mini-ADR S-4) — model catalog reads only usable providers
@@ -1050,6 +1062,7 @@ def create_app(
     app.include_router(build_skills_router())
     app.include_router(build_uploads_router())
     app.include_router(build_service_accounts_router())
+    app.include_router(build_mcp_servers_router())
     app.include_router(build_api_keys_router())
     app.include_router(build_role_bindings_router())
     app.include_router(build_quota_router())
@@ -1106,6 +1119,7 @@ class _SqlStores:
     token_reservation: TokenReservationStore
     tenant_config: TenantConfigStore
     tenant_member: TenantMemberStore  # Stream R
+    tenant_mcp_server: TenantMcpServerStore  # Stream V
     feedback: FeedbackStore
     token_usage: TokenUsageStore
     audit_log: AuditLogStore
@@ -1290,6 +1304,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         platform_embedding_config=SqlPlatformEmbeddingConfigStore(session_factory),
         tenant_config=SqlTenantConfigStore(session_factory),
         tenant_member=SqlTenantMemberStore(session_factory),
+        tenant_mcp_server=SqlTenantMcpServerStore(session_factory),
         feedback=DbFeedbackStore(session_factory),
         token_usage=DbTokenUsageStore(session_factory),
         audit_log=SqlAuditLogStore(session_factory),

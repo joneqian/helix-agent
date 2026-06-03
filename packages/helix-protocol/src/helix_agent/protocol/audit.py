@@ -221,6 +221,53 @@ class AuditAction(StrEnum):
     # platform embedding/rerank config (the runtime DB overlay) — Stream T PR C.
     # system_admin-only write to the platform embedding-config row.
     PLATFORM_EMBEDDING_CONFIG_UPDATED = "platform_embedding_config:updated"
+    # mcp_server (Stream V — tenant remote MCP server registry)
+    MCP_SERVER_CREATE = "mcp_server:create"
+    MCP_SERVER_UPDATE = "mcp_server:update"
+    MCP_SERVER_DELETE = "mcp_server:delete"
+
+
+ResourceType = Literal[
+    "manifest",
+    "session",
+    "sandbox",
+    "secret",
+    "audit",
+    "quota",
+    "tenant_config",
+    "user",
+    "role_binding",
+    "api_key",
+    "service_account",
+    "feedback",
+    "memory_item",  # Stream K.K6 — long-term memory CRUD
+    "user_workspace",  # Stream J.15-补强-1 — volume quota + lifecycle
+    "image_upload",  # Stream J.6.补强-2 — Mini-ADR J-31
+    "skill",  # Stream J.7a — Mini-ADR J-23
+    # Capability Uplift Sprint #3 (Mini-ADR U-17) — supporting-files
+    # subresource. Mirrors the control-plane ResourceType Literal in
+    # services/control-plane/src/control_plane/audit.py (per
+    # [memory:audit-literal-drift] — both must stay in sync).
+    "skill_supporting_file",
+    "artifact",  # Stream J.9-step3 — Mini-ADR J-25
+    "approval",  # Stream J.8 — Mini-ADR J-24
+    "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
+    "eval_dataset",  # Stream J.12 — Mini-ADR J-43
+    "curation_candidate",  # Stream J.12 — Mini-ADR J-43
+    "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
+    "run",  # Stream H.3 PR 1 — Mini-ADR H-6 (RUN_LIST_READ)
+    "tenant",  # Stream P — Mini-ADR P-1 (POST /v1/tenants)
+    "platform_credential",  # Stream P — Mini-ADR P-11 (/v1/platform/credentials)
+    "tenant_member",  # Stream R — Mini-ADR R-3 (member onboarding)
+    "keycloak_user",  # Stream R — Mini-ADR R-3 (Keycloak account provisioning)
+    "tenant_mcp_server",  # Stream V — tenant remote MCP server registry
+]
+"""Canonical resource type strings used in audit log entries.
+
+Kept in sync with the ``ResourceType`` Literal in
+``services/control-plane/src/control_plane/audit.py`` per
+[memory:audit-literal-drift] — both must change together.
+"""
 
 
 class AuditEntry(BaseModel):
@@ -238,40 +285,7 @@ class AuditEntry(BaseModel):
     actor_id: str
     on_behalf_of: str | None = Field(default=None, description="Original user when sa-driven")
     action: AuditAction
-    resource_type: Literal[
-        "manifest",
-        "session",
-        "sandbox",
-        "secret",
-        "audit",
-        "quota",
-        "tenant_config",
-        "user",
-        "role_binding",
-        "api_key",
-        "service_account",
-        "feedback",
-        "memory_item",  # Stream K.K6 — long-term memory CRUD
-        "user_workspace",  # Stream J.15-补强-1 — volume quota + lifecycle
-        "image_upload",  # Stream J.6.补强-2 — Mini-ADR J-31
-        "skill",  # Stream J.7a — Mini-ADR J-23
-        # Capability Uplift Sprint #3 (Mini-ADR U-17) — supporting-files
-        # subresource. Mirrors the control-plane ResourceType Literal in
-        # services/control-plane/src/control_plane/audit.py (per
-        # [memory:audit-literal-drift] — both must stay in sync).
-        "skill_supporting_file",
-        "artifact",  # Stream J.9-step3 — Mini-ADR J-25
-        "approval",  # Stream J.8 — Mini-ADR J-24
-        "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
-        "eval_dataset",  # Stream J.12 — Mini-ADR J-43
-        "curation_candidate",  # Stream J.12 — Mini-ADR J-43
-        "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
-        "run",  # Stream H.3 PR 1 — Mini-ADR H-6 (RUN_LIST_READ)
-        "tenant",  # Stream P — Mini-ADR P-1 (POST /v1/tenants)
-        "platform_credential",  # Stream P — Mini-ADR P-11 (/v1/platform/credentials)
-        "tenant_member",  # Stream R — Mini-ADR R-3 (member onboarding)
-        "keycloak_user",  # Stream R — Mini-ADR R-3 (Keycloak account provisioning)
-    ]
+    resource_type: ResourceType
     resource_id: str | None = None
     result: AuditResult
     reason: str | None = Field(default=None, description="Required when result != success")
