@@ -127,7 +127,6 @@ const zhCN: TranslationKeys = {
     tool_web_search: "联网搜索",
     tool_http: "HTTP 工具",
     tool_mcp: "MCP 工具",
-    tool_mcp_allow: "允许的 MCP 工具（可选，逗号分隔）",
     mcp_servers_label: "此 agent 可用的 MCP 服务器",
     mcp_servers_hint: "全不选 = 允许所有可用 server",
     mcp_no_servers: "暂无可用 MCP 服务器，请到 设置 → MCP 服务器 注册",
