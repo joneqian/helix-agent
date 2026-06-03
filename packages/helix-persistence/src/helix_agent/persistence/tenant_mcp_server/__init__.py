@@ -5,8 +5,12 @@ from helix_agent.persistence.tenant_mcp_server.base import (
     TenantMcpServerNotFoundError,
     TenantMcpServerStore,
 )
+from helix_agent.persistence.tenant_mcp_server.memory import (
+    InMemoryTenantMcpServerStore,
+)
 
 __all__ = [
+    "InMemoryTenantMcpServerStore",
     "TenantMcpServerAlreadyExistsError",
     "TenantMcpServerNotFoundError",
     "TenantMcpServerStore",
