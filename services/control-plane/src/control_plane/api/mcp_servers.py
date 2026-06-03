@@ -80,6 +80,15 @@ class UpdateMcpServerRequest(BaseModel):
     enabled: bool | None = None
 
 
+class TestConnectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    transport: McpServerTransport
+    url: str = Field(min_length=1)
+    auth_type: McpServerAuthType = "none"
+    token: SecretStr | None = None
+    timeout_s: float = Field(default=_DEFAULT_TIMEOUT_S, gt=0, le=300)
+
+
 # ---------------------------------------------------------------------------
 # DI accessors
 # ---------------------------------------------------------------------------
@@ -108,6 +117,10 @@ def _get_tenant_mcp_pool_service(request: Request) -> object:  # type: ignore[no
 
 def _get_agent_runtime(request: Request) -> object:  # type: ignore[no-untyped-def]
     return getattr(request.app.state, "agent_runtime", None)
+
+
+def _get_tenant_config_service(request: Request) -> object:  # type: ignore[no-untyped-def]
+    return getattr(request.app.state, "tenant_config_service", None)
 
 
 async def _invalidate_tenant_mcp(
@@ -269,6 +282,89 @@ def build_mcp_servers_router() -> APIRouter:
     ) -> dict[str, object]:
         rows = await store.list_for_tenant(tenant_id=principal.tenant_id)
         return {"success": True, "data": [_public(r) for r in rows], "error": None}
+
+    @router.post("/test")
+    async def test_mcp_connection(
+        payload: TestConnectionRequest,
+        principal: Annotated[Principal, Depends(require("mcp_server", "write"))],
+    ) -> dict[str, object]:
+        if payload.auth_type == "bearer" and (
+            payload.token is None or not payload.token.get_secret_value().strip()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "MCP_SERVER_TOKEN_REQUIRED",
+                    "message": "bearer auth requires a non-empty token",
+                },
+            )
+        raw = payload.token.get_secret_value() if payload.token is not None else None
+        try:
+            tools = await probe_remote_mcp(
+                name="test",
+                transport=payload.transport,
+                url=payload.url,
+                bearer_token=raw,
+                timeout_s=payload.timeout_s,
+            )
+        except McpProbeError as exc:
+            raise HTTPException(
+                status_code=422, detail={"code": exc.code, "message": exc.message}
+            ) from exc
+        return {"success": True, "data": {"tool_count": len(tools)}, "error": None}
+
+    @router.get("/available")
+    async def list_available_mcp_servers(
+        principal: Annotated[Principal, Depends(require("mcp_server", "read"))],
+        store: Annotated[TenantMcpServerStore, Depends(_get_store)],
+        tenant_config_service: Annotated[object, Depends(_get_tenant_config_service)],
+    ) -> dict[str, object]:
+        tenant_id = principal.tenant_id
+        available: list[dict[str, object]] = []
+        if tenant_config_service is not None:
+            try:
+                cfg = await tenant_config_service.get(tenant_id=tenant_id)  # type: ignore[attr-defined]
+                for name in cfg.mcp_allowlist:
+                    available.append({"name": name, "source": "platform"})
+            except Exception:
+                logger.info("mcp_servers.available.no_tenant_config")
+        for rec in await store.list_for_tenant(tenant_id=tenant_id):
+            available.append({"name": rec.name, "source": "tenant", "enabled": rec.enabled})
+        return {"success": True, "data": available, "error": None}
+
+    @router.get("/{name}/tools")
+    async def list_mcp_server_tools(
+        name: Annotated[str, Path(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")],
+        principal: Annotated[Principal, Depends(require("mcp_server", "read"))],
+        store: Annotated[TenantMcpServerStore, Depends(_get_store)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
+    ) -> dict[str, object]:
+        record = await store.get(tenant_id=principal.tenant_id, name=name)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "MCP_SERVER_NOT_FOUND", "message": "not found"},
+            )
+        raw: str | None = None
+        if record.auth_type == "bearer" and record.token_secret_ref is not None:
+            raw = await secret_store.get(parse_secret_ref(record.token_secret_ref))
+        try:
+            tools = await probe_remote_mcp(
+                name=record.name,
+                transport=record.transport,
+                url=record.url,
+                bearer_token=raw,
+                timeout_s=record.timeout_s,
+            )
+        except McpProbeError as exc:
+            raise HTTPException(
+                status_code=502, detail={"code": exc.code, "message": exc.message}
+            ) from exc
+        return {
+            "success": True,
+            "data": [{"name": t.name, "description": t.description or ""} for t in tools],
+            "error": None,
+        }
 
     @router.patch("/{name}")
     async def update_mcp_server(
