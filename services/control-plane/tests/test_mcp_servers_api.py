@@ -355,6 +355,107 @@ async def test_post_and_delete_invalidate_tenant_mcp_cache(
 
 
 @pytest.mark.asyncio
+async def test_test_connection_probes_without_persisting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /test probes the connection and returns tool_count — nothing is persisted."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        r = await client.post(
+            "/v1/mcp-servers/test",
+            json={
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "auth_type": "none",
+            },
+            headers=admin_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["tool_count"] == 1
+        # nothing persisted
+        lst = await client.get("/v1/mcp-servers", headers=admin_headers)
+        assert lst.json()["data"] == []
+
+
+@pytest.mark.asyncio
+async def test_test_connection_failure_returns_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /test with a failing probe → 422 MCP_SERVER_PROBE_FAILED."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_fail)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        r = await client.post(
+            "/v1/mcp-servers/test",
+            json={"transport": "sse", "url": "https://down.example.com/sse", "auth_type": "none"},
+            headers=admin_headers,
+        )
+        assert r.status_code == 422
+        assert r.json()["detail"]["code"] == "MCP_SERVER_PROBE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_available_lists_tenant_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /available returns tenant-registered servers with source='tenant'.
+
+    Platform-allowlist seeding requires a tenant_config row which is not seeded
+    in the basic in-memory harness; that half is covered by the tenant_config
+    service unit tests. This test asserts the tenant-server half only.
+    """
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        await client.post(
+            "/v1/mcp-servers",
+            json={
+                "name": "github",
+                "transport": "sse",
+                "url": "https://x.example.com/sse",
+                "auth_type": "none",
+            },
+            headers=admin_headers,
+        )
+        r = await client.get("/v1/mcp-servers/available", headers=admin_headers)
+        assert r.status_code == 200
+        names = {item["name"] for item in r.json()["data"]}
+        assert "github" in names
+        sources = {item["name"]: item["source"] for item in r.json()["data"]}
+        assert sources["github"] == "tenant"
+
+
+@pytest.mark.asyncio
+async def test_server_tools_lists_live_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /{name}/tools returns the live tool list via probe."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        await client.post(
+            "/v1/mcp-servers",
+            json={
+                "name": "github",
+                "transport": "sse",
+                "url": "https://x.example.com/sse",
+                "auth_type": "none",
+            },
+            headers=admin_headers,
+        )
+        r = await client.get("/v1/mcp-servers/github/tools", headers=admin_headers)
+        assert r.status_code == 200
+        assert r.json()["data"][0]["name"] == "create_issue"
+
+
+@pytest.mark.asyncio
+async def test_server_tools_unknown_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /{name}/tools for an unregistered server → 404 MCP_SERVER_NOT_FOUND."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        r = await client.get("/v1/mcp-servers/nope/tools", headers=admin_headers)
+        assert r.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_patch_invalidates_tenant_mcp_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

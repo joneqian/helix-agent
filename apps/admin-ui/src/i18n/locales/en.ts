@@ -43,6 +43,7 @@ export interface TranslationKeys {
     service_accounts: string;
     members: string;
     audit: string;
+    mcp_servers: string;
   };
   login: {
     title: string;
@@ -382,6 +383,53 @@ export interface TranslationKeys {
     first_admin_hint: string;
     first_admin_email_invalid: string;
     first_admin_provisioned: string;
+  };
+  mcp_servers: {
+    page_title: string;
+    subtitle: string;
+    add: string;
+    col_name: string;
+    col_transport: string;
+    col_url: string;
+    col_auth: string;
+    col_status: string;
+    col_tools: string;
+    col_actions: string;
+    status_enabled: string;
+    status_disabled: string;
+    test: string;
+    edit: string;
+    delete: string;
+    testing: string;
+    connected: string;
+    unreachable: string;
+    tools_loading: string;
+    no_tools: string;
+    empty_title: string;
+    empty_hint: string;
+    delete_confirm: string;
+    failed_to_load: string;
+  };
+  create_mcp_server: {
+    add_title: string;
+    edit_title: string;
+    field_name: string;
+    field_transport: string;
+    field_url: string;
+    field_auth: string;
+    field_token: string;
+    field_timeout: string;
+    token_hint_create: string;
+    token_hint_edit: string;
+    test_connection: string;
+    test_ok: string;
+    test_failed: string;
+    name_required: string;
+    url_required: string;
+    url_invalid: string;
+    token_required: string;
+    submit_add: string;
+    submit_save: string;
   };
   settings_platform: {
     page_title: string;
@@ -878,6 +926,7 @@ const en: TranslationKeys = {
     service_accounts: "Service Accounts",
     members: "Members",
     audit: "Audit",
+    mcp_servers: "MCP Servers",
   },
   login: {
     title: "helix Admin",
@@ -1238,6 +1287,53 @@ const en: TranslationKeys = {
       "Provisions the company's first admin and sends a set-password email. In dev (no SMTP) set the password in the Keycloak admin console instead.",
     first_admin_email_invalid: "Enter a valid email address",
     first_admin_provisioned: "First admin invited:",
+  },
+  mcp_servers: {
+    page_title: "MCP Servers",
+    subtitle: "Manage the remote MCP servers your agents can call tools from",
+    add: "Add server",
+    col_name: "Name",
+    col_transport: "Transport",
+    col_url: "URL",
+    col_auth: "Auth",
+    col_status: "Status",
+    col_tools: "Tools",
+    col_actions: "Actions",
+    status_enabled: "Enabled",
+    status_disabled: "Disabled",
+    test: "Test",
+    edit: "Edit",
+    delete: "Delete",
+    testing: "Testing…",
+    connected: "Connected · {{count}} tools",
+    unreachable: "Unreachable",
+    tools_loading: "Loading tools…",
+    no_tools: "No tools advertised",
+    empty_title: "No MCP servers yet",
+    empty_hint: "MCP servers let your agents call external tools like GitHub or Linear.",
+    delete_confirm: "Delete server {{name}}?",
+    failed_to_load: "Failed to load MCP servers",
+  },
+  create_mcp_server: {
+    add_title: "Add MCP server",
+    edit_title: "Edit MCP server",
+    field_name: "Name",
+    field_transport: "Transport",
+    field_url: "URL",
+    field_auth: "Auth type",
+    field_token: "Bearer token",
+    field_timeout: "Timeout (seconds)",
+    token_hint_create: "Pasted once, stored encrypted — never shown again",
+    token_hint_edit: "Leave blank to keep the current token; enter a new value to rotate",
+    test_connection: "Test connection",
+    test_ok: "Connected · {{count}} tools",
+    test_failed: "Connection failed",
+    name_required: "Name is required",
+    url_required: "URL is required",
+    url_invalid: "URL must start with http:// or https://",
+    token_required: "Token is required for bearer auth",
+    submit_add: "Add",
+    submit_save: "Save",
   },
   settings_platform: {
     page_title: "Platform Credentials",
