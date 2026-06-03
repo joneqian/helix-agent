@@ -134,6 +134,16 @@ class AgentRuntime:
         self._cache[key] = built
         return built
 
+    def invalidate_tenant(self, tenant_id: UUID) -> None:
+        """Drop every cached built-agent for ``tenant_id``.
+
+        Called when the tenant's MCP server registry changes so the next run
+        rebuilds the agent against the refreshed tenant MCP pool (Stream V-D).
+        The cache key is ``(tenant_id, name, version)``.
+        """
+        for key in [k for k in self._cache if k[0] == tenant_id]:
+            del self._cache[key]
+
 
 def make_provider_key_resolver(
     *, resolver: CredentialsResolver, tenant_id: UUID
