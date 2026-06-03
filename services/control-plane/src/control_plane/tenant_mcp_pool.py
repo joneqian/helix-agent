@@ -69,8 +69,9 @@ class TenantMcpPoolService:
         self._secret_store = secret_store
         self._client_factory = client_factory
         self._pools: dict[UUID, MCPServerPool] = {}
-        self._locks_guard = asyncio.Lock()  # guards _pools + _tenant_locks dict mutations
+        self._locks_guard = asyncio.Lock()  # guards _pools + _tenant_locks + _generation
         self._tenant_locks: dict[UUID, asyncio.Lock] = {}
+        self._generation: dict[UUID, int] = {}
 
     async def _tenant_lock(self, tenant_id: UUID) -> asyncio.Lock:
         async with self._locks_guard:
@@ -89,12 +90,21 @@ class TenantMcpPoolService:
         one bad server cannot break the whole agent build.  When the server cap
         is hit the just-opened client is closed before breaking — it was never
         added to the pool so ``pool.close_all`` cannot reach it.
+
+        Generation counter guards the lost-invalidation race: ``invalidate``
+        bumps the generation under ``_locks_guard`` while a build may be
+        in-flight.  The build captures the generation before building and
+        re-checks it before caching.  If the generation changed the build was
+        invalidated mid-flight: the pool is served once to this caller but NOT
+        cached, so the next caller triggers a fresh rebuild.
         """
         lock = await self._tenant_lock(tenant_id)
         async with lock:
             cached = self._pools.get(tenant_id)
             if cached is not None:
                 return cached
+            async with self._locks_guard:
+                gen = self._generation.get(tenant_id, 0)
             pool = MCPServerPool()
             records = await self._store.list_for_tenant(tenant_id=tenant_id)
             for record in records:
@@ -115,12 +125,25 @@ class TenantMcpPoolService:
                     break
                 except Exception:
                     logger.warning("tenant_mcp_pool.server_build_failed")
-            self._pools[tenant_id] = pool
-            return pool
+            async with self._locks_guard:
+                if self._generation.get(tenant_id, 0) != gen:
+                    # Invalidation landed mid-build; don't cache the stale pool.
+                    stale = pool
+                else:
+                    self._pools[tenant_id] = pool
+                    return pool
+        # Outside the tenant lock and _locks_guard: close the stale pool, then
+        # serve it once to this caller (it is fresh data, just uncached).
+        try:
+            await stale.close_all()
+        except Exception:
+            logger.warning("tenant_mcp_pool.stale_close_failed")
+        return stale
 
     async def invalidate(self, tenant_id: UUID) -> None:
         """Close + drop the tenant's cached pool (next build rebuilds it)."""
         async with self._locks_guard:
+            self._generation[tenant_id] = self._generation.get(tenant_id, 0) + 1
             pool = self._pools.pop(tenant_id, None)
         if pool is not None:
             try:
@@ -133,6 +156,10 @@ class TenantMcpPoolService:
         async with self._locks_guard:
             pools = list(self._pools.values())
             self._pools.clear()
+            # Bump every known tenant's generation so any in-flight build won't
+            # cache a stale pool after shutdown clears the store.
+            for tid in list(self._tenant_locks):
+                self._generation[tid] = self._generation.get(tid, 0) + 1
             self._tenant_locks.clear()
         for pool in pools:
             try:

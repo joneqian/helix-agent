@@ -124,6 +124,55 @@ async def test_close_all_clears_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalidation_during_build_is_not_lost() -> None:
+    """Mid-build invalidation must not leave a stale pool in the cache.
+
+    The build is paused mid-flight via an asyncio.Event.  Invalidation lands
+    while the build holds the tenant lock but has not yet written to _pools.
+    After the build completes the cache must be empty so the next caller
+    triggers a fresh rebuild — proving the generation counter prevents the
+    lost-invalidation race.
+    """
+    import asyncio
+
+    store = InMemoryTenantMcpServerStore()
+    tid = uuid4()
+    await _seed(store, tid, "github")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_factory(config: MCPServerConfig) -> RecordingMCPClient:
+        started.set()
+        await release.wait()  # pause mid-build until invalidation has landed
+        return RecordingMCPClient(tools=())
+
+    svc = TenantMcpPoolService(store=store, secret_store=None, client_factory=_blocking_factory)
+
+    build_task = asyncio.create_task(svc.get_or_build(tid))
+    await started.wait()  # build is in-flight, pool not yet cached
+
+    await svc.invalidate(tid)  # invalidation lands mid-build
+
+    release.set()  # unblock the build
+    await build_task  # completes; must NOT have cached the stale pool
+
+    # The key assertion: the racing build must not have stored to _pools.
+    assert svc._pools.get(tid) is None
+
+    # Next call must trigger a real rebuild (not a cache hit).
+    rebuild_calls: list[str] = []
+
+    async def _counting_factory(config: MCPServerConfig) -> RecordingMCPClient:
+        rebuild_calls.append(config.name)
+        return RecordingMCPClient(tools=())
+
+    svc._client_factory = _counting_factory
+    await svc.get_or_build(tid)
+    assert rebuild_calls == ["github"]  # rebuilt fresh; stale pool was not served from cache
+
+
+@pytest.mark.asyncio
 async def test_servers_beyond_cap_are_closed_not_leaked() -> None:
     store = InMemoryTenantMcpServerStore()
     tid = uuid4()
