@@ -122,6 +122,7 @@ from control_plane.runtime import (
     AgentRuntime,
     DynamicResolvingEmbedder,
     DynamicResolvingReranker,
+    _build_mcp_client,
     build_mcp_pool,
     build_middleware_env,
     build_supervisor_client,
@@ -140,6 +141,7 @@ from control_plane.skill_activity import ThrottledActivityRecorder
 from control_plane.skill_curator import SkillCurator
 from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
+from control_plane.tenant_mcp_pool import TenantMcpPoolService
 from control_plane.tenant_status import TenantStatusService
 from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.common.health import DefaultHealthProvider
@@ -665,6 +667,24 @@ def create_app(
                         secret_store=resolved_secret_store,
                     )
                 )
+
+                # Stream V (Mini-ADR V-4) — per-tenant remote MCP pool.
+                # Built lazily on first agent build per tenant, cached,
+                # and closed at shutdown via the exit stack callback.
+                async def _tenant_mcp_client_factory(cfg):  # type: ignore[no-untyped-def]
+                    return await _build_mcp_client(cfg, secret_store=resolved_secret_store)
+
+                tenant_mcp_pool_service = TenantMcpPoolService(
+                    store=resolved_tenant_mcp_server_store,
+                    secret_store=resolved_secret_store,
+                    client_factory=_tenant_mcp_client_factory,
+                )
+                stack.push_async_callback(tenant_mcp_pool_service.close_all)
+                _app.state.tenant_mcp_pool_service = tenant_mcp_pool_service
+
+                async def _tenant_mcp_pool_provider(tenant_id):  # type: ignore[no-untyped-def]
+                    return await tenant_mcp_pool_service.get_or_build(tenant_id)
+
                 # Stream J.6 — object store for uploaded images + the
                 # image resolver both multimodal paths draw on (Path A
                 # content blocks / Path B ask_image).
@@ -761,6 +781,8 @@ def create_app(
                     # Stream Q (Mini-ADR Q-5) — sub-agents whose manifest omits
                     # api_key_ref resolve the chat-LLM key from platform creds too.
                     credentials_resolver=credentials_resolver,
+                    # Stream V (Mini-ADR V-4) — tenant's own remote MCP pool.
+                    tenant_mcp_pool_provider=_tenant_mcp_pool_provider,
                 )
                 resolved_agent_runtime.agent_builder = make_agent_builder(
                     resolved_secret_store,
@@ -781,6 +803,8 @@ def create_app(
                     # the effective config and rejects a memory.long_term
                     # manifest when platform embedding is unconfigured.
                     platform_embedding_config_service=(resolved_platform_embedding_config_service),
+                    # Stream V (Mini-ADR V-4) — tenant's own remote MCP pool.
+                    tenant_mcp_pool_provider=_tenant_mcp_pool_provider,
                 )
                 # Stream T (PR B) — these background workers (ingestion runner,
                 # DLQ worker, consolidator) are ALWAYS started. ``embedder`` is a
@@ -964,8 +988,11 @@ def create_app(
     # Stream R — member onboarding roster + Keycloak Admin client.
     app.state.tenant_member_repo = resolved_tenant_member_repo
     app.state.keycloak_admin_client = resolved_keycloak_admin_client
-    # Stream V — tenant-registered remote MCP server registry.
+    # Stream V — tenant-registered remote MCP server registry + per-tenant
+    # remote pool (V-D). The pool service is built in the lifespan (needs the
+    # AsyncExitStack for shutdown); ``None`` until the lifespan sets it.
     app.state.tenant_mcp_server_store = resolved_tenant_mcp_server_store
+    app.state.tenant_mcp_pool_service = None
     app.state.platform_secret_store = resolved_platform_secret_store
     app.state.platform_secrets_service = resolved_platform_secrets_service
     # Stream S (Mini-ADR S-4) — model catalog reads only usable providers
