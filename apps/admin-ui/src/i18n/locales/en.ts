@@ -107,6 +107,24 @@ export interface TranslationKeys {
     temperature: string;
     advanced: string;
   };
+  agent_form: {
+    section_basic: string;
+    field_name: string;
+    field_name_required: string;
+    field_name_placeholder: string;
+    field_description: string;
+    section_model: string;
+    section_prompt: string;
+    field_prompt_placeholder: string;
+    section_memory: string;
+    memory_hint: string;
+    memory_topk: string;
+    section_tools: string;
+    tool_web_search: string;
+    tool_http: string;
+    tool_mcp: string;
+    tool_mcp_allow: string;
+  };
   playground: {
     session_label: string;
     new_session: string;
@@ -927,6 +945,24 @@ const en: TranslationKeys = {
     vision_off: "Vision: not supported",
     temperature: "Temperature",
     advanced: "Advanced",
+  },
+  agent_form: {
+    section_basic: "Basics",
+    field_name: "Name",
+    field_name_required: "Name is required",
+    field_name_placeholder: "my-agent",
+    field_description: "Description",
+    section_model: "Model",
+    section_prompt: "System prompt",
+    field_prompt_placeholder: "You are a helpful assistant.",
+    section_memory: "Long-term memory",
+    memory_hint: "Remembers across sessions; needs a platform embedding.",
+    memory_topk: "Memories recalled per run",
+    section_tools: "Tools",
+    tool_web_search: "Web search",
+    tool_http: "HTTP tool",
+    tool_mcp: "MCP tools",
+    tool_mcp_allow: "Allowed MCP tools (optional, comma-separated)",
   },
   playground: {
     session_label: "Session",

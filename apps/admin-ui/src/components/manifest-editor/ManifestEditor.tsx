@@ -61,9 +61,9 @@ export function ManifestEditor({ mode, initialYaml, onChange }: ManifestEditorPr
   }, []);
 
   function handleFormChange(data: unknown): void {
-    // The Form is schema-authoritative: only fields declared in the AgentSpec
-    // schema survive a Form round-trip. Keys a user hand-added in raw YAML that
-    // aren't in the schema do not persist once they edit via the Form. The
+    // The curated Form merges edits into the full manifest and preserves
+    // non-curated fields: keys a user hand-added in raw YAML survive a Form
+    // round-trip (the form_model writers patch only the curated paths). The
     // backend ManifestLoader re-validates on submit regardless.
     setManifestObject(data);
     const y = dumpYaml(data);
@@ -161,7 +161,7 @@ export function ManifestEditor({ mode, initialYaml, onChange }: ManifestEditorPr
       )}
 
       {tab === "form" ? (
-        <FormView schema={schema} formData={manifestObject} onChange={handleFormChange} />
+        <FormView formData={manifestObject} onChange={handleFormChange} />
       ) : (
         <YamlView value={yamlText} onChange={handleYamlChange} />
       )}
