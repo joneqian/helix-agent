@@ -149,8 +149,21 @@ def _collect_roles(principal: Principal) -> set[Role]:
 
 
 def is_allowed(principal: Principal, *, resource: Resource, action: Action) -> bool:
-    """``True`` if any of ``principal``'s roles grants ``(resource, action)``."""
-    for role in _collect_roles(principal):
+    """``True`` if any of ``principal``'s roles grants ``(resource, action)``.
+
+    A platform ``system_admin`` (Stream N) carries no tenant-scope role, but
+    when operating within a tenant it must be able to manage that tenant's
+    resources — matching the "switch into a tenant and manage it" UX (Stream U)
+    and unblocking every matrix-gated tenant page (mcp_server / user /
+    tenant_config / role_binding …). We therefore grant it tenant-ADMIN
+    authority here. Tenant data isolation is still enforced downstream by
+    ``tenant_id`` scoping + RLS + ``allowed_tenants`` checks at the route layer
+    — this only widens the *role* decision, not the *tenant* boundary.
+    """
+    roles = _collect_roles(principal)
+    if principal.is_system_admin:
+        roles = roles | {Role.ADMIN}
+    for role in roles:
         if action in _grants(role).get(resource, set()):
             return True
     return False
