@@ -61,6 +61,17 @@
 - **X4 平台 skill CRUD API + 租户合并视图**:`api/platform_skills.py`(system_admin + bypass_rls + moderation/high-risk 复用)+ `GET /v1/skills` 加 source/entitled。API 测(非 system_admin 403 / 平台 CRUD / 合并视图 entitled / high-risk 门控)。
 - **X5 Admin UI**:平台 skill 管理页 + 租户库 source/entitled 徽章 + i18n;vitest + storybook + Playwright + axe。
 
+### X5-UI 落地决策（基于 W5 `SettingsMcpCatalog` 范式 + 现有 `SkillsList`/`SkillDetail`）
+
+1. **平台 skill 管理页** `SettingsPlatformSkills.tsx`（路由 `/settings/platform-skills`，nav 仅 `identity.isSystemAdmin` 可见，镜像 mcp-catalog 的 `cat-not-admin` 网关）。新 client `api/platform-skills.ts`（**enveloped**：`/v1/platform/skills` 走 `{success,data,error}`，用 `getJson/postJson/patchJson` 自动 unwrap —— 与租户 `api/skills.ts` 的 **raw** 不同，别混）。
+   - **列表表**:name / category / required_tier(Tag+TIER_COLOR)/ status / latest_version / pinned。
+   - **create 抽屉**:name(pattern `^[a-z][a-z0-9_-]{0,63}$`)+ description + category + required_tier(free/pro/enterprise)。
+   - **manage 抽屉/详情**:版本列表 + add-version 表单(prompt_fragment textarea + tool_names + required_models + description,**对 description 给"何时使用"引导**——R4)+ status 切换(draft/active/archived)+ pin/unpin。
+   - **无 delete**:后端 X4 仅 create/add-version/patch(status,pin)/list/get/versions,**没有 DELETE 端点** → UI 不出删除按钮(平台 skill 退役=archive)。
+2. **租户库徽章** `SkillsList.tsx`:X-6 合并视图现返回 `items`(source=tenant)+ `platform_items`(source=platform,带 entitled)。列表**渲染两者**(平台 skill 让租户可见可绑),Name 列加 **source 徽章**(平台/自建)+ **entitled 锁标**(`entitled=false` 显示"需 {required_tier}",对应锁 icon)。`api/skills.ts` 的 `SkillRecord` 加 `source?`/`entitled?`/`required_tier?`,`SkillList` 加 `platform_items`。
+3. **i18n**:新 `platform_skills:` namespace(en + zh-CN);`skills:` 加 source/entitled/tier 徽章键。
+4. **测试**:`SettingsPlatformSkills.test.tsx`(非 admin 403 态、CRUD、add-version、status/pin)+ `.stories.tsx`(SystemAdmin/Empty/NotSystemAdmin)+ `SkillsList` 徽章单测;Playwright `platform-skills.spec.ts` + `expectNoA11yViolations`。
+
 **关键路径** X0→X1→X2→X3→X4→X5。**完成 = system_admin 发布平台精选 skill(可 premium 档位门控)→ 租户在 agent manifest 绑定(自建优先、平台兜底)→ agent 运行时真正加载使用**;同时补齐 Stream U 遗留的 skill 运行时接线。
 
 ## 4. Verification
