@@ -22,6 +22,16 @@ from helix_agent.protocol import AuditAction, AuditEntry, AuditPage, AuditQuery,
 _AUDIT_WRITER_ROLE: Final[str] = "audit_writer"
 _SET_AUDIT_WRITER_ROLE = text(f"SET LOCAL ROLE {_AUDIT_WRITER_ROLE}")
 
+# Cross-tenant admin read (``query(tenant_id="*")`` under
+# ``applied_scope(CrossTenant)``) runs with ``app.tenant_id`` unset. ``audit_log``
+# is FORCE ROW LEVEL SECURITY, so the non-BYPASSRLS app role would see ZERO rows
+# (policy ``tenant_id = NULL`` → false). The read must ``SET LOCAL ROLE`` to the
+# ``audit_reader`` (NOLOGIN BYPASSRLS, migration 0005, already GRANTed SELECT on
+# audit_log) — the same idiom as the writer path. Single-tenant queries keep the
+# app role + the tenant GUC, so the per-tenant RLS policy still scopes them.
+_AUDIT_READER_ROLE: Final[str] = "audit_reader"
+_SET_AUDIT_READER_ROLE = text(f"SET LOCAL ROLE {_AUDIT_READER_ROLE}")
+
 
 def _row_to_entry(row: AuditLogRow) -> AuditEntry:
     return AuditEntry(
@@ -122,6 +132,11 @@ class SqlAuditLogStore(AuditLogStore):
         stmt = stmt.order_by(AuditLogRow.id.desc()).limit(query.limit + 1)
 
         async with self._sf() as session:
+            if query.tenant_id == "*":
+                # Cross-tenant admin read: assume the BYPASSRLS reader role so
+                # FORCE RLS doesn't filter every row to zero (the GUC is unset
+                # on this path). ``SET LOCAL`` lifts on commit/rollback.
+                await session.execute(_SET_AUDIT_READER_ROLE)
             rows = list((await session.execute(stmt)).scalars().all())
 
         has_more = len(rows) > query.limit
