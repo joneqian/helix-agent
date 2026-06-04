@@ -38,6 +38,35 @@ async def test_insert_fills_id_and_observed_at(store: InMemoryTokenUsageStore) -
 
 
 @pytest.mark.asyncio
+async def test_provider_round_trips(store: InMemoryTokenUsageStore) -> None:
+    # Stream Y-3 — additive provider column round-trips; legacy None default holds.
+    tenant = uuid4()
+    with_provider = await store.insert(
+        TokenUsageRecord(
+            tenant_id=tenant,
+            agent_name="bot",
+            agent_version="1.0.0",
+            model="claude-opus-4-8",
+            provider="anthropic",
+            input_tokens=10,
+            output_tokens=5,
+        )
+    )
+    assert with_provider.provider == "anthropic"
+    legacy = await store.insert(
+        TokenUsageRecord(
+            tenant_id=tenant,
+            agent_name="bot",
+            agent_version="1.0.0",
+            model="claude-opus-4-8",
+            input_tokens=10,
+            output_tokens=5,
+        )
+    )
+    assert legacy.provider is None
+
+
+@pytest.mark.asyncio
 async def test_list_for_tenant_newest_first(store: InMemoryTokenUsageStore) -> None:
     tenant = uuid4()
     for i in range(3):

@@ -55,6 +55,12 @@ from helix_agent.protocol.auth import (
     Principal,
     SubjectType,
 )
+from helix_agent.protocol.billing import (
+    ModelRateCardPatch,
+    ModelRateCardRecord,
+    ModelRateCardUpsert,
+    apply_markup,
+)
 from helix_agent.protocol.dr import (
     BackupAssetType,
     BackupRecord,
@@ -263,6 +269,9 @@ __all__ = [
     "MemoryRecallMode",
     "MemorySpec",
     "ModelEntry",
+    "ModelRateCardPatch",
+    "ModelRateCardRecord",
+    "ModelRateCardUpsert",
     "ModelSpec",
     "MountSpec",
     "NetworkSpec",
@@ -327,6 +336,7 @@ __all__ = [
     "UserWorkspace",
     "VisionSpec",
     "WorkflowSpec",
+    "apply_markup",
     "models_for_provider",
     "parse_agent_ref",
     "parse_image_ref",

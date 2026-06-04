@@ -26,6 +26,7 @@ from helix_agent.persistence.models.knowledge import (
 from helix_agent.persistence.models.mcp_connector_catalog import McpConnectorCatalogRow
 from helix_agent.persistence.models.memory_item import MemoryItemRow
 from helix_agent.persistence.models.memory_writeback_dlq import MemoryWritebackDLQRow
+from helix_agent.persistence.models.model_rate_card import ModelRateCardRow
 from helix_agent.persistence.models.platform_embedding_config import (
     PlatformEmbeddingConfigRow,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "McpConnectorCatalogRow",
     "MemoryItemRow",
     "MemoryWritebackDLQRow",
+    "ModelRateCardRow",
     "PlatformEmbeddingConfigRow",
     "PlatformProviderSecretRow",
     "PlatformToolSecretRow",

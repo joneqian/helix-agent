@@ -25,6 +25,11 @@ class TokenUsageRow(Base):
     agent_name: Mapped[str] = mapped_column(Text, nullable=False)
     agent_version: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(Text, nullable=False)
+    # Stream Y-3 — additive nullable provider so Y4 can price by
+    # ``(provider, model)``. New rows are populated by the token-usage
+    # middleware (the ModelSpec carries the provider); legacy rows stay NULL
+    # and Y4 reverse-looks-up the provider via MODEL_CATALOG.
+    provider: Mapped[str | None] = mapped_column(Text, nullable=True)
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
