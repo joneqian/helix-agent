@@ -46,6 +46,8 @@ export interface TranslationKeys {
     mcp_servers: string;
     mcp_catalog: string;
     platform_skills: string;
+    usage: string;
+    chargeback: string;
   };
   login: {
     title: string;
@@ -992,6 +994,47 @@ export interface TranslationKeys {
     detail_hint: string;
     detail_hint_link: string;
   };
+  usage: {
+    page_title: string;
+    subtitle: string;
+    group_by_agent: string;
+    group_by_model: string;
+    total_billed: string;
+    as_of_note: string;
+    col_key: string;
+    col_input_tokens: string;
+    col_output_tokens: string;
+    col_cache_creation_tokens: string;
+    col_cache_read_tokens: string;
+    col_billed: string;
+    unpriced: string;
+    tokens_heading: string;
+    realtime: string;
+    realtime_note: string;
+    empty: string;
+    failed_to_load: string;
+  };
+  chargeback: {
+    page_title: string;
+    subtitle: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    tenant_filter: string;
+    as_of: string;
+    total_base: string;
+    total_billed: string;
+    total_margin: string;
+    col_tenant: string;
+    col_input_tokens: string;
+    col_output_tokens: string;
+    col_base: string;
+    col_markup: string;
+    col_billed: string;
+    col_margin: string;
+    col_unpriced: string;
+    empty: string;
+    failed_to_load: string;
+  };
   coming_soon: {
     title_prefix: string;
     body: string;
@@ -1060,6 +1103,8 @@ const en: TranslationKeys = {
     mcp_servers: "MCP Servers",
     mcp_catalog: "MCP Catalog",
     platform_skills: "Platform Skills",
+    usage: "Usage",
+    chargeback: "Chargeback",
   },
   login: {
     title: "helix Admin",
@@ -2050,6 +2095,47 @@ const en: TranslationKeys = {
     filter_status_all: "All statuses",
     detail_hint: "Need to start a new run?",
     detail_hint_link: "Open the Playground tab on an agent.",
+  },
+  usage: {
+    page_title: "Usage",
+    subtitle: "Billed cost and token usage for your tenant this month.",
+    group_by_agent: "By Agent",
+    group_by_model: "By Model",
+    total_billed: "Total billed",
+    as_of_note: "Cost as of {{time}}; updates hourly.",
+    col_key: "Name",
+    col_input_tokens: "Input tokens",
+    col_output_tokens: "Output tokens",
+    col_cache_creation_tokens: "Cache write tokens",
+    col_cache_read_tokens: "Cache read tokens",
+    col_billed: "Billed cost",
+    unpriced: "Unpriced",
+    tokens_heading: "Token usage",
+    realtime: "Realtime",
+    realtime_note: "Live current-month counters; billed cost above lags by up to an hour.",
+    empty: "No usage recorded for this month.",
+    failed_to_load: "Failed to load usage",
+  },
+  chargeback: {
+    page_title: "Chargeback",
+    subtitle: "Cross-tenant cost split — base, markup, billed and margin per tenant.",
+    not_admin_title: "system_admin only",
+    not_admin_body: "The chargeback report is restricted to platform administrators.",
+    tenant_filter: "Filter by tenant ID",
+    as_of: "As of",
+    total_base: "Total base cost",
+    total_billed: "Total billed",
+    total_margin: "Total margin",
+    col_tenant: "Tenant",
+    col_input_tokens: "Input tokens",
+    col_output_tokens: "Output tokens",
+    col_base: "Base cost",
+    col_markup: "Markup",
+    col_billed: "Billed",
+    col_margin: "Margin",
+    col_unpriced: "Unpriced buckets",
+    empty: "No chargeback data for this month.",
+    failed_to_load: "Failed to load chargeback",
   },
   coming_soon: {
     title_prefix: "This page is being implemented",
