@@ -21,6 +21,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from helix_agent.protocol.tenant_config import TenantPlan
+
 __all__ = [
     "HIGH_RISK_TOOLS",
     "Skill",
@@ -192,6 +194,11 @@ class Skill(BaseModel):
     latest_version: int = Field(ge=0)  # 0 only between create + first version insert
     description: str = ""
     category: str | None = None
+    # Stream X — Mini-ADR X-2. Minimum plan tier a tenant needs to use this
+    # skill. Only meaningful for platform skills (X2 makes ``tenant_id``
+    # nullable; ``None`` = platform). A tenant's own skills are always usable.
+    # Gated at bind / list time via ``tier_satisfies`` — never on the hot path.
+    required_tier: TenantPlan = TenantPlan.FREE
     # Capability Uplift Sprint #4 — Mini-ADR U-25.
     # ``pinned`` is the operator's "do not Curator-touch" escape hatch.
     # ``last_used_at`` is the throttled (1h/skill) activity timestamp
