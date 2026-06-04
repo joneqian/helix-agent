@@ -49,7 +49,8 @@ from helix_agent.persistence import (
     create_async_engine_from_config,
     create_async_session_factory,
 )
-from helix_agent.protocol import AuditAction, AuditEntry, AuditResult
+from helix_agent.persistence.rls import bypass_rls_var, current_tenant_id_var
+from helix_agent.protocol import AuditAction, AuditEntry, AuditQuery, AuditResult
 
 pytestmark = pytest.mark.integration
 
@@ -114,6 +115,9 @@ def _provision_app_role(sync_dsn: str) -> None:
             conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}"))
             conn.execute(text(f"GRANT SELECT ON TABLE audit_log TO {APP_ROLE}"))
             conn.execute(text(f"GRANT audit_writer TO {APP_ROLE}"))
+            # Membership in the BYPASSRLS reader role so the cross-tenant audit
+            # read can ``SET LOCAL ROLE audit_reader`` (mirrors production).
+            conn.execute(text(f"GRANT audit_reader TO {APP_ROLE}"))
     finally:
         admin.dispose()
 
@@ -301,5 +305,39 @@ async def test_partial_index_present(
         assert "backup_acked" in indexdef
         # Must filter unacked, not acked.
         assert "false" in indexdef or "= false" in indexdef
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_query_reads_all_tenants_via_set_role(
+    app_role_store: tuple[SqlAuditLogStore, AsyncEngine],
+) -> None:
+    """``query(tenant_id="*")`` must ``SET LOCAL ROLE audit_reader`` so the
+    non-BYPASSRLS app role sees every tenant on the FORCE-RLS ``audit_log``.
+
+    Without the SET ROLE the GUC-unset cross-tenant read returns zero rows.
+    """
+    store, engine = app_role_store
+    t1, t2 = uuid4(), uuid4()
+    try:
+        # append() assumes audit_writer internally — writes for two tenants.
+        await store.append(_entry(t1))
+        await store.append(_entry(t2))
+
+        # Mirror the production cross-tenant path: bypass var on, no tenant GUC.
+        tok_b = bypass_rls_var.set(True)
+        tok_t = current_tenant_id_var.set(None)
+        try:
+            page = await store.query(AuditQuery(tenant_id="*", limit=50))
+        finally:
+            current_tenant_id_var.reset(tok_t)
+            bypass_rls_var.reset(tok_b)
+
+        seen = {e.tenant_id for e in page.entries}
+        assert t1 in seen and t2 in seen
+        # (Single-tenant GUC-scoped reads are covered by the RLS-wrapped
+        # harness in ``test_rls_integration.py``; this app-role harness has no
+        # RLS sessionmaker so a non-``*`` read here can't emit the tenant GUC.)
     finally:
         await engine.dispose()
