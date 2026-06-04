@@ -39,6 +39,9 @@ class TokenUsageRecord:
     agent_name: str
     agent_version: str
     model: str
+    # Stream Y-3 — additive nullable provider so Y4 can price by
+    # ``(provider, model)``. ``None`` for legacy rows.
+    provider: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_tokens: int = 0
@@ -121,6 +124,7 @@ class DbTokenUsageStore(TokenUsageStore):
                 agent_name=record.agent_name,
                 agent_version=record.agent_version,
                 model=record.model,
+                provider=record.provider,
                 trace_id=record.trace_id,
                 input_tokens=record.input_tokens,
                 output_tokens=record.output_tokens,
@@ -160,6 +164,7 @@ def _row_to_record(row: TokenUsageRow) -> TokenUsageRecord:
         agent_name=row.agent_name,
         agent_version=row.agent_version,
         model=row.model,
+        provider=row.provider,
         trace_id=row.trace_id,
         input_tokens=row.input_tokens,
         output_tokens=row.output_tokens,

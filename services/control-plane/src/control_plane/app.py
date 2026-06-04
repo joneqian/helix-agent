@@ -52,6 +52,7 @@ from control_plane.api import (
     build_platform_embedding_config_router,
     build_platform_skills_router,
     build_quota_router,
+    build_rate_card_router,
     build_role_bindings_router,
     build_runs_list_router,
     build_runs_router,
@@ -176,6 +177,11 @@ from helix_agent.persistence.auth import (
     SqlApiKeyStore,
     SqlRoleBindingStore,
     SqlServiceAccountStore,
+)
+from helix_agent.persistence.billing import (
+    DbModelRateCardStore,
+    InMemoryModelRateCardStore,
+    ModelRateCardStore,
 )
 from helix_agent.persistence.curation import (
     CurationCandidateStore,
@@ -522,6 +528,10 @@ def create_app(
     # Stream W — platform-curated MCP connector catalog (NULL-tenant rows).
     resolved_mcp_connector_catalog_store = (
         sql_stores.mcp_connector_catalog if sql_stores else InMemoryMcpConnectorCatalogStore()
+    )
+    # Stream Y (Y-3) — platform-curated model rate card (NULL-tenant rows).
+    resolved_model_rate_card_store = (
+        sql_stores.model_rate_card if sql_stores else InMemoryModelRateCardStore()
     )
     resolved_keycloak_admin_client = keycloak_admin_client or _build_keycloak_admin_client(
         resolved_settings, resolved_secret_store
@@ -1014,6 +1024,7 @@ def create_app(
     # AsyncExitStack for shutdown); ``None`` until the lifespan sets it.
     app.state.tenant_mcp_server_store = resolved_tenant_mcp_server_store
     app.state.mcp_connector_catalog_store = resolved_mcp_connector_catalog_store
+    app.state.model_rate_card_store = resolved_model_rate_card_store
     app.state.tenant_mcp_pool_service = None
     app.state.platform_secret_store = resolved_platform_secret_store
     app.state.platform_secrets_service = resolved_platform_secrets_service
@@ -1113,6 +1124,7 @@ def create_app(
     app.include_router(build_service_accounts_router())
     app.include_router(build_mcp_servers_router())
     app.include_router(build_mcp_catalog_router())
+    app.include_router(build_rate_card_router())
     app.include_router(build_platform_skills_router())
     app.include_router(build_api_keys_router())
     app.include_router(build_role_bindings_router())
@@ -1172,6 +1184,7 @@ class _SqlStores:
     tenant_member: TenantMemberStore  # Stream R
     tenant_mcp_server: TenantMcpServerStore  # Stream V
     mcp_connector_catalog: McpConnectorCatalogStore  # Stream W
+    model_rate_card: ModelRateCardStore  # Stream Y (Y-3)
     feedback: FeedbackStore
     token_usage: TokenUsageStore
     audit_log: AuditLogStore
@@ -1358,6 +1371,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         tenant_member=SqlTenantMemberStore(session_factory),
         tenant_mcp_server=SqlTenantMcpServerStore(session_factory),
         mcp_connector_catalog=SqlMcpConnectorCatalogStore(session_factory),
+        model_rate_card=DbModelRateCardStore(session_factory),
         feedback=DbFeedbackStore(session_factory),
         token_usage=DbTokenUsageStore(session_factory),
         audit_log=SqlAuditLogStore(session_factory),

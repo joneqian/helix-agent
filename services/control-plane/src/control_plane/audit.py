@@ -147,6 +147,9 @@ ResourceType = Literal[
     # packages/helix-protocol/src/helix_agent/protocol/audit.py per
     # [memory:audit-literal-drift] (both must stay in sync).
     "mcp_connector_catalog",
+    # Stream Y — platform model rate card (Y-3). Mirrors the protocol-side
+    # ``ResourceType`` Literal per [memory:audit-literal-drift].
+    "model_rate_card",
 ]
 
 

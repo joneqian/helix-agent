@@ -82,6 +82,9 @@ class TokenUsageMiddleware:
     agent_name: str
     agent_version: str
     model: str
+    # Stream Y-3 — the ModelSpec provider, baked in at construction so Y4 can
+    # price by ``(provider, model)``. ``None`` when the caller can't supply it.
+    provider: str | None = None
 
     name: str = "token_usage"
     anchor: str = "after_llm_call"
@@ -152,6 +155,7 @@ class TokenUsageMiddleware:
                     agent_name=self.agent_name,
                     agent_version=self.agent_version,
                     model=self.model,
+                    provider=self.provider,
                     input_tokens=input_t,
                     output_tokens=output_t,
                     cache_creation_tokens=cache_creation_t,

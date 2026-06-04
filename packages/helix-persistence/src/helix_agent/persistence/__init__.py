@@ -18,6 +18,21 @@ from helix_agent.persistence.audit_log import (
 )
 from helix_agent.persistence.audit_log import SqlAuditLogStore as SqlAuditLogStore
 from helix_agent.persistence.base import Base as Base
+from helix_agent.persistence.billing import (
+    DbModelRateCardStore as DbModelRateCardStore,
+)
+from helix_agent.persistence.billing import (
+    InMemoryModelRateCardStore as InMemoryModelRateCardStore,
+)
+from helix_agent.persistence.billing import (
+    ModelRateCardConflictError as ModelRateCardConflictError,
+)
+from helix_agent.persistence.billing import (
+    ModelRateCardNotFoundError as ModelRateCardNotFoundError,
+)
+from helix_agent.persistence.billing import (
+    ModelRateCardStore as ModelRateCardStore,
+)
 from helix_agent.persistence.curation import (
     CurationCandidateStore as CurationCandidateStore,
 )
@@ -91,6 +106,7 @@ from helix_agent.persistence.models import KnowledgeChunkRow as KnowledgeChunkRo
 from helix_agent.persistence.models import KnowledgeDocumentRow as KnowledgeDocumentRow
 from helix_agent.persistence.models import McpConnectorCatalogRow as McpConnectorCatalogRow
 from helix_agent.persistence.models import MemoryItemRow as MemoryItemRow
+from helix_agent.persistence.models import ModelRateCardRow as ModelRateCardRow
 from helix_agent.persistence.models import SkillRow as SkillRow
 from helix_agent.persistence.models import SkillVersionRow as SkillVersionRow
 from helix_agent.persistence.models import TenantMemberRow as TenantMemberRow
@@ -240,6 +256,7 @@ __all__ = [
     "Base",
     "CurationCandidateStore",
     "DatabaseConfig",
+    "DbModelRateCardStore",
     "DrDrillRow",
     "DuplicateKnowledgeBaseError",
     "DuplicateMemberError",
@@ -254,6 +271,7 @@ __all__ = [
     "InMemoryKnowledgeStore",
     "InMemoryMcpConnectorCatalogStore",
     "InMemoryMemoryStore",
+    "InMemoryModelRateCardStore",
     "InMemoryPlatformSecretStore",
     "InMemoryTenantConfigStore",
     "InMemoryTenantMcpServerStore",
@@ -277,6 +295,10 @@ __all__ = [
     "McpConnectorCatalogStore",
     "MemoryItemRow",
     "MemoryStore",
+    "ModelRateCardConflictError",
+    "ModelRateCardNotFoundError",
+    "ModelRateCardRow",
+    "ModelRateCardStore",
     "PlatformSecretStore",
     "SqlApprovalStore",
     "SqlArtifactStore",

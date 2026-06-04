@@ -128,6 +128,7 @@ def build_middleware_chains(
                 agent_name=spec.metadata.name,
                 agent_version=spec.metadata.version,
                 model=model.name,
+                provider=model.provider,
             )
         )
 
