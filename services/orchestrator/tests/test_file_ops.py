@@ -369,6 +369,30 @@ def test_edit_no_match_offers_candidate(tmp_path: Path) -> None:
     assert "near line 1" in out["detail"]
 
 
+def test_edit_fuzzy_preserves_crlf(tmp_path: Path) -> None:
+    # A uniformly-CRLF file keeps its endings through the fuzzy path.
+    (tmp_path / "f.txt").write_bytes(b"x = 1\r\ny = 2\r\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "x = 1 ", "x = 9", ws=str(tmp_path)))
+    assert out["ok"] is True
+    assert out["match"] == "fuzzy"
+    assert (tmp_path / "f.txt").read_bytes() == b"x = 9\r\ny = 2\r\n"
+
+
+def test_edit_fuzzy_leaves_neighbours_untouched(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("line1\nx=1\nline3\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "x=1 ", "X=1", ws=str(tmp_path)))
+    assert out["match"] == "fuzzy"
+    assert (tmp_path / "f.txt").read_text() == "line1\nX=1\nline3\n"
+
+
+def test_edit_fuzzy_new_with_trailing_newline(tmp_path: Path) -> None:
+    # new's own trailing newline is inserted verbatim (consistent with exact).
+    (tmp_path / "f.txt").write_text("a\nx=1\nb\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "x=1 ", "X=1\n", ws=str(tmp_path)))
+    assert out["ok"] is True
+    assert (tmp_path / "f.txt").read_text() == "a\nX=1\n\nb\n"
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — tool orchestration (envelope parsing + checks + metadata)
 # --------------------------------------------------------------------------
