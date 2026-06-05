@@ -213,6 +213,46 @@ print(json.dumps(_main()))
 
 _EDIT_MAIN = """
 
+def _fuzzy_line_span(text, old):
+    # Unique line range [i, j) in text whose strip-normalized lines equal old's
+    # strip-normalized lines, or "ambiguous" / None. strip() ignores BOTH
+    # leading indent and trailing whitespace (tolerant of LLM indent drift);
+    # the uniqueness gate sends any multi-site match to "ambiguous" so a
+    # wrong-indent line can't be silently mass-edited.
+    tl = text.split("\\n")
+    ol = old.split("\\n")
+    if len(ol) > 1 and ol[-1] == "":
+        ol = ol[:-1]
+    on = [x.strip() for x in ol]
+    k = len(on)
+    if k == 0:
+        return None
+    tn = [x.strip() for x in tl]
+    hits = [i for i in range(len(tl) - k + 1) if tn[i:i + k] == on]
+    if len(hits) == 1:
+        return (hits[0], hits[0] + k)
+    if len(hits) > 1:
+        return "ambiguous"
+    return None
+
+
+def _candidate(text, old):
+    import difflib
+
+    ol = [x.strip() for x in old.split("\\n") if x.strip()]
+    if not ol:
+        return None
+    lines = text.split("\\n")
+    stripped = [x.strip() for x in lines]
+    close = difflib.get_close_matches(ol[0], stripped, n=1, cutoff=0.6)
+    if not close:
+        return None
+    for idx, s in enumerate(stripped):
+        if s == close[0]:
+            return "near line " + str(idx + 1) + ": " + lines[idx].strip()[:80]
+    return None
+
+
 def _main():
     full = _resolve(_P["rel"])
     if full is None:
@@ -240,15 +280,39 @@ def _main():
             "current_hash": current_hash,
         }
     old = _P["old"]
-    # str.count / str.replace share non-overlapping semantics, so the count
-    # used for the ambiguity check matches the occurrence replace() targets.
+    new = _P["new"]
+    # Level 1 — exact substring (byte-precise). count / replace share
+    # non-overlapping semantics, so count matches what replace() targets.
     count = text.count(old)
-    if count == 0:
-        return {"ok": False, "error": "no_match"}
     if count > 1:
         return {"ok": False, "error": "ambiguous", "detail": "count=" + str(count), "count": count}
+    if count == 1:
+        updated = text.replace(old, new, 1)
+        match = "exact"
+    else:
+        # Level 2 — whitespace-normalized line-block fallback (handles LLM
+        # indent / trailing-space drift). Replaces the matched line range.
+        span = _fuzzy_line_span(text, old)
+        if span == "ambiguous":
+            return {"ok": False, "error": "ambiguous", "detail": "multiple fuzzy matches"}
+        if span is None:
+            result = {"ok": False, "error": "no_match"}
+            hint = _candidate(text, old)
+            if hint:
+                result["detail"] = hint
+            return result
+        i, j = span
+        # Preserve a uniformly-CRLF file's endings; mixed / LF rebuild as LF.
+        if "\\r\\n" in text and "\\n" not in text.replace("\\r\\n", ""):
+            nl = "\\r\\n"
+        else:
+            nl = "\\n"
+        tl = text.split(nl)
+        new_lines = new.replace("\\r\\n", "\\n").split("\\n")
+        updated = nl.join(tl[:i] + new_lines + tl[j:])
+        match = "fuzzy"
     try:
-        out = text.replace(old, _P["new"], 1).encode("utf-8")
+        out = updated.encode("utf-8")
     except UnicodeEncodeError:
         return {"ok": False, "error": "invalid_unicode"}
     try:
@@ -260,6 +324,7 @@ def _main():
         "content_hash": hashlib.sha256(out).hexdigest(),
         "size": len(out),
         "path": _P["rel"],
+        "match": match,
     }
 
 
@@ -597,9 +662,12 @@ class EditFileTool:
             name="edit_file",
             description=(
                 "Replace an exact substring in a workspace text file. 'old_string' "
-                "must occur exactly once. Optionally pass 'expected_hash' (from "
-                "read_file) for a safe compare-and-swap: the edit is rejected as "
-                "stale if the file changed since you read it. Path is relative to "
+                "must occur exactly once; if it isn't found exactly, a "
+                "whitespace-tolerant line-block match is attempted (ignores indent / "
+                "trailing-space drift; that fallback normalizes line endings to LF "
+                "unless the file is uniformly CRLF). Optionally pass 'expected_hash' "
+                "(from read_file) for a safe compare-and-swap: the edit is rejected "
+                "as stale if the file changed since you read it. Path is relative to "
                 "/workspace."
             ),
             parameters={
@@ -662,12 +730,15 @@ class EditFileTool:
         env = parse_envelope(outcome, tool="edit_file")
         _raise_for_error(env, tool="edit_file")
         size = env.get("size")
+        match = env.get("match")
+        suffix = f" ({match} match)" if match else ""
         return ToolResult(
-            content=f"Edited {rel} ({size} bytes)",
+            content=f"Edited {rel} ({size} bytes){suffix}",
             meta={
                 "path": rel,
                 "content_hash": env.get("content_hash"),
                 "size": size,
+                "match": match,
             },
         )
 
