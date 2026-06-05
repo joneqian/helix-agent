@@ -17,11 +17,26 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from helix_agent.protocol import Plan
 from helix_agent.runtime.cancellation import CancellationToken
+
+#: Stream TE-1 — a tool's effect on the world. Descriptive metadata only in
+#: TE-1; intended to drive the side-effect-aware scheduler / approval gate
+#: (TE-4) and per-tool audit (TE-2). Three levels:
+#: - ``read_only``: observes state only (file read, search) — intended to be
+#:   safe to parallelise.
+#: - ``reversible``: mutates recoverable state (write/overwrite an artifact or
+#:   workspace file that can be re-written) — intended to serialise on path
+#:   conflict.
+#: - ``irreversible``: effects that cannot be cleanly undone (shell command,
+#:   sending an email, destructive ops) — intended to be forced serial +
+#:   approval-gated.
+#: ``None`` on a :class:`ToolSpec` means "derive from ``is_read_only``" (see
+#: :attr:`ToolSpec.resolved_side_effect`) so existing tools keep their behaviour.
+SideEffectLevel = Literal["read_only", "reversible", "irreversible"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +50,14 @@ class ToolSpec:
     conservative — a third-party tool that doesn't opt in stays on the
     sequential path it had before L6. See [STREAM-L-DESIGN § 3.L6](
     ../../../../../docs/streams/STREAM-L-DESIGN.md) + Mini-ADR L-6.
+
+    ``side_effect`` and ``idempotent`` (Stream TE-1) add a richer
+    side-effect classification consumed later by the side-effect-driven
+    scheduler / approval gate (TE-4) and per-tool audit (TE-2). Both
+    default to a value that preserves current behaviour: ``side_effect``
+    derives from ``is_read_only`` via :attr:`resolved_side_effect` and
+    ``idempotent`` defaults ``False``. See [STREAM-TE-DESIGN § TE-ADR-1](
+    ../../../../../docs/streams/STREAM-TE-DESIGN.md).
     """
 
     name: str
@@ -73,6 +96,36 @@ class ToolSpec:
     #: ``helix_skill_call_errors_total`` metrics so per-skill usage can
     #: be observed (Mini-ADR J-23 § 15.4 telemetry 双 counter).
     from_skill: str | None = None
+    #: Stream TE-1 — explicit side-effect classification. ``None`` means
+    #: "derive from ``is_read_only``" (see :attr:`resolved_side_effect`),
+    #: which keeps every existing tool's behaviour unchanged. A tool whose
+    #: effects cannot be cleanly undone (e.g. ``bash``, ``send_email``,
+    #: destructive MCP ops) declares ``"irreversible"`` so the TE-4
+    #: scheduler forces it serial and the approval gate triggers on it.
+    #: This is purely descriptive metadata until TE-4 wires it into
+    #: scheduling/gating — TE-1 adds no behavioural change.
+    side_effect: SideEffectLevel | None = None
+    #: Stream TE-1 — whether repeating this call with the same args is safe
+    #: (no additional effect). Read-only tools are inherently idempotent;
+    #: a write that overwrites to a fixed content is too, but e.g. an
+    #: "append" or "send" is not. Conservative default ``False``. Reserved
+    #: for retry/self-correction logic; not yet consumed in TE-1.
+    idempotent: bool = False
+
+    @property
+    def resolved_side_effect(self) -> SideEffectLevel:
+        """Effective side-effect level: explicit value, else derived.
+
+        When :attr:`side_effect` is unset, derive a conservative level
+        from :attr:`is_read_only` so legacy tools that never declared a
+        level still classify correctly: read-only tools are ``read_only``,
+        everything else is ``reversible`` (not ``irreversible`` — a tool
+        must opt in to the gated tier explicitly, preserving today's
+        behaviour where no tool is auto-gated).
+        """
+        if self.side_effect is not None:
+            return self.side_effect
+        return "read_only" if self.is_read_only else "reversible"
 
 
 @dataclass(frozen=True)

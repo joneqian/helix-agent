@@ -77,3 +77,36 @@ def test_get_returns_none_on_unknown() -> None:
 
 def test_dummy_tool_satisfies_protocol() -> None:
     assert isinstance(_make("x"), Tool)
+
+
+# --- Stream TE-1: side_effect / idempotent metadata ------------------------
+
+
+def test_side_effect_derives_read_only_when_unset_and_read_only() -> None:
+    spec = ToolSpec(name="t", description="d", is_read_only=True)
+    assert spec.side_effect is None
+    assert spec.resolved_side_effect == "read_only"
+
+
+def test_side_effect_derives_reversible_when_unset_and_not_read_only() -> None:
+    # Default (write-ish) tool stays "reversible", NOT "irreversible" — a tool
+    # must opt into the gated tier explicitly, preserving pre-TE-1 behaviour.
+    spec = ToolSpec(name="t", description="d")
+    assert spec.is_read_only is False
+    assert spec.side_effect is None
+    assert spec.resolved_side_effect == "reversible"
+
+
+def test_explicit_side_effect_is_honoured_over_derivation() -> None:
+    spec = ToolSpec(name="t", description="d", is_read_only=False, side_effect="irreversible")
+    assert spec.resolved_side_effect == "irreversible"
+    # Explicit value wins even when it disagrees with is_read_only.
+    read_only_but_irreversible = ToolSpec(
+        name="t2", description="d", is_read_only=True, side_effect="irreversible"
+    )
+    assert read_only_but_irreversible.resolved_side_effect == "irreversible"
+
+
+def test_idempotent_defaults_false_and_is_settable() -> None:
+    assert ToolSpec(name="t", description="d").idempotent is False
+    assert ToolSpec(name="t", description="d", idempotent=True).idempotent is True
