@@ -35,6 +35,7 @@ from orchestrator.multimodal import ImageResolver
 from orchestrator.tools.approval import AskForApprovalTool
 from orchestrator.tools.artifact import ListArtifactsTool, SaveArtifactTool
 from orchestrator.tools.bash import BashTool
+from orchestrator.tools.file_ops import ListDirTool, ReadFileTool, WriteFileTool
 from orchestrator.tools.find_tools import FindToolsTool
 from orchestrator.tools.http import AllowlistProvider, HTTPTool
 from orchestrator.tools.knowledge import KnowledgeRetriever, KnowledgeSearchTool
@@ -54,7 +55,17 @@ logger = logging.getLogger(__name__)
 
 #: Built-in tool names the platform ships in M0.
 KNOWN_BUILTINS = frozenset(
-    {"web_search", "exec_python", "bash", "save_artifact", "list_artifacts", "ask_for_approval"}
+    {
+        "web_search",
+        "exec_python",
+        "bash",
+        "read_file",
+        "write_file",
+        "list_dir",
+        "save_artifact",
+        "list_artifacts",
+        "ask_for_approval",
+    }
 )
 
 
@@ -277,6 +288,8 @@ def _register_builtin(
         _register_exec_python(registry, env, persistent_workspace)
     elif entry.name == "bash":
         _register_bash(registry, env, persistent_workspace)
+    elif entry.name in ("read_file", "write_file", "list_dir"):
+        _register_file_op(registry, entry.name, env, persistent_workspace)
     elif entry.name == "save_artifact":
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
@@ -324,6 +337,30 @@ def _register_bash(registry: ToolRegistry, env: ToolEnv, persistent_workspace: b
             persistent_workspace=persistent_workspace,
         )
     )
+
+
+def _register_file_op(
+    registry: ToolRegistry, name: str, env: ToolEnv, persistent_workspace: bool
+) -> None:
+    # Stream TE-7 — read_file / write_file / list_dir ride the same Sandbox
+    # Supervisor exec channel as bash / exec_python (TE-ADR-2 exec-warm locus).
+    if env.supervisor_client is None:
+        raise AgentFactoryError(
+            f"builtin {name!r} declared but no Sandbox Supervisor client "
+            "is configured (ToolEnv.supervisor_client)"
+        )
+    if name == "read_file":
+        registry.register(
+            ReadFileTool(client=env.supervisor_client, persistent_workspace=persistent_workspace)
+        )
+    elif name == "write_file":
+        registry.register(
+            WriteFileTool(client=env.supervisor_client, persistent_workspace=persistent_workspace)
+        )
+    else:  # list_dir
+        registry.register(
+            ListDirTool(client=env.supervisor_client, persistent_workspace=persistent_workspace)
+        )
 
 
 def _require_artifact_store(env: ToolEnv, tool_name: str) -> ArtifactStore:

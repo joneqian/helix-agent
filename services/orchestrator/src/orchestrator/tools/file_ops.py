@@ -1,0 +1,509 @@
+"""Workspace file primitives — Stream TE-7.
+
+``read_file`` / ``write_file`` / ``list_dir`` give the agent *structured*
+access to its per-user workspace, instead of pushing every file operation
+through the ``bash`` black box (TE-5). Structured tools declare path
+metadata for the scheduler (Stream L.L6), a ``side_effect`` level for the
+TE-4 gate, and — for ``read_file`` — a ``content_hash`` that TE-9's
+optimistic-concurrency ``edit_file`` consumes (expected-hash CAS).
+
+**Execution locus (TE-ADR-2, 2026-06-05 复议)** — these tools ride the
+*same* ``exec`` channel as ``bash``: each operation is a small, stdlib-only
+Python snippet run via :func:`run_in_sandbox` in the agent's J.15 warm
+sandbox. The initial design leaned toward a dedicated supervisor file API,
+but that API's backing implementation cold-starts a throwaway container per
+call (seconds); riding the warm session is milliseconds and keeps a
+read→verify→atomic-rename sequence atomic within a single ``exec``. The
+snippet operates on the ``/workspace`` mount and prints one JSON envelope
+to stdout, which the tool parses back into a :class:`ToolResult`.
+
+**Snippet construction** — a snippet is ``_PARAMS = <json>`` (the operation
+arguments, ``json.dumps``-encoded then embedded as a ``repr()`` Python
+string literal — double-escaped, so no Python-level injection regardless of
+``path``/``content`` bytes) followed by a fixed, ``stdlib``-only body that
+reads ``json.loads(_PARAMS)``. Bodies take the workspace root as a parameter
+so the confinement / atomic-write logic is unit-testable against a temp
+directory, not only in a live sandbox.
+
+**Safety** — the snippet confines every path to the workspace root via
+``os.path.realpath`` (defeats ``..`` traversal *and* symlink escape, which a
+``PurePosixPath`` check on the orchestrator side cannot see; a path the OS
+rejects, e.g. an embedded NUL, resolves to a confinement denial rather than
+a crash). The orchestrator side additionally rejects absolute / ``..`` / NUL
+paths up front. ``write_file`` writes atomically (same-dir temp file +
+``os.replace``) so a concurrent reader always sees a complete old-or-new
+snapshot — this is what lets reads run lock-free under TE-8's per-workspace
+write lock. Read / list / write are size-bounded to keep a large
+attacker-influenced file from OOM-ing the (per-user) sandbox.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import Any
+
+from orchestrator.tools.registry import (
+    ToolBlockedError,
+    ToolContext,
+    ToolResult,
+    ToolSpec,
+)
+from orchestrator.tools.sandbox import (
+    DEFAULT_OUTPUT_CHAR_CAP,
+    SandboxOutcome,
+    SupervisorClient,
+    run_in_sandbox,
+)
+
+#: Workspace mount inside the sandbox (see infra/sandbox-image).
+_WORKSPACE_ROOT = "/workspace"
+#: Largest file ``read_file`` will pull into the sandbox (whole file is hashed
+#: for TE-9 CAS, so the read can't be capped to the returned slice). Bigger
+#: files should use the dedicated ``read_workspace_file`` download path.
+_MAX_READ_BYTES = 10 * 1024 * 1024
+#: Largest ``write_file`` payload (chars). Bounds the snippet source shipped
+#: over the exec channel and the resulting file.
+_MAX_WRITE_CHARS = 10 * 1024 * 1024
+#: Largest number of directory entries ``list_dir`` returns (sorted prefix;
+#: sets ``truncated`` when exceeded).
+_MAX_LIST_ENTRIES = 1000
+
+
+class FileOpError(RuntimeError):
+    """A workspace file operation failed for a non-security reason
+    (missing file, binary content, I/O error). The ReAct tools node wraps
+    it into a ``ToolMessage(status='error')`` (Mini-ADR E-12) so the model
+    sees the structured ``error`` kind and self-corrects (re-read, fix path)."""
+
+
+def _require_path(args: Mapping[str, Any], *, tool: str, default: str | None = None) -> str:
+    """Validate the orchestrator-side ``path`` arg: a relative workspace
+    path without ``..`` or NUL. Mirrors ``artifact.py:_validate_path`` for a
+    consistent contract across file-touching tools; the in-sandbox snippet
+    re-checks via ``realpath`` to also defeat symlink escape."""
+    raw = args.get("path", default)
+    if not isinstance(raw, str):
+        msg = f"{tool} requires a 'path' string"
+        raise ValueError(msg)
+    cleaned = raw.strip()
+    if not cleaned:
+        msg = f"{tool} requires a non-empty 'path'"
+        raise ValueError(msg)
+    if "\x00" in cleaned:
+        msg = f"{tool} path must not contain a NUL byte"
+        raise ValueError(msg)
+    if cleaned.startswith("/") or ".." in PurePosixPath(cleaned).parts:
+        msg = f"{tool} path must be a relative workspace path without '..': {raw!r}"
+        raise ValueError(msg)
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# In-sandbox snippets. Each is ``_PARAMS = <repr of json>`` + a fixed,
+# stdlib-only body that prints exactly one JSON envelope to stdout. ``_PARAMS``
+# is JSON so values (path/content) round-trip as data, and the whole literal
+# is ``repr``-embedded so there is no Python-level injection. ``_resolve``
+# realpath-confines a relative path to the workspace root, returning ``None``
+# on escape (or on any path the OS rejects, e.g. embedded NUL).
+# ---------------------------------------------------------------------------
+
+_PRELUDE = """\
+import hashlib, json, os, tempfile
+
+_P = json.loads(_PARAMS)
+_WS = os.path.realpath(_P["ws"])
+
+
+def _resolve(rel):
+    try:
+        full = os.path.realpath(os.path.join(_WS, rel))
+    except (ValueError, OSError):
+        return None
+    if full == _WS or full.startswith(_WS + os.sep):
+        return full
+    return None
+"""
+
+_READ_MAIN = """
+
+def _main():
+    full = _resolve(_P["rel"])
+    if full is None:
+        return {"ok": False, "error": "path_escapes_workspace"}
+    try:
+        size = os.path.getsize(full)
+    except FileNotFoundError:
+        return {"ok": False, "error": "not_found"}
+    except OSError as exc:
+        return {"ok": False, "error": "io_error", "detail": str(exc)}
+    if size > _P["max_bytes"]:
+        return {"ok": False, "error": "file_too_large", "size": size}
+    try:
+        with open(full, "rb") as fh:
+            data = fh.read()
+    except FileNotFoundError:
+        return {"ok": False, "error": "not_found"}
+    except IsADirectoryError:
+        return {"ok": False, "error": "is_a_directory"}
+    except OSError as exc:
+        return {"ok": False, "error": "io_error", "detail": str(exc)}
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"ok": False, "error": "binary_unsupported", "size": len(data)}
+    cap = _P["cap"]
+    return {
+        "ok": True,
+        "content": text[:cap],
+        "content_hash": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "truncated": len(text) > cap,
+    }
+
+
+print(json.dumps(_main()))
+"""
+
+_WRITE_MAIN = """
+
+def _main():
+    full = _resolve(_P["rel"])
+    if full is None:
+        return {"ok": False, "error": "path_escapes_workspace"}
+    if os.path.isdir(full):
+        return {"ok": False, "error": "is_a_directory"}
+    try:
+        data = _P["content"].encode("utf-8")
+    except UnicodeEncodeError:
+        return {"ok": False, "error": "invalid_unicode"}
+    parent = os.path.dirname(full) or _WS
+    try:
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=parent)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, full)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        return {"ok": False, "error": "io_error", "detail": str(exc)}
+    return {
+        "ok": True,
+        "content_hash": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "path": _P["rel"],
+    }
+
+
+print(json.dumps(_main()))
+"""
+
+_LIST_MAIN = """
+
+def _main():
+    full = _resolve(_P["rel"])
+    if full is None:
+        return {"ok": False, "error": "path_escapes_workspace"}
+    entries = []
+    truncated = False
+    try:
+        with os.scandir(full) as it:
+            for entry in it:
+                if len(entries) >= _P["max_entries"]:
+                    truncated = True
+                    break
+                try:
+                    is_dir = entry.is_dir()
+                    size = entry.stat().st_size if entry.is_file() else None
+                except OSError:
+                    # Broken symlink / racing unlink — degrade gracefully.
+                    is_dir = False
+                    size = None
+                entries.append({"name": entry.name, "is_dir": is_dir, "size": size})
+    except FileNotFoundError:
+        return {"ok": False, "error": "not_found"}
+    except NotADirectoryError:
+        return {"ok": False, "error": "not_a_directory"}
+    except OSError as exc:
+        return {"ok": False, "error": "io_error", "detail": str(exc)}
+    entries.sort(key=lambda e: e["name"])
+    return {"ok": True, "entries": entries, "truncated": truncated}
+
+
+print(json.dumps(_main()))
+"""
+
+
+def _snippet(params: Mapping[str, Any], main: str) -> str:
+    """Assemble a snippet: ``_PARAMS`` literal + shared prelude + op body."""
+    return f"_PARAMS = {json.dumps(params)!r}\n" + _PRELUDE + main
+
+
+def build_read_wrapper(
+    rel: str, *, cap: int, ws: str = _WORKSPACE_ROOT, max_bytes: int = _MAX_READ_BYTES
+) -> str:
+    """Snippet that reads ``ws/rel`` and prints a JSON read envelope."""
+    return _snippet({"ws": ws, "rel": rel, "cap": cap, "max_bytes": max_bytes}, _READ_MAIN)
+
+
+def build_write_wrapper(rel: str, content: str, *, ws: str = _WORKSPACE_ROOT) -> str:
+    """Snippet that atomically writes ``content`` to ``ws/rel``."""
+    return _snippet({"ws": ws, "rel": rel, "content": content}, _WRITE_MAIN)
+
+
+def build_list_wrapper(
+    rel: str, *, ws: str = _WORKSPACE_ROOT, max_entries: int = _MAX_LIST_ENTRIES
+) -> str:
+    """Snippet that lists directory ``ws/rel`` and prints a JSON envelope."""
+    return _snippet({"ws": ws, "rel": rel, "max_entries": max_entries}, _LIST_MAIN)
+
+
+def parse_envelope(outcome: SandboxOutcome, *, tool: str) -> Mapping[str, Any]:
+    """Parse the single JSON envelope the snippet prints to stdout.
+
+    Raises :class:`FileOpError` when the sandbox timed out, the snippet
+    crashed (non-zero exit), or stdout isn't the expected JSON object. The
+    crash message is deliberately generic — the raw sandbox ``stderr`` (which
+    can carry a traceback) is not echoed to the model."""
+    if outcome.timed_out:
+        msg = f"{tool} timed out"
+        raise FileOpError(msg)
+    if outcome.exit_code != 0:
+        msg = f"{tool} failed in sandbox (exit {outcome.exit_code})"
+        raise FileOpError(msg)
+    text = outcome.stdout.strip()
+    if not text:
+        msg = f"{tool} produced no output"
+        raise FileOpError(msg)
+    try:
+        env = json.loads(text.splitlines()[-1])
+    except (ValueError, IndexError) as exc:
+        msg = f"{tool} produced unparseable output: {exc}"
+        raise FileOpError(msg) from exc
+    if not isinstance(env, dict):
+        msg = f"{tool} produced a non-object envelope"
+        raise FileOpError(msg)
+    return env
+
+
+def _raise_for_error(env: Mapping[str, Any], *, tool: str) -> None:
+    """Map a ``{"ok": False, ...}`` envelope to the right exception.
+
+    ``path_escapes_workspace`` is a security denial → :class:`ToolBlockedError`
+    (audited as ``tool:blocked``); every other kind is an operational error
+    the model self-corrects on → :class:`FileOpError`."""
+    if env.get("ok"):
+        return
+    kind = env.get("error", "unknown")
+    if kind == "path_escapes_workspace":
+        msg = f"{tool}: path escapes the workspace"
+        raise ToolBlockedError(msg)
+    detail = env.get("detail")
+    msg = f"{tool} failed: {kind}" + (f" ({detail})" if detail else "")
+    raise FileOpError(msg)
+
+
+@dataclass
+class ReadFileTool:
+    """Read a UTF-8 text file from the agent's workspace (exposed as ``read_file``)."""
+
+    client: SupervisorClient
+    output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP
+    #: Stream J.15 — acquire against the run user's persistent workspace.
+    persistent_workspace: bool = False
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="read_file",
+            description=(
+                "Read a UTF-8 text file from the agent's workspace and return "
+                "its contents plus a content hash (pass the hash to edit_file "
+                "for safe concurrent edits). Path is relative to /workspace."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative file path (no leading '/' or '..').",
+                    },
+                },
+                "required": ["path"],
+            },
+            is_read_only=True,
+            path_args=("path",),
+            side_effect="read_only",
+            idempotent=True,
+        )
+
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        rel = _require_path(args, tool="read_file")
+        outcome = await run_in_sandbox(
+            self.client,
+            code=build_read_wrapper(rel, cap=self.output_char_cap),
+            timeout_s=None,
+            ctx=ctx,
+            persistent_workspace=self.persistent_workspace,
+            tool_label="read_file",
+            fallback_thread_id="read_file",
+        )
+        env = parse_envelope(outcome, tool="read_file")
+        _raise_for_error(env, tool="read_file")
+        return ToolResult(
+            content=str(env.get("content", "")),
+            meta={
+                "path": rel,
+                "content_hash": env.get("content_hash"),
+                "size": env.get("size"),
+                "truncated": bool(env.get("truncated")),
+            },
+        )
+
+
+@dataclass
+class WriteFileTool:
+    """Atomically write a UTF-8 text file in the workspace (exposed as ``write_file``)."""
+
+    client: SupervisorClient
+    persistent_workspace: bool = False
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="write_file",
+            description=(
+                "Write (create or overwrite) a UTF-8 text file in the agent's "
+                "workspace. The write is atomic. Returns the new content hash. "
+                "Path is relative to /workspace; parent directories are created."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative file path (no leading '/' or '..').",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full file contents to write (UTF-8).",
+                    },
+                },
+                "required": ["path", "content"],
+            },
+            path_args=("path",),
+            side_effect="reversible",
+            # Overwriting to a fixed content is repeatable with no extra effect.
+            idempotent=True,
+        )
+
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        rel = _require_path(args, tool="write_file")
+        content = args.get("content")
+        if not isinstance(content, str):
+            msg = "write_file requires a 'content' string"
+            raise ValueError(msg)
+        if len(content) > _MAX_WRITE_CHARS:
+            msg = f"write_file content exceeds the {_MAX_WRITE_CHARS}-character limit"
+            raise ValueError(msg)
+        outcome = await run_in_sandbox(
+            self.client,
+            code=build_write_wrapper(rel, content),
+            timeout_s=None,
+            ctx=ctx,
+            persistent_workspace=self.persistent_workspace,
+            tool_label="write_file",
+            fallback_thread_id="write_file",
+        )
+        env = parse_envelope(outcome, tool="write_file")
+        _raise_for_error(env, tool="write_file")
+        size = env.get("size")
+        return ToolResult(
+            content=f"Wrote {size} bytes to {rel}",
+            meta={
+                "path": rel,
+                "content_hash": env.get("content_hash"),
+                "size": size,
+            },
+        )
+
+
+@dataclass
+class ListDirTool:
+    """List a workspace directory (exposed as ``list_dir``)."""
+
+    client: SupervisorClient
+    persistent_workspace: bool = False
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="list_dir",
+            description=(
+                "List the entries of a directory in the agent's workspace "
+                "(name, is_dir, size). Path is relative to /workspace; "
+                "defaults to the workspace root."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative directory path; defaults to '.'.",
+                    },
+                },
+            },
+            is_read_only=True,
+            path_args=("path",),
+            side_effect="read_only",
+            idempotent=True,
+        )
+
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        rel = _require_path(args, tool="list_dir", default=".")
+        outcome = await run_in_sandbox(
+            self.client,
+            code=build_list_wrapper(rel),
+            timeout_s=None,
+            ctx=ctx,
+            persistent_workspace=self.persistent_workspace,
+            tool_label="list_dir",
+            fallback_thread_id="list_dir",
+        )
+        env = parse_envelope(outcome, tool="list_dir")
+        _raise_for_error(env, tool="list_dir")
+        entries = env.get("entries")
+        if not isinstance(entries, list):
+            entries = []
+        return ToolResult(
+            content=_format_entries(rel, entries, truncated=bool(env.get("truncated"))),
+            meta={
+                "path": rel,
+                "entries": entries,
+                "n_entries": len(entries),
+                "truncated": bool(env.get("truncated")),
+            },
+        )
+
+
+def _format_entries(rel: str, entries: list[Mapping[str, Any]], *, truncated: bool) -> str:
+    """Human-readable directory listing for the LLM."""
+    if not entries:
+        return f"{rel}: (empty)"
+    lines = []
+    for entry in entries:
+        marker = "/" if entry.get("is_dir") else ""
+        size = entry.get("size")
+        suffix = "" if size is None else f"  ({size} bytes)"
+        lines.append(f"{entry.get('name')}{marker}{suffix}")
+    if truncated:
+        lines.append(f"... (truncated at {len(entries)} entries)")
+    return "\n".join(lines)

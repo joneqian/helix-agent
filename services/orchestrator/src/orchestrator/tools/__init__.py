@@ -24,6 +24,18 @@ from orchestrator.tools.assembly import (
 from orchestrator.tools.bash import (
     BashTool as BashTool,
 )
+from orchestrator.tools.file_ops import (
+    FileOpError as FileOpError,
+)
+from orchestrator.tools.file_ops import (
+    ListDirTool as ListDirTool,
+)
+from orchestrator.tools.file_ops import (
+    ReadFileTool as ReadFileTool,
+)
+from orchestrator.tools.file_ops import (
+    WriteFileTool as WriteFileTool,
+)
 from orchestrator.tools.find_tools import (
     FindToolsTool as FindToolsTool,
 )
@@ -184,6 +196,7 @@ __all__ = [
     "BashTool",
     "ChildAgentBuilder",
     "ExecPythonTool",
+    "FileOpError",
     "FindToolsTool",
     "HTTPSupervisorClient",
     "HTTPTavilyClient",
@@ -192,6 +205,7 @@ __all__ = [
     "KnowledgeSearchTool",
     "LLMReranker",
     "ListArtifactsTool",
+    "ListDirTool",
     "MCPCallResult",
     "MCPClient",
     "MCPServerConfig",
@@ -199,6 +213,7 @@ __all__ = [
     "MCPServerPoolLimitError",
     "MCPTool",
     "MCPToolDef",
+    "ReadFileTool",
     "RecordingMCPClient",
     "RecordingSupervisorClient",
     "RecordingTavilyClient",
@@ -220,6 +235,7 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "WebSearchTool",
+    "WriteFileTool",
     "build_tool_registry",
     "register_mcp_tools",
 ]
