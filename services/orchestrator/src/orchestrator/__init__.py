@@ -96,6 +96,9 @@ from orchestrator.sse import (
 from orchestrator.state import DEFAULT_MAX_STEPS as DEFAULT_MAX_STEPS
 from orchestrator.state import AgentState as AgentState
 from orchestrator.tools import (
+    FindToolsTool as FindToolsTool,
+)
+from orchestrator.tools import (
     Tool as Tool,
 )
 from orchestrator.tools import (
@@ -129,6 +132,7 @@ __all__ = [
     "AllProvidersExhaustedError",
     "AnthropicProvider",
     "BuiltAgent",
+    "FindToolsTool",
     "GraphRunner",
     "LLMCaller",
     "LLMProvider",

@@ -199,8 +199,13 @@ def build_react_graph(
     # Computed once at build time (the registry is fixed for the agent's
     # life). Zero behaviour change until a tool actually declares
     # irreversible — no builtin does yet; ``bash`` (TE-5) is the first.
+    # Stream TE-6 — classify over ``all_specs()`` (active + deferred) so a
+    # deferred irreversible tool stays gated once ``find_tools`` promotes it.
+    # Equals ``specs()`` when nothing is deferred.
     _irreversible_tools = frozenset(
-        spec.name for spec in tool_registry.specs() if spec.resolved_side_effect == "irreversible"
+        spec.name
+        for spec in tool_registry.all_specs()
+        if spec.resolved_side_effect == "irreversible"
     )
     _gated_tools = approval_required_tools | _irreversible_tools
 
@@ -222,7 +227,12 @@ def build_react_graph(
         if step_count >= max_steps:
             raise MaxStepsExceededError(step_count=step_count, max_steps=max_steps)
 
-        tools = list(tool_registry.specs())
+        # Stream TE-6 — bind active specs plus any deferred tools the run has
+        # promoted via ``find_tools`` (carried per-thread on AgentState, so the
+        # cached registry stays untouched). ``deferred_specs([])`` is empty when
+        # nothing was promoted → identical to the pre-TE-6 ``specs()`` bind.
+        promoted = state.get("promoted_tools") or []
+        tools = [*tool_registry.specs(), *tool_registry.deferred_specs(promoted)]
         messages = list(state["messages"])
         # Stream J.1 — render the plan into the system context so every
         # ReAct step executes against it. No-op for plain ReAct graphs.
@@ -384,7 +394,10 @@ def build_react_graph(
         # at MAX_TOOL_WORKERS); stages execute sequentially so any
         # state-mutating call (``update_plan``, ``save_artifact`` on a
         # contested path) still observes the LLM's intended ordering.
-        specs_by_name = {spec.name: spec for spec in tool_registry.specs()}
+        # Stream TE-6 — schedule over ``all_specs()`` so a promoted deferred
+        # tool is classified (side_effect / path_args) correctly when called.
+        # Equals ``specs()`` when nothing is deferred.
+        specs_by_name = {spec.name: spec for spec in tool_registry.all_specs()}
         stages = plan_stages(tool_calls, specs_by_name)
         results: dict[int, tuple[ToolMessage, Mapping[str, Any], int]] = {}
         # Stream K.K8 — collect per-tool state writes for promotion to
@@ -449,7 +462,23 @@ def build_react_graph(
             tool_message, tool_state, refund_inc = results[idx]
             new_messages.append(tool_message)
             for key, value in tool_state.items():
-                if key in TOOL_ALLOWED_STATE_KEYS:
+                if key not in TOOL_ALLOWED_STATE_KEYS:
+                    continue
+                # Stream TE-6 — list-valued channels (``promoted_tools`` union,
+                # ``subagent_invocations`` append) must ACCUMULATE within the
+                # batch, not overwrite: when several tools write the same
+                # channel in one parallel stage (e.g. two ``find_tools`` or two
+                # ``is_parallel_safe`` sub-agents), a plain ``[key] = value``
+                # keeps only the last call's list and silently drops the rest
+                # — the channel reducer runs at the node boundary and never
+                # sees the clobbered intra-batch values. Scalar channels
+                # (``plan``) keep last-write-wins.
+                if isinstance(value, list):
+                    existing = accumulated_state.get(key)
+                    accumulated_state[key] = (
+                        [*existing, *value] if isinstance(existing, list) else list(value)
+                    )
+                else:
                     accumulated_state[key] = value
             refund_total += refund_inc
             outcome = classify_mutation(
