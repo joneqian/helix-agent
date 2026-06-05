@@ -15,7 +15,8 @@ reasons about retry / different args / final answer.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
@@ -37,6 +38,17 @@ from helix_agent.runtime.cancellation import CancellationToken
 #: ``None`` on a :class:`ToolSpec` means "derive from ``is_read_only``" (see
 #: :attr:`ToolSpec.resolved_side_effect`) so existing tools keep their behaviour.
 SideEffectLevel = Literal["read_only", "reversible", "irreversible"]
+
+
+#: Stream TE-6 — cap on a ``find_tools`` query length before it is compiled as
+#: a regex. A model-derived pattern past this falls back to substring matching,
+#: bounding the catastrophic-backtracking (ReDoS) surface.
+_MAX_SEARCH_QUERY_LEN = 200
+
+
+def _haystack(spec: ToolSpec) -> str:
+    """Lower-cased ``name + description`` for Stream TE-6 substring matching."""
+    return f"{spec.name}\n{spec.description}".lower()
 
 
 @dataclass(frozen=True)
@@ -173,7 +185,13 @@ class ToolContext:
 #: - ``subagent_invocations`` — Stream J.4-补强-2 / Mini-ADR J-40
 #:   ``SubAgentTool`` appends one :class:`SubAgentInvocation` per
 #:   delegation outcome (the state.py channel uses ``operator.add``).
-TOOL_ALLOWED_STATE_KEYS: frozenset[str] = frozenset({"plan", "subagent_invocations"})
+#: - ``promoted_tools`` — Stream TE-6 ``find_tools`` writes the names of
+#:   deferred tools it just retrieved so the next ``agent_node`` adds them
+#:   to the LLM bind (the state.py channel uses ``_merge_promoted`` to
+#:   union-dedupe across turns).
+TOOL_ALLOWED_STATE_KEYS: frozenset[str] = frozenset(
+    {"plan", "subagent_invocations", "promoted_tools"}
+)
 
 
 @dataclass(frozen=True)
@@ -268,10 +286,30 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        #: Stream TE-6 — names of tools registered as *deferred* (the tool
+        #: RAG mechanism). Deferred tools are excluded from :meth:`specs`
+        #: (so they don't bloat every turn's LLM ``tools`` list) and are
+        #: surfaced only via :meth:`search` / ``find_tools``. They stay
+        #: dispatchable through :meth:`get` once promoted.
+        self._deferred: set[str] = set()
 
-    def register(self, tool: Tool) -> None:
-        """Register a tool by its spec ``name``. Re-registering replaces."""
-        self._tools[tool.spec.name] = tool
+    def register(self, tool: Tool, *, deferred: bool = False) -> None:
+        """Register a tool by its spec ``name``. Re-registering replaces.
+
+        Stream TE-6 — ``deferred=True`` marks the tool as *latent*: it is
+        omitted from :meth:`specs` (the per-turn LLM bind) and exposed only
+        through :meth:`search` until ``find_tools`` promotes it. The tool
+        remains fully dispatchable via :meth:`get` / :meth:`get_required`
+        so a promoted call still routes. Default ``False`` keeps every
+        existing tool active — zero behaviour change.
+        """
+        name = tool.spec.name
+        self._tools[name] = tool
+        if deferred:
+            self._deferred.add(name)
+        else:
+            # Re-registering a previously-deferred name as active un-defers it.
+            self._deferred.discard(name)
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
@@ -284,8 +322,91 @@ class ToolRegistry:
         return tool
 
     def specs(self) -> list[ToolSpec]:
-        """Specs in registration order — handed to the LLM."""
+        """Active (non-deferred) specs in registration order — handed to the LLM.
+
+        Stream TE-6 — deferred tools are excluded so they don't inflate the
+        per-turn ``tools`` list (Context Bloat). With no deferred tools this
+        returns every registered spec, identical to pre-TE-6 behaviour.
+        """
+        return [tool.spec for name, tool in self._tools.items() if name not in self._deferred]
+
+    def all_specs(self) -> list[ToolSpec]:
+        """Every registered spec — active *and* deferred — in registration order.
+
+        Stream TE-6 — scheduling / approval-gating classify by spec, so they
+        must see deferred tools too (a deferred irreversible tool stays gated
+        once promoted, and a promoted tool still schedules correctly). With no
+        deferred tools this equals :meth:`specs`.
+        """
         return [tool.spec for tool in self._tools.values()]
+
+    def deferred_specs(self, names: Iterable[str]) -> list[ToolSpec]:
+        """Specs for the given ``names`` that are actually deferred.
+
+        Stream TE-6 — ``agent_node`` calls this with the run's promoted-tool
+        names to add just-retrieved deferred tools to the LLM bind. Names that
+        aren't registered or aren't deferred (e.g. an already-active tool) are
+        dropped. Order follows ``names``.
+        """
+        out: list[ToolSpec] = []
+        for name in names:
+            if name in self._deferred:
+                tool = self._tools.get(name)
+                if tool is not None:
+                    out.append(tool.spec)
+        return out
+
+    def search(self, query: str) -> list[ToolSpec]:
+        """Retrieve matching *deferred* tool specs for ``find_tools`` (Stream TE-6).
+
+        Active tools are never returned — they're already in the bind, so
+        there's nothing to retrieve. The query syntax mirrors deer-flow's
+        ``tool_search``:
+
+        - ``select:a,b,c`` — exact name match (comma-separated).
+        - ``+keyword rest...`` — require ``keyword`` (case-insensitive) in the
+          name or description, then further filter by every remaining word.
+        - otherwise — treat the whole query as a regex over name/description
+          (case-insensitive); an invalid pattern degrades to a substring match.
+        """
+        # Iterate ``_tools`` (registration-ordered) so results are
+        # deterministic; ``_deferred`` is an unordered set.
+        candidates = [tool.spec for name, tool in self._tools.items() if name in self._deferred]
+        stripped = query.strip()
+        if not stripped:
+            return []
+
+        if stripped.startswith("select:"):
+            wanted = {n.strip() for n in stripped[len("select:") :].split(",") if n.strip()}
+            return [spec for spec in candidates if spec.name in wanted]
+
+        if stripped.startswith("+"):
+            terms = stripped[1:].split()
+            if not terms:
+                return []
+            lowered_terms = [t.lower() for t in terms]
+            return [
+                spec
+                for spec in candidates
+                if all(term in _haystack(spec) for term in lowered_terms)
+            ]
+
+        # Stream TE-6 — the query is model-derived; an over-long pattern is the
+        # ReDoS surface (catastrophic backtracking). Cap it: anything past the
+        # limit degrades to a plain substring match (never compiled as a regex).
+        if len(stripped) > _MAX_SEARCH_QUERY_LEN:
+            needle = stripped[:_MAX_SEARCH_QUERY_LEN].lower()
+            return [spec for spec in candidates if needle in _haystack(spec)]
+        try:
+            pattern = re.compile(stripped, re.IGNORECASE)
+        except re.error:
+            needle = stripped.lower()
+            return [spec for spec in candidates if needle in _haystack(spec)]
+        return [
+            spec
+            for spec in candidates
+            if pattern.search(spec.name) or pattern.search(spec.description)
+        ]
 
     def __contains__(self, name: object) -> bool:
         return isinstance(name, str) and name in self._tools

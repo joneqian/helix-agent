@@ -24,6 +24,9 @@ from orchestrator.tools.assembly import (
 from orchestrator.tools.bash import (
     BashTool as BashTool,
 )
+from orchestrator.tools.find_tools import (
+    FindToolsTool as FindToolsTool,
+)
 from orchestrator.tools.http import (
     DEFAULT_BODY_CHAR_CAP as DEFAULT_BODY_CHAR_CAP,
 )
@@ -181,6 +184,7 @@ __all__ = [
     "BashTool",
     "ChildAgentBuilder",
     "ExecPythonTool",
+    "FindToolsTool",
     "HTTPSupervisorClient",
     "HTTPTavilyClient",
     "HTTPTool",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 
 from orchestrator import DEFAULT_MAX_STEPS, AgentState
+from orchestrator.state import _merge_promoted
 
 
 def test_required_keys_present() -> None:
@@ -12,7 +13,8 @@ def test_required_keys_present() -> None:
     J.1 ``plan``, J.2 ``reflections``, J.3 ``recalled_memories``,
     L.5 ``step_count_refund_pending``, L.4 ``failed_mutations``,
     J.4-补强-2 ``subagent_invocations``, J.8 ``pending_approval`` /
-    ``approval_resume`` / ``approval_outcome`` (last nine ``NotRequired``)."""
+    ``approval_resume`` / ``approval_outcome``, TE-6 ``promoted_tools``
+    (last ten ``NotRequired``)."""
     annotations = inspect.get_annotations(AgentState)
     assert set(annotations) == {
         "messages",
@@ -27,9 +29,30 @@ def test_required_keys_present() -> None:
         "pending_approval",
         "approval_resume",
         "approval_outcome",
+        "promoted_tools",
     }
 
 
 def test_default_max_steps_constant_is_documented() -> None:
     """``DEFAULT_MAX_STEPS`` must stay at the design-doc-locked value (20)."""
     assert DEFAULT_MAX_STEPS == 20
+
+
+# --- Stream TE-6: promoted_tools reducer -----------------------------------
+
+
+def test_merge_promoted_seeds_from_none() -> None:
+    assert _merge_promoted(None, ["a", "b"]) == ["a", "b"]
+
+
+def test_merge_promoted_unions_and_dedupes_preserving_order() -> None:
+    # existing first, then only the genuinely new names from ``new``.
+    assert _merge_promoted(["a", "b"], ["b", "c"]) == ["a", "b", "c"]
+
+
+def test_merge_promoted_dedupes_within_new() -> None:
+    assert _merge_promoted([], ["x", "x", "y"]) == ["x", "y"]
+
+
+def test_merge_promoted_empty_new_keeps_existing() -> None:
+    assert _merge_promoted(["a"], []) == ["a"]

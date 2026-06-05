@@ -38,6 +38,25 @@ from orchestrator.tools.mutation_classifier import MutationOutcome
 DEFAULT_MAX_STEPS = 20
 
 
+def _merge_promoted(existing: list[str] | None, new: list[str]) -> list[str]:
+    """Reducer for :attr:`AgentState.promoted_tools` — Stream TE-6.
+
+    ``find_tools`` writes the names of deferred tools it just retrieved; this
+    reducer unions them into the run's accumulated set, deduplicating while
+    keeping a stable order (``existing`` first, then names from ``new`` not
+    already present). Accumulating across turns means a tool stays promoted
+    once retrieved. The state lives on the LangGraph channel — per-thread,
+    checkpointed — so promotion never leaks into the cached registry.
+    """
+    out: list[str] = list(existing or [])
+    seen = set(out)
+    for name in new:
+        if name not in seen:
+            out.append(name)
+            seen.add(name)
+    return out
+
+
 class AgentState(TypedDict):
     """State threaded through every orchestrator LangGraph node.
 
@@ -107,6 +126,16 @@ class AgentState(TypedDict):
     END when it is ``"rejected"`` (the platform vetoed the run). An
     agent-initiated ``ask_for_approval`` reject leaves it unset so the
     run loops back to the agent.
+
+    ``promoted_tools`` (Stream TE-6) carries the names of deferred tools
+    the ``find_tools`` meta-tool has retrieved this run. ``find_tools``
+    writes via :attr:`ToolResult.state_updates`; the ``_merge_promoted``
+    reducer union-dedupes across turns. The next ``agent_node`` adds the
+    matching deferred specs to the LLM bind so the promoted tools become
+    callable. Per-thread + checkpointed, so promotion stays isolated to
+    the run and never mutates the cached registry. Absent (treated as ``[]``)
+    until ``find_tools`` first promotes — zero behaviour change when no
+    tool is deferred.
     """
 
     messages: Annotated[list[BaseMessage], add_messages]
@@ -121,3 +150,4 @@ class AgentState(TypedDict):
     pending_approval: NotRequired[ApprovalRequest | None]
     approval_resume: NotRequired[dict[str, Any] | None]
     approval_outcome: NotRequired[str | None]
+    promoted_tools: NotRequired[Annotated[list[str], _merge_promoted]]

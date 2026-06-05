@@ -110,3 +110,104 @@ def test_explicit_side_effect_is_honoured_over_derivation() -> None:
 def test_idempotent_defaults_false_and_is_settable() -> None:
     assert ToolSpec(name="t", description="d").idempotent is False
     assert ToolSpec(name="t", description="d", idempotent=True).idempotent is True
+
+
+# --- Stream TE-6: deferred tool registry (tool RAG) ------------------------
+
+
+def test_default_no_deferred_specs_returns_all() -> None:
+    """Backward compat: with no deferred tools, ``specs()`` == ``all_specs()``."""
+    registry = ToolRegistry()
+    for name in ("alpha", "bravo"):
+        registry.register(_make(name))
+    assert [s.name for s in registry.specs()] == ["alpha", "bravo"]
+    assert [s.name for s in registry.all_specs()] == ["alpha", "bravo"]
+
+
+def test_deferred_tool_excluded_from_specs_but_in_all_specs() -> None:
+    registry = ToolRegistry()
+    registry.register(_make("active"))
+    registry.register(_make("hidden"), deferred=True)
+    assert [s.name for s in registry.specs()] == ["active"]
+    assert [s.name for s in registry.all_specs()] == ["active", "hidden"]
+
+
+def test_deferred_tool_is_still_dispatchable() -> None:
+    """A deferred tool must remain findable so a promoted call can dispatch."""
+    registry = ToolRegistry()
+    hidden = _make("hidden")
+    registry.register(hidden, deferred=True)
+    assert "hidden" in registry
+    assert registry.get("hidden") is hidden
+    assert registry.get_required("hidden") is hidden
+    assert len(registry) == 1
+
+
+def test_deferred_specs_returns_only_deferred_names() -> None:
+    registry = ToolRegistry()
+    registry.register(_make("active"))
+    registry.register(_make("hidden"), deferred=True)
+    registry.register(_make("hidden2"), deferred=True)
+    # Asking for a mix: only the deferred names come back.
+    got = registry.deferred_specs(["active", "hidden", "hidden2", "missing"])
+    assert sorted(s.name for s in got) == ["hidden", "hidden2"]
+    # Active-only / empty asks return nothing.
+    assert registry.deferred_specs(["active"]) == []
+    assert registry.deferred_specs([]) == []
+
+
+def _make_described(name: str, description: str) -> _DummyTool:
+    return _DummyTool(spec=ToolSpec(name=name, description=description))
+
+
+def test_search_only_hits_deferred_tools() -> None:
+    registry = ToolRegistry()
+    # An active tool whose name matches the query must NOT appear — active
+    # tools are already in the bind, no need to retrieve them.
+    registry.register(_make_described("github_active", "active github tool"))
+    registry.register(_make_described("github_issue", "create a github issue"), deferred=True)
+    matches = registry.search("github")
+    assert [s.name for s in matches] == ["github_issue"]
+
+
+def test_search_select_syntax_exact_names() -> None:
+    registry = ToolRegistry()
+    registry.register(_make("a"), deferred=True)
+    registry.register(_make("b"), deferred=True)
+    registry.register(_make("c"), deferred=True)
+    matches = registry.search("select:a,c,missing")
+    assert sorted(s.name for s in matches) == ["a", "c"]
+
+
+def test_search_plus_keyword_with_extra_filters() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        _make_described("create_issue", "create a github issue on a repo"), deferred=True
+    )
+    registry.register(
+        _make_described("close_issue", "close a github issue on a repo"), deferred=True
+    )
+    registry.register(_make_described("send_email", "send an email"), deferred=True)
+    # +github requires 'github'; 'create' further narrows to the create tool.
+    matches = registry.search("+github create")
+    assert [s.name for s in matches] == ["create_issue"]
+
+
+def test_search_substring_and_regex_fallback() -> None:
+    registry = ToolRegistry()
+    registry.register(_make_described("postgres_query", "run a SQL (read) query"), deferred=True)
+    registry.register(_make_described("redis_get", "read a redis key"), deferred=True)
+    # Plain substring.
+    assert [s.name for s in registry.search("redis")] == ["redis_get"]
+    # Valid regex.
+    assert sorted(s.name for s in registry.search("post.*query")) == ["postgres_query"]
+    # Invalid regex (unbalanced paren) degrades to a literal substring match
+    # against the description "(read)" — no crash, still finds the tool.
+    assert [s.name for s in registry.search("(read")] == ["postgres_query"]
+
+
+def test_search_returns_empty_when_no_deferred_match() -> None:
+    registry = ToolRegistry()
+    registry.register(_make("active"))
+    assert registry.search("active") == []
+    assert registry.search("anything") == []
