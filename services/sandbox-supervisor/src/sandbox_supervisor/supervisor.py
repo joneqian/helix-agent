@@ -144,7 +144,9 @@ class SandboxSupervisor:
         :class:`SupervisorError` when the container fails to launch.
         """
         if request.user_id is not None:
-            reused = await self._reuse_session(request.tenant_id, request.user_id)
+            reused = await self._reuse_session(
+                request.tenant_id, request.user_id, request.image_variant
+            )
             if reused is not None:
                 return reused
 
@@ -400,7 +402,9 @@ class SandboxSupervisor:
 
     # ------------------------------------------------------------------
 
-    async def _reuse_session(self, tenant_id: UUID, user_id: UUID) -> AcquireResponse | None:
+    async def _reuse_session(
+        self, tenant_id: UUID, user_id: UUID, image_variant: str | None = None
+    ) -> AcquireResponse | None:
         """Return the user's warm session as an :class:`AcquireResponse`, or
         ``None`` when there is no live session to reuse (J.15).
 
@@ -418,6 +422,12 @@ class SandboxSupervisor:
         record = await self._store.get(sandbox_id)
         if record is None or record.state is not SandboxState.IN_USE:
             self._sessions.pop((tenant_id, user_id), None)
+            return None
+        # Stream OFFICE-1a — never reuse a warm session built from a different
+        # image variant (an office agent must not inherit a minimal session,
+        # which lacks the office libraries). Fall through to a cold start; the
+        # session entry is overwritten by the new record below.
+        if record.image_ref != self._select_image(image_variant):
             return None
         # J.15-补强-1: workspace-level quota + soft-delete recheck on reuse.
         if self._quota_enforcer is not None:
@@ -457,6 +467,16 @@ class SandboxSupervisor:
             )
             raise QuotaExceededError(tenant_id, limit)
 
+    def _select_image(self, image_variant: str | None) -> str:
+        """Map the requested image variant to a configured image name.
+
+        Stream OFFICE-1a — ``"office"`` → the office-libs image; anything
+        else (``None`` / ``"minimal"`` / unknown) → the default minimal
+        image, so an unrecognised value degrades safely."""
+        if image_variant == "office":
+            return self._settings.sandbox_image_office
+        return self._settings.sandbox_image
+
     def _new_record(
         self, request: AcquireRequest, *, workspace: UserWorkspace | None
     ) -> SandboxRecord:
@@ -466,7 +486,7 @@ class SandboxSupervisor:
             tenant_id=request.tenant_id,
             user_id=request.user_id,
             workspace_id=workspace.id if workspace is not None else None,
-            image_ref=s.sandbox_image,
+            image_ref=self._select_image(request.image_variant),
             node=s.node_name,
             container_id=None,
             state=SandboxState.CREATING,

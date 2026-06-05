@@ -629,3 +629,10 @@ def test_specs_metadata() -> None:
     listing = ListDirTool(client=_client()).spec
     assert listing.is_read_only is True
     assert listing.resolved_side_effect == "read_only"
+
+
+async def test_read_file_threads_image_variant_to_acquire() -> None:
+    # OFFICE-1a — the tool's image_variant reaches the supervisor acquire call.
+    client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
+    await ReadFileTool(client=client, image_variant="office").call({"path": "a.txt"}, ctx=_ctx())
+    assert client.acquired[0][3] == "office"
