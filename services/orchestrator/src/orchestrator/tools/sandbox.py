@@ -242,6 +242,100 @@ class RecordingSupervisorClient:
         return self.reap_count
 
 
+async def run_in_sandbox(
+    client: SupervisorClient,
+    *,
+    code: str,
+    timeout_s: int | None,
+    ctx: ToolContext,
+    persistent_workspace: bool,
+    tool_label: str,
+    fallback_thread_id: str,
+) -> SandboxOutcome:
+    """Acquire a sandbox, run ``code``, and tear it down — shared by the
+    ``exec_python`` (F.4) and ``bash`` (TE-5) tools.
+
+    Both tools execute arbitrary code in the same gVisor sandbox (bash
+    rides the exec channel as a ``subprocess`` wrapper), so the
+    acquire / exec / release / cancel-then-destroy dance lives here once.
+    Tenant-scoped (the sandbox quota is per-tenant); a cancellation
+    mid-exec SIGKILLs the sandbox rather than releasing it gracefully
+    (Mini-ADR F-8 — a graceful release would burn the gate-#8 ≤1s budget).
+    """
+    if ctx.tenant_id is None:
+        msg = f"{tool_label} requires a tenant binding (ctx.tenant_id)"
+        raise ToolBlockedError(msg)
+    thread_id = str(ctx.run_id) if ctx.run_id is not None else fallback_thread_id
+    # Stream J.15 — a persistent-workspace agent acquires against the run's
+    # user volume; without the opt-in (or a user binding) the sandbox falls
+    # back to an ephemeral tmpfs.
+    user_id = ctx.user_id if persistent_workspace else None
+    sandbox_id = await client.acquire(tenant_id=ctx.tenant_id, thread_id=thread_id, user_id=user_id)
+    cancelled = False
+    try:
+        return await client.exec(sandbox_id=sandbox_id, code=code, timeout_s=timeout_s)
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        if cancelled:
+            await _destroy_quietly(
+                client, sandbox_id, reason=_CANCELLED_REASON, tool_label=tool_label
+            )
+        else:
+            await _release_quietly(client, sandbox_id, tool_label=tool_label)
+
+
+def format_sandbox_outcome(outcome: SandboxOutcome, output_char_cap: int) -> ToolResult:
+    """Render a :class:`SandboxOutcome` into the ``ToolResult`` the LLM sees.
+
+    Head-truncates stdout / stderr to ``output_char_cap`` (Mini-ADR F-9)
+    and surfaces ``exit_code`` / ``timed_out`` in both the text and the
+    structured ``meta``. Shared by ``exec_python`` and ``bash``.
+    """
+    stdout, cut_out = _truncate(outcome.stdout, output_char_cap)
+    stderr, cut_err = _truncate(outcome.stderr, output_char_cap)
+
+    parts: list[str] = []
+    if stdout:
+        parts.append(f"stdout:\n{stdout}")
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+    if not parts:
+        parts.append("(no output)")
+    if outcome.timed_out:
+        parts.append("[execution timed out]")
+    parts.append(f"exit_code: {outcome.exit_code}")
+
+    return ToolResult(
+        content="\n\n".join(parts),
+        meta={
+            "exit_code": outcome.exit_code,
+            "timed_out": outcome.timed_out,
+            "truncated": cut_out or cut_err,
+        },
+    )
+
+
+async def _release_quietly(client: SupervisorClient, sandbox_id: UUID, *, tool_label: str) -> None:
+    # A release failure must never mask the exec result / error.
+    try:
+        await client.release(sandbox_id=sandbox_id)
+    except Exception:
+        logger.exception("%s.release_failed sandbox=%s", tool_label, sandbox_id)
+
+
+async def _destroy_quietly(
+    client: SupervisorClient, sandbox_id: UUID, *, reason: str, tool_label: str
+) -> None:
+    # A destroy failure must not mask the cancellation — the supervisor's
+    # TTL reaper is the backstop for a leaked container.
+    try:
+        await client.destroy(sandbox_id=sandbox_id, reason=reason)
+    except Exception:
+        logger.exception("%s.destroy_failed sandbox=%s", tool_label, sandbox_id)
+
+
 @dataclass
 class ExecPythonTool:
     """Sandbox Python execution exposed to the LLM as ``exec_python``."""
@@ -282,37 +376,17 @@ class ExecPythonTool:
 
     async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
         code = self._require_code(args)
-        timeout_s = _coerce_timeout(args.get("timeout_s"))
-        if ctx.tenant_id is None:
-            # exec_python is tenant-scoped — the sandbox quota is per-tenant.
-            msg = "exec_python requires a tenant binding (ctx.tenant_id)"
-            raise ToolBlockedError(msg)
-        thread_id = str(ctx.run_id) if ctx.run_id is not None else _FALLBACK_THREAD_ID
-        # Stream J.15 — a persistent-workspace agent acquires against the
-        # run's user volume; without the opt-in (or a user binding) the
-        # sandbox falls back to an ephemeral tmpfs.
-        user_id = ctx.user_id if self.persistent_workspace else None
-
-        sandbox_id = await self.client.acquire(
-            tenant_id=ctx.tenant_id, thread_id=thread_id, user_id=user_id
+        timeout_s = coerce_timeout(args.get("timeout_s"))
+        outcome = await run_in_sandbox(
+            self.client,
+            code=code,
+            timeout_s=timeout_s,
+            ctx=ctx,
+            persistent_workspace=self.persistent_workspace,
+            tool_label="exec_python",
+            fallback_thread_id=_FALLBACK_THREAD_ID,
         )
-        cancelled = False
-        try:
-            outcome = await self.client.exec(sandbox_id=sandbox_id, code=code, timeout_s=timeout_s)
-        except asyncio.CancelledError:
-            # The run was cancelled mid-exec (E.15 races tool dispatch in
-            # ``run_cancellable``). SIGKILL the sandbox now — a graceful
-            # release would burn the gate-#8 ≤1s budget (Mini-ADR F-8).
-            cancelled = True
-            raise
-        finally:
-            if cancelled:
-                await self._destroy_quietly(sandbox_id, reason=_CANCELLED_REASON)
-            else:
-                await self._release_quietly(sandbox_id)
-        return self._format(outcome)
-
-    # ------------------------------------------------------------------
+        return format_sandbox_outcome(outcome, self.output_char_cap)
 
     def _require_code(self, args: Mapping[str, Any]) -> str:
         raw = args.get("code")
@@ -321,47 +395,8 @@ class ExecPythonTool:
             raise ValueError(msg)
         return raw
 
-    async def _release_quietly(self, sandbox_id: UUID) -> None:
-        # A release failure must never mask the exec result / error.
-        try:
-            await self.client.release(sandbox_id=sandbox_id)
-        except Exception:
-            logger.exception("exec_python.release_failed sandbox=%s", sandbox_id)
 
-    async def _destroy_quietly(self, sandbox_id: UUID, *, reason: str) -> None:
-        # A destroy failure must not mask the cancellation — the
-        # supervisor's TTL reaper is the backstop for a leaked container.
-        try:
-            await self.client.destroy(sandbox_id=sandbox_id, reason=reason)
-        except Exception:
-            logger.exception("exec_python.destroy_failed sandbox=%s", sandbox_id)
-
-    def _format(self, outcome: SandboxOutcome) -> ToolResult:
-        stdout, cut_out = _truncate(outcome.stdout, self.output_char_cap)
-        stderr, cut_err = _truncate(outcome.stderr, self.output_char_cap)
-
-        parts: list[str] = []
-        if stdout:
-            parts.append(f"stdout:\n{stdout}")
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
-        if not parts:
-            parts.append("(no output)")
-        if outcome.timed_out:
-            parts.append("[execution timed out]")
-        parts.append(f"exit_code: {outcome.exit_code}")
-
-        return ToolResult(
-            content="\n\n".join(parts),
-            meta={
-                "exit_code": outcome.exit_code,
-                "timed_out": outcome.timed_out,
-                "truncated": cut_out or cut_err,
-            },
-        )
-
-
-def _coerce_timeout(raw: object) -> int | None:
+def coerce_timeout(raw: object) -> int | None:
     """Read an optional ``timeout_s`` arg; reject ``bool`` and out-of-range."""
     if raw is None or isinstance(raw, bool) or not isinstance(raw, int):
         return None

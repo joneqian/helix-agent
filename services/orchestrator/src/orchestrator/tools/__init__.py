@@ -21,6 +21,9 @@ from orchestrator.tools.assembly import (
 from orchestrator.tools.assembly import (
     build_tool_registry as build_tool_registry,
 )
+from orchestrator.tools.bash import (
+    BashTool as BashTool,
+)
 from orchestrator.tools.http import (
     DEFAULT_BODY_CHAR_CAP as DEFAULT_BODY_CHAR_CAP,
 )
@@ -175,6 +178,7 @@ __all__ = [
     "MAX_SUBAGENT_DEPTH",
     "AllowlistProvider",
     "AskImageTool",
+    "BashTool",
     "ChildAgentBuilder",
     "ExecPythonTool",
     "HTTPSupervisorClient",
