@@ -1,0 +1,400 @@
+"""Stream TE-7 — workspace file primitives (read_file / write_file / list_dir).
+
+Two layers are tested:
+
+1. **In-sandbox snippet logic** — the ``build_*_wrapper`` snippets are
+   stdlib-only and take the workspace root as a parameter, so they run
+   locally against a ``tmp_path`` to verify real file behaviour: atomic
+   write, hashing, UTF-8 handling, and — critically — ``realpath``
+   confinement against ``..`` and symlink escape.
+2. **Tool orchestration** — ``ReadFileTool`` / ``WriteFileTool`` /
+   ``ListDirTool`` parse the JSON envelope from a ``RecordingSupervisorClient``
+   into a ``ToolResult``, map errors to the right exception, and validate
+   the orchestrator-side path / arg checks + ToolSpec metadata.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+from typing import Any
+from uuid import UUID, uuid4
+
+import pytest
+
+from orchestrator.tools import (
+    FileOpError,
+    ListDirTool,
+    ReadFileTool,
+    SandboxOutcome,
+    ToolBlockedError,
+    ToolContext,
+    WriteFileTool,
+)
+from orchestrator.tools.file_ops import (
+    build_list_wrapper,
+    build_read_wrapper,
+    build_write_wrapper,
+)
+from orchestrator.tools.sandbox import RecordingSupervisorClient
+
+# --------------------------------------------------------------------------
+# Layer 1 — in-sandbox snippet logic (run locally with ws = tmp_path)
+# --------------------------------------------------------------------------
+
+
+def _run_snippet(code: str) -> dict[str, Any]:
+    """Execute a self-contained stdlib snippet and parse its JSON envelope."""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(code, {})  # noqa: S102 — snippet is built from a fixed template
+    return json.loads(buf.getvalue().strip().splitlines()[-1])
+
+
+def test_write_then_read_roundtrip(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    written = _run_snippet(build_write_wrapper("notes.txt", "hello\nworld", ws=ws))
+    assert written["ok"] is True
+    assert written["size"] == len(b"hello\nworld")
+    expected_hash = hashlib.sha256(b"hello\nworld").hexdigest()
+    assert written["content_hash"] == expected_hash
+    assert (tmp_path / "notes.txt").read_text() == "hello\nworld"
+
+    read = _run_snippet(build_read_wrapper("notes.txt", cap=1000, ws=ws))
+    assert read["ok"] is True
+    assert read["content"] == "hello\nworld"
+    assert read["content_hash"] == expected_hash
+    assert read["truncated"] is False
+
+
+def test_write_special_chars_roundtrip(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    payload = "quote ' double \" back\\slash \t tab 日本語"
+    _run_snippet(build_write_wrapper("x.txt", payload, ws=ws))
+    read = _run_snippet(build_read_wrapper("x.txt", cap=1000, ws=ws))
+    assert read["content"] == payload
+
+
+def test_write_creates_parent_dirs(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    out = _run_snippet(build_write_wrapper("a/b/c.txt", "deep", ws=ws))
+    assert out["ok"] is True
+    assert (tmp_path / "a" / "b" / "c.txt").read_text() == "deep"
+
+
+def test_write_overwrites_atomically(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    _run_snippet(build_write_wrapper("f.txt", "v1", ws=ws))
+    out = _run_snippet(build_write_wrapper("f.txt", "v2", ws=ws))
+    assert out["ok"] is True
+    assert (tmp_path / "f.txt").read_text() == "v2"
+    # No temp file left behind by the atomic rename.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["f.txt"]
+
+
+def test_read_cap_truncates_content_but_hashes_full(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    body = "x" * 100
+    _run_snippet(build_write_wrapper("big.txt", body, ws=ws))
+    read = _run_snippet(build_read_wrapper("big.txt", cap=10, ws=ws))
+    assert read["content"] == "x" * 10
+    assert read["truncated"] is True
+    assert read["size"] == 100
+    assert read["content_hash"] == hashlib.sha256(body.encode()).hexdigest()
+
+
+def test_read_not_found(tmp_path: Path) -> None:
+    out = _run_snippet(build_read_wrapper("missing.txt", cap=100, ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "not_found"}
+
+
+def test_read_binary_unsupported(tmp_path: Path) -> None:
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00\x01")
+    out = _run_snippet(build_read_wrapper("blob.bin", cap=100, ws=str(tmp_path)))
+    assert out["ok"] is False
+    assert out["error"] == "binary_unsupported"
+
+
+def test_read_is_a_directory(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    out = _run_snippet(build_read_wrapper("sub", cap=100, ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "is_a_directory"}
+
+
+def test_write_to_directory_path_rejected(tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    out = _run_snippet(build_write_wrapper("sub", "data", ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "is_a_directory"}
+
+
+def test_traversal_escape_rejected_in_snippet(tmp_path: Path) -> None:
+    # Defense in depth: even if a '..' path reached the snippet, realpath
+    # confinement rejects it (orchestrator side also rejects up front).
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (tmp_path / "secret.txt").write_text("top secret")
+    out = _run_snippet(build_read_wrapper("../secret.txt", cap=100, ws=str(ws)))
+    assert out == {"ok": False, "error": "path_escapes_workspace"}
+
+
+def test_symlink_escape_rejected_in_snippet(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("leaked")
+    os.symlink(outside, ws / "link.txt")
+    out = _run_snippet(build_read_wrapper("link.txt", cap=100, ws=str(ws)))
+    assert out == {"ok": False, "error": "path_escapes_workspace"}
+
+
+def test_symlink_dir_escape_on_write_rejected(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    os.symlink(target, ws / "escape")
+    out = _run_snippet(build_write_wrapper("escape/pwn.txt", "x", ws=str(ws)))
+    assert out == {"ok": False, "error": "path_escapes_workspace"}
+    assert not (target / "pwn.txt").exists()
+
+
+def test_list_dir_sorted(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    (tmp_path / "b.txt").write_text("bb")
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "sub").mkdir()
+    out = _run_snippet(build_list_wrapper(".", ws=ws))
+    assert out["ok"] is True
+    names = [e["name"] for e in out["entries"]]
+    assert names == ["a.txt", "b.txt", "sub"]
+    by_name = {e["name"]: e for e in out["entries"]}
+    assert by_name["a.txt"] == {"name": "a.txt", "is_dir": False, "size": 1}
+    assert by_name["sub"]["is_dir"] is True
+
+
+def test_list_dir_not_found(tmp_path: Path) -> None:
+    out = _run_snippet(build_list_wrapper("nope", ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "not_found"}
+
+
+def test_list_dir_not_a_directory(tmp_path: Path) -> None:
+    (tmp_path / "file.txt").write_text("x")
+    out = _run_snippet(build_list_wrapper("file.txt", ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "not_a_directory"}
+
+
+def test_write_invalid_unicode(tmp_path: Path) -> None:
+    # A lone surrogate is a valid str but not UTF-8 encodable (M-1).
+    out = _run_snippet(build_write_wrapper("x.txt", "\ud800", ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "invalid_unicode"}
+    assert not (tmp_path / "x.txt").exists()
+
+
+def test_nul_in_path_resolves_to_escape(tmp_path: Path) -> None:
+    # Even if a NUL reached the snippet, realpath raises ValueError which the
+    # confinement guard turns into a denial, not a crash (M-2 defense in depth).
+    out = _run_snippet(build_read_wrapper("a\x00b", cap=100, ws=str(tmp_path)))
+    assert out == {"ok": False, "error": "path_escapes_workspace"}
+
+
+def test_read_file_too_large(tmp_path: Path) -> None:
+    (tmp_path / "big.txt").write_text("x" * 50)
+    out = _run_snippet(build_read_wrapper("big.txt", cap=100, ws=str(tmp_path), max_bytes=10))
+    assert out["ok"] is False
+    assert out["error"] == "file_too_large"
+    assert out["size"] == 50
+
+
+def test_list_dir_truncates(tmp_path: Path) -> None:
+    for name in ("a", "b", "c"):
+        (tmp_path / name).write_text("x")
+    out = _run_snippet(build_list_wrapper(".", ws=str(tmp_path), max_entries=2))
+    assert out["ok"] is True
+    assert out["truncated"] is True
+    assert len(out["entries"]) == 2
+
+
+# --------------------------------------------------------------------------
+# Layer 2 — tool orchestration (envelope parsing + checks + metadata)
+# --------------------------------------------------------------------------
+
+
+def _ctx(*, tenant_id: UUID | None = None) -> ToolContext:
+    return ToolContext(
+        tenant_id=tenant_id if tenant_id is not None else uuid4(),
+        run_id=uuid4(),
+        user_id=uuid4(),
+    )
+
+
+def _client(
+    stdout: str = "", *, exit_code: int = 0, timed_out: bool = False
+) -> RecordingSupervisorClient:
+    client = RecordingSupervisorClient()
+    client.outcome = SandboxOutcome(
+        stdout=stdout, stderr="", exit_code=exit_code, timed_out=timed_out
+    )
+    return client
+
+
+async def test_read_file_parses_envelope() -> None:
+    env = {"ok": True, "content": "hi", "content_hash": "abc", "size": 2, "truncated": False}
+    client = _client(json.dumps(env))
+    result = await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+    assert result.content == "hi"
+    assert result.meta["content_hash"] == "abc"
+    assert result.meta["size"] == 2
+    assert result.meta["path"] == "a.txt"
+    # Executed exactly one snippet, then released the sandbox.
+    assert len(client.execs) == 1
+    assert client.released
+
+
+async def test_write_file_parses_envelope() -> None:
+    env = {"ok": True, "content_hash": "deadbeef", "size": 5, "path": "a.txt"}
+    client = _client(json.dumps(env))
+    result = await WriteFileTool(client=client).call(
+        {"path": "a.txt", "content": "hello"}, ctx=_ctx()
+    )
+    assert "5 bytes" in result.content
+    assert result.meta["content_hash"] == "deadbeef"
+
+
+async def test_list_dir_formats_entries() -> None:
+    env = {
+        "ok": True,
+        "entries": [
+            {"name": "a.txt", "is_dir": False, "size": 3},
+            {"name": "sub", "is_dir": True, "size": None},
+        ],
+    }
+    client = _client(json.dumps(env))
+    result = await ListDirTool(client=client).call({"path": "."}, ctx=_ctx())
+    assert "a.txt  (3 bytes)" in result.content
+    assert "sub/" in result.content
+    assert result.meta["n_entries"] == 2
+
+
+async def test_path_escape_raises_blocked() -> None:
+    client = _client(json.dumps({"ok": False, "error": "path_escapes_workspace"}))
+    with pytest.raises(ToolBlockedError):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_not_found_raises_fileop() -> None:
+    client = _client(json.dumps({"ok": False, "error": "not_found"}))
+    with pytest.raises(FileOpError, match="not_found"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_nonzero_exit_raises_fileop() -> None:
+    client = _client("boom", exit_code=1)
+    with pytest.raises(FileOpError, match="exit 1"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_timed_out_raises_fileop() -> None:
+    client = _client("", timed_out=True)
+    with pytest.raises(FileOpError, match="timed out"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_unparseable_stdout_raises_fileop() -> None:
+    client = _client("not json at all")
+    with pytest.raises(FileOpError, match="unparseable"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_io_error_detail_surfaced() -> None:
+    client = _client(json.dumps({"ok": False, "error": "io_error", "detail": "disk full"}))
+    with pytest.raises(FileOpError, match=r"io_error \(disk full\)"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_non_object_envelope_raises_fileop() -> None:
+    client = _client("42")
+    with pytest.raises(FileOpError, match="non-object"):
+        await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_empty_dir_formats_empty() -> None:
+    client = _client(json.dumps({"ok": True, "entries": []}))
+    result = await ListDirTool(client=client).call({"path": "sub"}, ctx=_ctx())
+    assert result.content == "sub: (empty)"
+    assert result.meta["n_entries"] == 0
+
+
+async def test_write_content_too_large_rejected() -> None:
+    from orchestrator.tools.file_ops import _MAX_WRITE_CHARS
+
+    client = _client(json.dumps({"ok": True, "content_hash": "x", "size": 0, "path": "a"}))
+    oversized = "x" * (_MAX_WRITE_CHARS + 1)
+    with pytest.raises(ValueError, match="limit"):
+        await WriteFileTool(client=client).call({"path": "a.txt", "content": oversized}, ctx=_ctx())
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../escape", "", "  ", "a\x00b"])
+async def test_require_path_rejects_bad_paths(bad: str) -> None:
+    client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
+    with pytest.raises(ValueError, match="path"):
+        await ReadFileTool(client=client).call({"path": bad}, ctx=_ctx())
+
+
+async def test_write_requires_content_string() -> None:
+    client = _client(json.dumps({"ok": True, "content_hash": "x", "size": 0, "path": "a"}))
+    with pytest.raises(ValueError, match="content"):
+        await WriteFileTool(client=client).call({"path": "a.txt"}, ctx=_ctx())
+
+
+async def test_list_dir_defaults_to_dot() -> None:
+    client = _client(json.dumps({"ok": True, "entries": []}))
+    await ListDirTool(client=client).call({}, ctx=_ctx())
+    # The snippet's _PARAMS targets the workspace root by default.
+    code = client.execs[0][1]
+    assert '"rel": "."' in code
+
+
+async def test_missing_tenant_blocked() -> None:
+    client = _client(json.dumps({"ok": True, "entries": []}))
+    ctx = ToolContext(tenant_id=None, run_id=uuid4(), user_id=uuid4())
+    with pytest.raises(ToolBlockedError, match="tenant"):
+        await ListDirTool(client=client).call({"path": "."}, ctx=ctx)
+
+
+async def test_persistent_workspace_passes_user() -> None:
+    client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
+    ctx = _ctx()
+    await ReadFileTool(client=client, persistent_workspace=True).call({"path": "a.txt"}, ctx=ctx)
+    # acquire received the run's user_id (persistent workspace volume).
+    assert client.acquired[0][2] == ctx.user_id
+
+
+async def test_ephemeral_workspace_omits_user() -> None:
+    client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
+    tool = ReadFileTool(client=client, persistent_workspace=False)
+    await tool.call({"path": "a.txt"}, ctx=_ctx())
+    assert client.acquired[0][2] is None
+
+
+def test_specs_metadata() -> None:
+    read = ReadFileTool(client=_client()).spec
+    assert read.name == "read_file"
+    assert read.is_read_only is True
+    assert read.resolved_side_effect == "read_only"
+    assert read.idempotent is True
+    assert read.path_args == ("path",)
+
+    write = WriteFileTool(client=_client()).spec
+    assert write.name == "write_file"
+    assert write.is_read_only is False
+    assert write.resolved_side_effect == "reversible"
+    assert write.idempotent is True
+    assert write.path_args == ("path",)
+
+    listing = ListDirTool(client=_client()).spec
+    assert listing.is_read_only is True
+    assert listing.resolved_side_effect == "read_only"
