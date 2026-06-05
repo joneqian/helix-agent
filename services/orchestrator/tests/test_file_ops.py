@@ -323,6 +323,52 @@ def test_edit_noop_when_old_equals_new(tmp_path: Path) -> None:
     assert (tmp_path / "f.txt").read_text() == "keep this"
 
 
+def test_edit_exact_reports_match_field(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("hello world")
+    out = _run_snippet(build_edit_wrapper("f.txt", "world", "there", ws=str(tmp_path)))
+    assert out["match"] == "exact"
+
+
+# --- TE-9b: whitespace-tolerant fuzzy fallback ---
+
+
+def test_edit_fuzzy_trailing_whitespace(tmp_path: Path) -> None:
+    # old has a trailing space the file lacks → exact fails, fuzzy line match hits.
+    (tmp_path / "f.txt").write_text("x = 1\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "x = 1 ", "x = 2", ws=str(tmp_path)))
+    assert out["ok"] is True
+    assert out["match"] == "fuzzy"
+    assert (tmp_path / "f.txt").read_text() == "x = 2\n"
+
+
+def test_edit_fuzzy_indent_block(tmp_path: Path) -> None:
+    # old block is under-indented vs the file → exact fails, fuzzy hits the block.
+    (tmp_path / "f.txt").write_text("if x:\n    y = 1\n    z = 2\n")
+    out = _run_snippet(
+        build_edit_wrapper("f.txt", "  y = 1\n  z = 2", "    y = 1\n    z = 3", ws=str(tmp_path))
+    )
+    assert out["ok"] is True
+    assert out["match"] == "fuzzy"
+    assert (tmp_path / "f.txt").read_text() == "if x:\n    y = 1\n    z = 3\n"
+
+
+def test_edit_fuzzy_ambiguous(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("a=1\nx\na=1\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "a=1 ", "a=2", ws=str(tmp_path)))
+    assert out["ok"] is False
+    assert out["error"] == "ambiguous"
+    # File untouched.
+    assert (tmp_path / "f.txt").read_text() == "a=1\nx\na=1\n"
+
+
+def test_edit_no_match_offers_candidate(tmp_path: Path) -> None:
+    (tmp_path / "f.txt").write_text("def calculate_total():\n    pass\n")
+    out = _run_snippet(build_edit_wrapper("f.txt", "def calculate_totl():", "x", ws=str(tmp_path)))
+    assert out["ok"] is False
+    assert out["error"] == "no_match"
+    assert "near line 1" in out["detail"]
+
+
 # --------------------------------------------------------------------------
 # Layer 2 — tool orchestration (envelope parsing + checks + metadata)
 # --------------------------------------------------------------------------
@@ -450,6 +496,16 @@ async def test_edit_file_parses_envelope() -> None:
     )
     assert "f.txt" in result.content
     assert result.meta["content_hash"] == "newhash"
+
+
+async def test_edit_file_surfaces_match_kind() -> None:
+    env = {"ok": True, "content_hash": "h", "size": 3, "path": "f.txt", "match": "fuzzy"}
+    client = _client(json.dumps(env))
+    result = await EditFileTool(client=client).call(
+        {"path": "f.txt", "old_string": "a", "new_string": "b"}, ctx=_ctx()
+    )
+    assert result.meta["match"] == "fuzzy"
+    assert "fuzzy match" in result.content
 
 
 async def test_edit_no_match_raises_fileop() -> None:
