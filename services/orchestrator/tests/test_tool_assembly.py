@@ -647,10 +647,14 @@ async def test_image_variant_threaded_to_all_sandbox_tools() -> None:
         image_variant="office",
     )
     for name in ("exec_python", "bash", "read_file", "write_file", "edit_file", "list_dir"):
-        assert getattr(registry.get(name), "image_variant") == "office"
+        tool = registry.get(name)
+        assert tool is not None
+        assert tool.image_variant == "office"  # type: ignore[attr-defined]
 
 
 async def test_image_variant_defaults_none() -> None:
     env = ToolEnv(supervisor_client=RecordingSupervisorClient())
     registry = await build_tool_registry([BuiltinToolSpec(name="exec_python")], tool_env=env)
-    assert getattr(registry.get("exec_python"), "image_variant") is None
+    tool = registry.get("exec_python")
+    assert tool is not None
+    assert tool.image_variant is None  # type: ignore[attr-defined]
