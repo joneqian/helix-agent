@@ -1,0 +1,298 @@
+/**
+ * Settings — Usage page (Stream Z3, tenant-scoped).
+ *
+ * Any authenticated user with ``billing:read`` (all tenant roles) — NOT
+ * system_admin gated; tenant scoping is automatic server-side. Shows the
+ * current/selected month's **billed** cost (only) plus realtime token
+ * counters.
+ *
+ * MONETIZATION NO-LEAK RULE: this page renders billed cost + tokens ONLY.
+ * It never displays (and the SDK never carries) base_cost / markup / margin —
+ * those live exclusively on the system_admin chargeback page.
+ *
+ * Mirrors the tenant-page pattern (``SettingsAudit``): PageHeader + filter
+ * bar + antd Table + ``ApiError`` → ``${code}: ${message}`` errors, with
+ * CSS-var surface treatment for the locked dark-first design baseline.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  DatePicker,
+  Segmented,
+  Skeleton,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import type { TableColumnsType } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
+import { Gauge } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { ApiError } from "../api/client";
+import { PageHeader } from "../components/PageHeader";
+import {
+  getUsageCost,
+  getUsageTokens,
+  type TokenGroup,
+  type UsageCost,
+  type UsageCostGroup,
+  type UsageGroupBy,
+  type UsageTokens,
+} from "../api/usage";
+import { formatMicros } from "../utils/money";
+
+const { Text } = Typography;
+
+const MONTH_FMT = "YYYY-MM";
+
+type CostGroupBy = Extract<UsageGroupBy, "agent" | "model">;
+
+function errText(err: unknown): string {
+  return err instanceof ApiError
+    ? `${err.code}: ${err.message}`
+    : err instanceof Error
+      ? err.message
+      : "unknown error";
+}
+
+export function SettingsUsage() {
+  const { t } = useTranslation();
+
+  const [month, setMonth] = useState<Dayjs>(() => dayjs());
+  const [groupBy, setGroupBy] = useState<CostGroupBy>("agent");
+
+  const [cost, setCost] = useState<UsageCost | null>(null);
+  const [tokens, setTokens] = useState<UsageTokens | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const monthStr = month.format(MONTH_FMT);
+    try {
+      const [c, tok] = await Promise.all([
+        getUsageCost({ month: monthStr, groupBy }),
+        getUsageTokens({ month: monthStr }),
+      ]);
+      setCost(c);
+      setTokens(tok);
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [month, groupBy]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const costColumns: TableColumnsType<UsageCostGroup> = useMemo(
+    () => [
+      {
+        title: t("usage.col_key"),
+        dataIndex: "key",
+        key: "key",
+        render: (key: string, row) => (
+          <span>
+            <Text strong>{key}</Text>
+            {row.unpriced && (
+              <Tag color="warning" style={{ marginLeft: 8 }} data-testid={`usage-unpriced-${key}`}>
+                {t("usage.unpriced")}
+              </Tag>
+            )}
+          </span>
+        ),
+      },
+      {
+        title: t("usage.col_input_tokens"),
+        dataIndex: "input_tokens",
+        key: "input_tokens",
+        width: 140,
+        align: "right",
+        render: (v: number) => v.toLocaleString(),
+      },
+      {
+        title: t("usage.col_output_tokens"),
+        dataIndex: "output_tokens",
+        key: "output_tokens",
+        width: 140,
+        align: "right",
+        render: (v: number) => v.toLocaleString(),
+      },
+      {
+        title: t("usage.col_billed"),
+        dataIndex: "billed_cost_micros",
+        key: "billed_cost_micros",
+        width: 140,
+        align: "right",
+        render: (v: number) => (
+          <Text style={{ fontFamily: "var(--hx-font-mono)" }}>{formatMicros(v)}</Text>
+        ),
+      },
+    ],
+    [t],
+  );
+
+  const tokenColumns: TableColumnsType<TokenGroup> = useMemo(
+    () => [
+      { title: t("usage.col_key"), dataIndex: "key", key: "key" },
+      {
+        title: t("usage.col_input_tokens"),
+        dataIndex: "input_tokens",
+        key: "input_tokens",
+        width: 140,
+        align: "right",
+        render: (v: number) => v.toLocaleString(),
+      },
+      {
+        title: t("usage.col_output_tokens"),
+        dataIndex: "output_tokens",
+        key: "output_tokens",
+        width: 140,
+        align: "right",
+        render: (v: number) => v.toLocaleString(),
+      },
+    ],
+    [t],
+  );
+
+  return (
+    <div data-testid="usage-root">
+      <PageHeader
+        icon={<Gauge size={18} strokeWidth={1.5} />}
+        title={t("usage.page_title")}
+        subtitle={t("usage.subtitle")}
+        actions={
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <DatePicker
+              picker="month"
+              value={month}
+              allowClear={false}
+              onChange={(value) => value && setMonth(value)}
+              data-testid="usage-month"
+            />
+            <Segmented<CostGroupBy>
+              value={groupBy}
+              onChange={(value) => setGroupBy(value)}
+              options={[
+                { value: "agent", label: t("usage.group_by_agent") },
+                { value: "model", label: t("usage.group_by_model") },
+              ]}
+              data-testid="usage-group-by"
+            />
+          </div>
+        }
+      />
+
+      {error !== null && (
+        <Alert
+          type="error"
+          showIcon
+          message={t("usage.failed_to_load")}
+          description={error}
+          style={{ marginBottom: 12 }}
+          data-testid="usage-error"
+        />
+      )}
+
+      {loading && cost === null ? (
+        <Skeleton active paragraph={{ rows: 6 }} />
+      ) : (
+        <>
+          <div
+            style={{
+              padding: 16,
+              marginBottom: 16,
+              background: "var(--hx-surface-raised)",
+              border: "1px solid var(--hx-border-subtle)",
+              borderRadius: 6,
+            }}
+            data-testid="usage-summary"
+          >
+            <Statistic
+              title={t("usage.total_billed")}
+              value={formatMicros(cost?.total_billed_cost_micros ?? 0)}
+              valueStyle={{ fontFamily: "var(--hx-font-mono)" }}
+            />
+            {cost?.as_of != null && (
+              <Text type="secondary" style={{ fontSize: 12 }} data-testid="usage-as-of">
+                {t("usage.as_of_note", { time: new Date(cost.as_of).toLocaleString() })}
+              </Text>
+            )}
+          </div>
+
+          <Table<UsageCostGroup>
+            columns={costColumns}
+            dataSource={cost?.groups ?? []}
+            rowKey={(r) => r.key}
+            loading={loading}
+            pagination={false}
+            locale={{ emptyText: t("usage.empty") }}
+            style={{ marginBottom: 24 }}
+            data-testid="usage-cost-table"
+          />
+
+          <div style={{ marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 14 }}>
+              {t("usage.tokens_heading")}
+            </Text>
+            <Tag color="processing" style={{ marginLeft: 8 }}>
+              {t("usage.realtime")}
+            </Tag>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {t("usage.realtime_note")}
+              </Text>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 24,
+              flexWrap: "wrap",
+              padding: 16,
+              marginBottom: 16,
+              background: "var(--hx-surface-raised)",
+              border: "1px solid var(--hx-border-subtle)",
+              borderRadius: 6,
+            }}
+            data-testid="usage-token-totals"
+          >
+            <Statistic
+              title={t("usage.col_input_tokens")}
+              value={(tokens?.total.input_tokens ?? 0).toLocaleString()}
+            />
+            <Statistic
+              title={t("usage.col_output_tokens")}
+              value={(tokens?.total.output_tokens ?? 0).toLocaleString()}
+            />
+            <Statistic
+              title={t("usage.col_cache_creation_tokens")}
+              value={(tokens?.total.cache_creation_tokens ?? 0).toLocaleString()}
+            />
+            <Statistic
+              title={t("usage.col_cache_read_tokens")}
+              value={(tokens?.total.cache_read_tokens ?? 0).toLocaleString()}
+            />
+          </div>
+
+          <Table<TokenGroup>
+            columns={tokenColumns}
+            dataSource={
+              groupBy === "agent" ? (tokens?.by_agent ?? []) : (tokens?.by_model ?? [])
+            }
+            rowKey={(r) => r.key}
+            pagination={false}
+            locale={{ emptyText: t("usage.empty") }}
+            data-testid="usage-token-table"
+          />
+        </>
+      )}
+    </div>
+  );
+}

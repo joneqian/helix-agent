@@ -18,6 +18,8 @@ import { SettingsTenants } from "./pages/SettingsTenants";
 import { SettingsMcpServers } from "./pages/SettingsMcpServers";
 import { SettingsMcpCatalog } from "./pages/SettingsMcpCatalog";
 import { SettingsPlatformSkills } from "./pages/SettingsPlatformSkills";
+import { SettingsUsage } from "./pages/SettingsUsage";
+import { SettingsBillingChargeback } from "./pages/SettingsBillingChargeback";
 import { SkillDetail } from "./pages/SkillDetail";
 import { SkillsList } from "./pages/SkillsList";
 import { TriggersList } from "./pages/TriggersList";
@@ -50,6 +52,8 @@ export function AppRouter() {
       <Route path="/settings/platform-skills" element={<SettingsPlatformSkills />} />
       <Route path="/settings/audit" element={<SettingsAudit />} />
       <Route path="/settings/mcp-servers" element={<SettingsMcpServers />} />
+      <Route path="/settings/usage" element={<SettingsUsage />} />
+      <Route path="/settings/billing-chargeback" element={<SettingsBillingChargeback />} />
       <Route path="/settings/*" element={<ComingSoon title="Settings" />} />
       <Route path="*" element={<ComingSoon title="404" />} />
     </Routes>

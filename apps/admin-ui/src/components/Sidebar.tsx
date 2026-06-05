@@ -11,7 +11,9 @@ import {
   Key,
   KeyRound,
   Boxes,
+  Gauge,
   Plug,
+  Receipt,
   Sparkles,
   UserCircle2,
   Users,
@@ -51,6 +53,8 @@ const SETTINGS_ITEMS: NavItem[] = [
   { key: "settings-members", labelKey: "nav.members", icon: <Users size={16} strokeWidth={1.5} />, path: "/settings/members" },
   { key: "settings-audit", labelKey: "nav.audit", icon: <Shield size={16} strokeWidth={1.5} />, path: "/settings/audit" },
   { key: "settings-mcp-servers", labelKey: "nav.mcp_servers", icon: <Plug size={16} strokeWidth={1.5} />, path: "/settings/mcp-servers" },
+  { key: "settings-usage", labelKey: "nav.usage", icon: <Gauge size={16} strokeWidth={1.5} />, path: "/settings/usage" },
+  { key: "settings-chargeback", labelKey: "nav.chargeback", icon: <Receipt size={16} strokeWidth={1.5} />, path: "/settings/billing-chargeback" },
 ];
 
 export function Sidebar() {
