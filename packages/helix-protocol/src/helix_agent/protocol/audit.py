@@ -271,6 +271,11 @@ ResourceType = Literal[
     "tenant_mcp_server",  # Stream V — tenant remote MCP server registry
     "mcp_connector_catalog",  # Stream W — platform MCP connector catalog
     "model_rate_card",  # Stream Y — platform model rate card (Y-3)
+    # Stream TE-2 — per-tool-call audit (TOOL_CALL / TOOL_BLOCKED). Mirrors
+    # the control-plane ResourceType Literal in
+    # services/control-plane/src/control_plane/audit.py per
+    # [memory:audit-literal-drift] (both must stay in sync).
+    "tool",
 ]
 """Canonical resource type strings used in audit log entries.
 

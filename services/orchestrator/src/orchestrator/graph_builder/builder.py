@@ -54,6 +54,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from collections.abc import Mapping
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -64,7 +65,8 @@ from langgraph.graph import END, START, StateGraph
 
 from helix_agent.common.observability import helix_counter
 from helix_agent.common.uplift_metrics import record_memory_inject_mode
-from helix_agent.protocol import MemoryItem, Plan
+from helix_agent.protocol import AuditAction, AuditEntry, AuditResult, MemoryItem, Plan
+from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.middleware import (
     MiddlewareChain,
     MiddlewareContext,
@@ -76,7 +78,7 @@ from orchestrator.graph_builder._approval import (
     build_approval_request,
     find_approval_target,
 )
-from orchestrator.graph_builder._config import cancellation_token
+from orchestrator.graph_builder._config import audit_logger_from_config, cancellation_token
 from orchestrator.graph_builder.memory import MemoryNode
 from orchestrator.graph_builder.planner import PlannerNode, render_plan
 from orchestrator.graph_builder.reflect import ReflectNode
@@ -341,6 +343,9 @@ def build_react_graph(
                 }
 
         ctx_obj = _build_tool_context(config, plan=state.get("plan"))
+        # Stream TE-2 — per-tool-call audit sink (may be None on the dev /
+        # unit-test path; ``_dispatch_tool`` treats the emit as best-effort).
+        audit_logger = audit_logger_from_config(config)
         # Stream L.L6 — group tool_calls into stages of mutually-non-
         # conflicting calls. Within a stage we ``asyncio.gather`` (capped
         # at MAX_TOOL_WORKERS); stages execute sequentially so any
@@ -375,6 +380,7 @@ def build_react_graph(
                     tool_registry,
                     ctx_obj,
                     before_tool_dispatch_chain=before_tool_dispatch_chain,
+                    audit_logger=audit_logger,
                 )
             )
 
@@ -660,6 +666,7 @@ async def _dispatch_tool(
     ctx: ToolContext,
     *,
     before_tool_dispatch_chain: MiddlewareChain | None,
+    audit_logger: AuditLogger | None = None,
 ) -> tuple[ToolMessage, Mapping[str, Any], int]:
     """Dispatch one tool call.
 
@@ -671,10 +678,18 @@ async def _dispatch_tool(
     for every code path that does not produce a successful
     :class:`~orchestrator.tools.registry.ToolResult` (errors, blocks,
     unknown tools).
+
+    Stream TE-2 — each dispatch emits one ``TOOL_CALL`` audit row
+    (``result=ERROR`` when the tool returns an error) or, when a
+    pre-dispatch middleware blocks the call, one ``TOOL_BLOCKED`` row.
+    The emit is best-effort: a missing ``audit_logger`` / ``tenant_id``
+    is skipped and an audit-write failure is swallowed, so auditing never
+    changes the dispatch result (mirrors ``sse._emit_run_end_audit``).
     """
     name = str(tool_call.get("name", ""))
     call_id = str(tool_call.get("id", ""))
     args = tool_call.get("args") or {}
+    started = time.monotonic()
 
     try:
         if before_tool_dispatch_chain is not None:
@@ -685,9 +700,37 @@ async def _dispatch_tool(
             args = mw_ctx.payload.get("tool_args", args) or {}
 
         tool = registry.get_required(name)
-        return await _invoke_tool(tool, args, call_id, ctx)
+        outcome = await _invoke_tool(tool, args, call_id, ctx)
+        ok = outcome[0].status != "error"
+        await _emit_tool_audit(
+            audit_logger,
+            ctx,
+            name=name,
+            call_id=call_id,
+            args=args,
+            path_args=tool.spec.path_args,
+            from_skill=tool.spec.from_skill,
+            action=AuditAction.TOOL_CALL,
+            result=AuditResult.SUCCESS if ok else AuditResult.ERROR,
+            reason=None if ok else "tool_error",
+            duration_ms=_elapsed_ms(started),
+        )
+        return outcome
     except ToolNotFoundError as exc:
         logger.warning("tools.unknown_tool name=%s call_id=%s", name, call_id)
+        await _emit_tool_audit(
+            audit_logger,
+            ctx,
+            name=name,
+            call_id=call_id,
+            args=args,
+            path_args=(),
+            from_skill=None,
+            action=AuditAction.TOOL_CALL,
+            result=AuditResult.ERROR,
+            reason="unknown_tool",
+            duration_ms=_elapsed_ms(started),
+        )
         return (
             ToolMessage(
                 content=_format_error(exc),
@@ -707,6 +750,19 @@ async def _dispatch_tool(
             call_id,
             type(exc).__name__,
         )
+        await _emit_tool_audit(
+            audit_logger,
+            ctx,
+            name=name,
+            call_id=call_id,
+            args=args,
+            path_args=(),
+            from_skill=None,
+            action=AuditAction.TOOL_BLOCKED,
+            result=AuditResult.DENIED,
+            reason=type(exc).__name__,
+            duration_ms=_elapsed_ms(started),
+        )
         return (
             ToolMessage(
                 content=_format_error(exc),
@@ -716,6 +772,74 @@ async def _dispatch_tool(
             {},
             0,
         )
+
+
+def _elapsed_ms(started: float) -> int:
+    """Whole milliseconds elapsed since a ``time.monotonic`` timestamp."""
+    return int((time.monotonic() - started) * 1000)
+
+
+async def _emit_tool_audit(
+    audit_logger: AuditLogger | None,
+    ctx: ToolContext,
+    *,
+    name: str,
+    call_id: str,
+    args: Mapping[str, Any],
+    path_args: tuple[str, ...],
+    from_skill: str | None,
+    action: AuditAction,
+    result: AuditResult,
+    reason: str | None,
+    duration_ms: int,
+) -> None:
+    """Write one per-tool-call audit row (Stream TE-2).
+
+    Best-effort and non-fatal: skipped when no ``audit_logger`` or no
+    ``tenant_id`` (dev / unit-test path), and any write failure is logged
+    and swallowed so auditing never breaks a tool dispatch.
+
+    Privacy: ``details`` records only the **argument names** and the
+    declared path-arg **values** (filesystem paths, not secrets) — never
+    raw argument values, which may carry PII / credentials (CodeQL
+    clear-text-logging; [memory:feedback_codeql_clear_text_logging_secret_name]).
+    """
+    if audit_logger is None or ctx.tenant_id is None:
+        return
+    # The ENTIRE body — including the ``details`` build (``str(...)`` on
+    # arbitrary arg keys / declared path values can in principle raise) —
+    # is wrapped so this helper is genuinely total. On the success path the
+    # call site sits inside ``_dispatch_tool``'s try whose ``except`` is the
+    # middleware-block handler; an exception escaping here would otherwise
+    # misclassify a successful dispatch as TOOL_BLOCKED (review HIGH).
+    try:
+        details: dict[str, Any] = {
+            "tool": name,
+            "call_id": call_id,
+            "arg_keys": sorted(str(k) for k in args),
+            "duration_ms": duration_ms,
+        }
+        if path_args:
+            details["paths"] = [str(args[a]) for a in path_args if a in args]
+        if from_skill is not None:
+            details["from_skill"] = from_skill
+        if ctx.run_id is not None:
+            details["run_id"] = str(ctx.run_id)
+        await audit_logger.write(
+            AuditEntry(
+                tenant_id=ctx.tenant_id,
+                actor_type="agent",
+                actor_id=str(ctx.run_id) if ctx.run_id is not None else "agent",
+                action=action,
+                resource_type="tool",
+                resource_id=name,
+                result=result,
+                reason=reason,
+                details=details,
+            )
+        )
+    except Exception:
+        logger.exception("tools.audit_failed name=%s call_id=%s", name, call_id)
 
 
 def _build_tool_context(config: RunnableConfig, *, plan: Plan | None = None) -> ToolContext:

@@ -72,6 +72,7 @@ from helix_agent.runtime.stream_bridge import (
     StreamBridge,
 )
 from orchestrator.errors import MaxStepsExceededError
+from orchestrator.graph_builder._config import AUDIT_LOGGER_KEY
 from orchestrator.trajectory import (
     TrajectoryOutcome,
     TrajectoryRecord,
@@ -260,6 +261,10 @@ async def run_agent(
         "configurable": {
             **(config.get("configurable") or {}),
             CANCELLATION_TOKEN_KEY: token,
+            # Stream TE-2 — thread the AuditLogger to the tools node so each
+            # tool dispatch emits a TOOL_CALL / TOOL_BLOCKED row. A live
+            # object (not checkpoint-serialisable), like the cancel token.
+            AUDIT_LOGGER_KEY: audit_logger,
         },
     }
     # Stream M Gate — session E2E duration. Started before ``set_status``
