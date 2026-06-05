@@ -34,6 +34,7 @@ from orchestrator.errors import AgentFactoryError
 from orchestrator.multimodal import ImageResolver
 from orchestrator.tools.approval import AskForApprovalTool
 from orchestrator.tools.artifact import ListArtifactsTool, SaveArtifactTool
+from orchestrator.tools.bash import BashTool
 from orchestrator.tools.http import AllowlistProvider, HTTPTool
 from orchestrator.tools.knowledge import KnowledgeRetriever, KnowledgeSearchTool
 from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 #: Built-in tool names the platform ships in M0.
 KNOWN_BUILTINS = frozenset(
-    {"web_search", "exec_python", "save_artifact", "list_artifacts", "ask_for_approval"}
+    {"web_search", "exec_python", "bash", "save_artifact", "list_artifacts", "ask_for_approval"}
 )
 
 
@@ -265,6 +266,8 @@ def _register_builtin(
         _register_web_search(registry, entry, env)
     elif entry.name == "exec_python":
         _register_exec_python(registry, env, persistent_workspace)
+    elif entry.name == "bash":
+        _register_bash(registry, env, persistent_workspace)
     elif entry.name == "save_artifact":
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
@@ -293,6 +296,21 @@ def _register_exec_python(registry: ToolRegistry, env: ToolEnv, persistent_works
         )
     registry.register(
         ExecPythonTool(
+            client=env.supervisor_client,
+            persistent_workspace=persistent_workspace,
+        )
+    )
+
+
+def _register_bash(registry: ToolRegistry, env: ToolEnv, persistent_workspace: bool) -> None:
+    # Stream TE-5 — bash rides the same Sandbox Supervisor as exec_python.
+    if env.supervisor_client is None:
+        raise AgentFactoryError(
+            "builtin 'bash' declared but no Sandbox Supervisor client "
+            "is configured (ToolEnv.supervisor_client)"
+        )
+    registry.register(
+        BashTool(
             client=env.supervisor_client,
             persistent_workspace=persistent_workspace,
         )

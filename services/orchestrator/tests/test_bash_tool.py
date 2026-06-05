@@ -1,0 +1,160 @@
+"""Unit tests for the ``bash`` tool — Stream TE-5.
+
+The Sandbox Supervisor is faked via :class:`RecordingSupervisorClient`,
+so these run in the plain ``pytest`` job (no Docker). bash rides the
+``exec`` channel as a ``subprocess`` wrapper, so the assertions focus on
+the wrapper that gets executed, the irreversible classification, and the
+shared acquire / release / cancel flow (already covered for exec_python).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from uuid import UUID, uuid4
+
+import pytest
+
+from helix_agent.protocol import BuiltinToolSpec
+from orchestrator.errors import AgentFactoryError
+from orchestrator.tools import (
+    BashTool,
+    RecordingSupervisorClient,
+    SandboxOutcome,
+    ToolBlockedError,
+    ToolContext,
+    ToolEnv,
+    build_tool_registry,
+)
+
+
+def _ctx(*, user_id: UUID | None = None) -> ToolContext:
+    return ToolContext(tenant_id=uuid4(), run_id=uuid4(), user_id=user_id)
+
+
+# --- spec / classification -------------------------------------------------
+
+
+def test_bash_spec_advertises_command_and_is_irreversible() -> None:
+    spec = BashTool(client=RecordingSupervisorClient()).spec
+    assert spec.name == "bash"
+    assert "command" in spec.parameters["properties"]
+    assert spec.parameters["required"] == ["command"]
+    # TE-5 / TE-ADR-1 — bash is the first irreversible tool (→ TE-4 serial + gate).
+    assert spec.side_effect == "irreversible"
+    assert spec.resolved_side_effect == "irreversible"
+
+
+# --- wrapper: runs the command, propagates exit code -----------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_runs_command_via_subprocess_wrapper() -> None:
+    client = RecordingSupervisorClient(
+        outcome=SandboxOutcome(stdout="hello\n", stderr="", exit_code=0, timed_out=False)
+    )
+    tool = BashTool(client=client)
+    result = await tool.call({"command": "echo hello"}, ctx=_ctx())
+
+    assert "hello" in result.content
+    assert "exit_code: 0" in result.content
+    assert result.meta["exit_code"] == 0
+    # The exec'd code is a subprocess wrapper carrying the command via repr().
+    assert len(client.execs) == 1
+    executed_code = client.execs[0][1]
+    assert "subprocess.run" in executed_code
+    assert "shell=True" in executed_code
+    assert "'echo hello'" in executed_code
+    # Signal-killed commands map to the shell convention (128 + N).
+    assert "128 - rc" in executed_code
+    assert len(client.released) == 1
+    assert client.destroyed == []
+
+
+@pytest.mark.asyncio
+async def test_bash_wrapper_is_valid_python_even_for_nasty_command() -> None:
+    # A command with quotes, newlines and backslashes must still produce a
+    # compilable wrapper — repr() makes it a safe Python string literal,
+    # so there is no Python-level injection.
+    nasty = "echo \"a'b\"; printf 'x\\n'\n# trailing"
+    client = RecordingSupervisorClient()
+    await BashTool(client=client).call({"command": nasty}, ctx=_ctx())
+    executed_code = client.execs[0][1]
+    # Must compile (would raise SyntaxError if the embedding were unsafe).
+    compile(executed_code, "<wrapper>", "exec")
+
+
+@pytest.mark.asyncio
+async def test_bash_propagates_nonzero_exit_code() -> None:
+    client = RecordingSupervisorClient(
+        outcome=SandboxOutcome(stdout="", stderr="boom\n", exit_code=2, timed_out=False)
+    )
+    result = await BashTool(client=client).call({"command": "false"}, ctx=_ctx())
+    assert result.meta["exit_code"] == 2
+    assert "exit_code: 2" in result.content
+    assert "boom" in result.content
+
+
+# --- validation / tenant scoping -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_requires_tenant_binding() -> None:
+    tool = BashTool(client=RecordingSupervisorClient())
+    with pytest.raises(ToolBlockedError, match="tenant binding"):
+        await tool.call({"command": "ls"}, ctx=ToolContext(tenant_id=None))
+
+
+@pytest.mark.asyncio
+async def test_bash_requires_non_empty_command() -> None:
+    tool = BashTool(client=RecordingSupervisorClient())
+    with pytest.raises(ValueError, match="non-empty 'command'"):
+        await tool.call({"command": "   "}, ctx=_ctx())
+
+
+# --- shared sandbox flow: cancel + persistent workspace --------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_destroys_sandbox_on_cancellation() -> None:
+    client = RecordingSupervisorClient(exec_error=asyncio.CancelledError())
+    tool = BashTool(client=client)
+    with pytest.raises(asyncio.CancelledError):
+        await tool.call({"command": "sleep 99"}, ctx=_ctx())
+    assert client.released == []
+    assert len(client.destroyed) == 1
+    assert client.destroyed[0][1] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_bash_persistent_workspace_passes_user_id() -> None:
+    client = RecordingSupervisorClient()
+    user_id = uuid4()
+    tool = BashTool(client=client, persistent_workspace=True)
+    await tool.call({"command": "ls"}, ctx=_ctx(user_id=user_id))
+    assert client.acquired[0][2] == user_id
+
+
+@pytest.mark.asyncio
+async def test_bash_default_does_not_pass_user_id() -> None:
+    client = RecordingSupervisorClient()
+    tool = BashTool(client=client)  # persistent_workspace defaults False
+    await tool.call({"command": "ls"}, ctx=_ctx(user_id=uuid4()))
+    assert client.acquired[0][2] is None
+
+
+# --- assembly wiring -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_builtin_assembled_when_supervisor_present() -> None:
+    env = ToolEnv(supervisor_client=RecordingSupervisorClient())
+    registry = await build_tool_registry([BuiltinToolSpec(name="bash")], tool_env=env)
+    spec = registry.get_required("bash").spec
+    assert spec.name == "bash"
+    assert spec.resolved_side_effect == "irreversible"
+
+
+@pytest.mark.asyncio
+async def test_bash_builtin_missing_supervisor_raises() -> None:
+    with pytest.raises(AgentFactoryError, match="no Sandbox Supervisor"):
+        await build_tool_registry([BuiltinToolSpec(name="bash")], tool_env=ToolEnv())
