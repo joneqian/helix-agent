@@ -37,6 +37,7 @@
 
 ### OFFICE-ADR-3 中文支持
 - **决策**：office 镜像装 Noto CJK / 思源黑体 + `fontconfig` + 设 `LANG=zh_CN.UTF-8`（兼 UTF-8/GB18030 读写）。matplotlib 中文渲染配字体。验收：沙箱内生成含中文的 xlsx/docx/pptx/图表不乱码。
+- **实现要点（OFFICE-1b 落地实证）**：① Debian `fonts-noto-cjk` 装的是 `.ttc` 集合，fontconfig 能看到 SC/TC/JP 全部子面，但 **matplotlib 只注册第 0 面**（家族名 `Noto Sans CJK JP`）；该面属统一 Noto Sans CJK,含全部简体汉字,渲染中文不豆腐。② build 期 `mpl_cjk_rc.py` 把 `font.sans-serif: Noto Sans CJK JP, …` 烤进 matplotlib **系统级 matplotlibrc**(只读 rootfs 下也生效,因 /workspace tmpfs 每会话清空,用户级 rc 不持久),agent 画图开箱即用,无需自配字体;只写 `key: value`(注释行会触发 rc parser 告警污染 stderr)。③ build 期 `fc-cache -f` 预热字体缓存进只读层。
 
 ### OFFICE-ADR-4 国内连接器暂缓（不破 client-only）
 - **决策**：钉钉/企微/飞书连接器**本轮不做**。国内官方 remote MCP server 生态薄，catalog 只收 remote；强上要么破 client-only 自搭 wrapper、要么仅单租户 on-prem stdio off-catalog。记 backlog，待生态成熟或单租户场景再开。helix 本就 backend-only、不内置末端 adapter。
@@ -49,7 +50,7 @@
 
 ## 2. Stream 切分
 - **OFFICE-1a 镜像 variant 机制**：manifest `image_variant` + supervisor `_select_image` + acquire 字段 + orchestrator 链路。先用现有 minimal 镜像验证机制（不依赖 office 镜像就绪）。
-- **OFFICE-1b office 镜像**：`infra/sandbox-image-office/Dockerfile`（slim + 库 + 中文）+ CI 构建 + supervisor settings 接线。
+- **OFFICE-1b office 镜像** ✅：`infra/sandbox-image-office/Dockerfile`（slim + 库 + 中文）+ CI 构建（`.github/workflows/sandbox-image-office.yml`，阿里云 ACR）+ supervisor settings（1a 已接）。**runner.py 不复制**：build context = `infra/`，COPY 共享 `sandbox-image/runner.py`（防安全敏感文件 drift）。smoke（`smoke_test.py` 驱动 runner 协议 + `smoke_payload.py` 内验 import + 中文渲染）本地实跑通过；gVisor/read-only-rootfs 验证留目标主机。
 - **OFFICE-3 平台 skill 导入端点**：`POST /v1/platform/skills/import`（system_admin，multipart `.skill` ZIP，复用 `_skill_zip`）+ 租户/平台 **content_hash 幂等**（同 latest hash 跳过，否则加版本）。**不自写/不批量移植 skill 内容**（OFFICE-ADR-5）。独立于镜像，可先做。
 - **OFFICE-2 国内连接器**：暂缓（backlog）。
 

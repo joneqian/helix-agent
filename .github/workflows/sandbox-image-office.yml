@@ -1,0 +1,87 @@
+name: Sandbox Image (office)
+
+# Builds the "office" sandbox variant (infra/sandbox-image-office) — slim +
+# office libs + CJK fonts/locale (Stream OFFICE-1b). On PRs it only builds &
+# smoke-tests (no registry creds needed); on main / manual dispatch it also
+# pushes to Aliyun ACR.
+#
+# Registry wiring (set in repo Settings → Secrets and variables → Actions):
+#   vars.ALIYUN_ACR_REGISTRY    e.g. registry.cn-hangzhou.aliyuncs.com
+#   vars.ALIYUN_ACR_NAMESPACE   your ACR namespace
+#   secrets.ALIYUN_ACR_USERNAME
+#   secrets.ALIYUN_ACR_PASSWORD
+# Then point the supervisor at the pushed image:
+#   HELIX_SANDBOX_SANDBOX_IMAGE_OFFICE=<registry>/<namespace>/helix-sandbox-office:latest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/sandbox-image-office/**"
+      - "infra/sandbox-image/runner.py" # shared, baked into the office image
+      - ".github/workflows/sandbox-image-office.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/sandbox-image-office/**"
+      - "infra/sandbox-image/runner.py"
+      - ".github/workflows/sandbox-image-office.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: this job builds an attacker-controllable Dockerfile on PRs.
+# Registry login uses secrets.* directly, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build + smoke (+ push on main)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build once into the local daemon so the smoke test can `docker run` it.
+      # Build context is infra/ (the office Dockerfile COPYs the shared
+      # sandbox-image/runner.py).
+      - name: Build (load local)
+        uses: docker/build-push-action@v6
+        with:
+          context: infra
+          file: infra/sandbox-image-office/Dockerfile
+          load: true
+          tags: helix-sandbox-office:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (office libs + CJK)
+        run: python infra/sandbox-image-office/smoke_test.py helix-sandbox-office:ci
+
+      # ---- push (main / manual only, and only when the registry is configured)
+      - name: Log in to Aliyun ACR
+        if: github.event_name != 'pull_request' && vars.ALIYUN_ACR_REGISTRY != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.ALIYUN_ACR_REGISTRY }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Build + push to ACR
+        if: github.event_name != 'pull_request' && vars.ALIYUN_ACR_REGISTRY != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: infra
+          file: infra/sandbox-image-office/Dockerfile
+          push: true
+          tags: |
+            ${{ vars.ALIYUN_ACR_REGISTRY }}/${{ vars.ALIYUN_ACR_NAMESPACE }}/helix-sandbox-office:${{ github.sha }}
+            ${{ vars.ALIYUN_ACR_REGISTRY }}/${{ vars.ALIYUN_ACR_NAMESPACE }}/helix-sandbox-office:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
