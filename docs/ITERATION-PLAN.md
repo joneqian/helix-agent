@@ -963,6 +963,31 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] **KEK → 真 KMS wrap**（依赖 aliyun_kms 落地）— 现 env KEK（`HELIX_AGENT_SECRET_ENCRYPTION_KEY`）；与 Stream Q 后续项同源，非本路线图新增
 - [ ] **跨租户 write**（按需）— Stream N 仍 read-only；chargeback / catalog 平台面均为 read 或 system_admin 受控写
 
+## Stream TE — Tool Execution Engine Hardening（2026-06-05 起）— 设计 [STREAM-TE-DESIGN](./streams/STREAM-TE-DESIGN.md)
+
+把"改进版 Tool 执行引擎"落地 helix（源自 Go Harness 专栏 + openclaw/deer-flow/hermes 源码对照 + helix 现状探查）。**关键利好**：文章最难的并行调度（只读并发/涉写串行）helix 已成熟（`tools/scheduling.py`，L.L6），不重做。**用户拍板**：bash IN / edit 鲁棒化 / 跨副本锁做强 / 性能+可观测进门 / 另开办公能力包 / 按"办公读多写少"杠杆重排（可观测·工具面·bash 前置，锁·CAS 押后保留）。**TE-0 核实关键事实**：workspace **非单 sandbox 独占租约**（多 sandbox 可并挂同卷、supervisor 可多副本、无 DB 锁）→ 跨副本锁**必须** PG `pg_advisory_xact_lock`（仿 `DbEventStore`，合规 infra 约束），in-process 锁不安全。
+
+- [ ] **TE-0 设计先行**（本 PR）：`STREAM-TE-DESIGN.md` + 本 backlog — Mini-ADR TE-1~TE-6
+- [ ] **TE-1 工具元数据**（P0）：`ToolSpec` 加 `side_effect: Literal["read_only","reversible","irreversible"]`（default 由 `is_read_only` 派生）+ `idempotent`；保留 `is_read_only`/`path_args` 向后兼容；现有 builtins 声明。纯增量
+- [ ] **TE-2 工具级审计 emit**（P0）：`builder.py:_dispatch_tool` 接 `TOOL_CALL`/`TOOL_BLOCKED`（复用 `AuditEntry`/`AuditLogger`，仿 `sse.py:_emit_run_end_audit`）；脱敏 args/path/耗时/outcome/tenant/user
+- [ ] **TE-3 可观测补全**（P0）：per-tool Prometheus（`helix_tool_call_total`/`_latency_seconds`/`_error_total`）+ 每工具 Langfuse span + trajectory 富化（exit_code/读写集/耗时）
+- [ ] **TE-4 side_effect 门控**（P0）：扩 `scheduling.py` `irreversible`→串行；`tools/eval/hitl.py` 硬编码 gated_tools 换成按 `side_effect` 自动 gate
+- [ ] **TE-5 bash 工具**（P0）：经 sandbox-supervisor 沙箱内、限 workspace；`side_effect` 默认 irreversible→串行+门控；视沙箱内全局写锁（TE-ADR-1）
+- [ ] **TE-6 deferred registry + find_tools**（P1）：`ToolRegistry` deferred + `specs(selector)` 子集 + `find_tools` 元工具（对标 deer-flow `tool_search` 三查询 + promote）+ bind 前 middleware 过滤；MCP/skill 超阈值默认 deferred
+- [ ] **TE-7 workspace 文件原语**（P2）：read/write/edit（基础）经 supervisor 作用于 workspace 卷；workspace 根 + realpath 防越界；声明完整元数据
+- [ ] **TE-8 per-canonical-path 锁**（P2）：PG `pg_advisory_xact_lock(hash64(tenant_id,canonical_path))` 写排他 + 读 lock-free + in-process `WeakValueDictionary` 叠层（抄 deer-flow `file_operation_lock.py`）+ realpath 归一化；接入文件工具 + bash 全局写锁（TE-ADR-3）
+- [ ] **TE-9 edit 鲁棒化 + 硬 CAS**（P2，独立分量 PR）：多级匹配降级（精确→空白归一→锚点/模糊→结构化报错；参考 openclaw `wrapEditToolWithRecovery`/aider）+ `expected_hash` 硬 CAS（stale→结构化回传接自纠错）。差异化优势（三家最强也只 advisory）
+- [ ] **TE-10 性能验收门**（P2）：文件原语 P50/P95 延迟基线 + keep-warm/批量避免冷启动 + 锁竞争 benchmark + load/soak + SLO
+
+## Stream OFFICE — 企业办公能力包（应对办公 70%，可与 TE 并行）
+
+补足办公场景的工具面/连接器/技能。**TE 做引擎"能承载"，OFFICE 做能力面"能办公"**。办公读多写少，杠杆高于 Tier3 锁/CAS。
+
+- [ ] **OFFICE-0 设计先行**：办公场景盘点 + Skill/连接器清单 + 优先级
+- [ ] **OFFICE-1 沙箱镜像办公依赖**：pandas/openpyxl/python-docx/python-pptx/pypdf/pdfplumber/Pillow + 系统二进制（pandoc/libreoffice-headless）；独立可先行
+- [ ] **OFFICE-2 seed MCP catalog**（复活推迟的 W6）：Gmail/Outlook/Slack/Drive/Notion 等官方连接器进平台目录（复用 Stream W catalog 基建）
+- [ ] **OFFICE-3 办公 Skill 打包**（复用 Stream X）：读文档/出报告/做 PPT/数据分析模板
+
 ---
 
 ## Phase M1 — 生产化（6-8 个月）
