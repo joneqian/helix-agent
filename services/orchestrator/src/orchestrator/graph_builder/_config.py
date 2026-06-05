@@ -10,7 +10,13 @@ from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 
+from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.cancellation import CANCELLATION_TOKEN_KEY, CancellationToken
+
+#: Stream TE-2 — key under which the run's :class:`AuditLogger` travels in
+#: ``config["configurable"]`` (a live object, like the cancellation token —
+#: not checkpoint-serialisable, injected per-invocation by ``sse.run_agent``).
+AUDIT_LOGGER_KEY = "audit_logger"
 
 
 def configurable_uuid(config: RunnableConfig, key: str) -> UUID | None:
@@ -54,3 +60,18 @@ def cancellation_token(config: RunnableConfig) -> CancellationToken:
     if isinstance(token, CancellationToken):
         return token
     return CancellationToken()
+
+
+def audit_logger_from_config(config: RunnableConfig) -> AuditLogger | None:
+    """Lift the run's :class:`AuditLogger` out of ``config`` (Stream TE-2).
+
+    Like the cancellation token it travels via ``config["configurable"]``
+    (a live object, not checkpoint-serialisable). ``None`` when absent —
+    the dev / unit-test path, or a control-plane that wires no audit sink;
+    callers must treat the tool-call audit emit as best-effort.
+    """
+    configurable = config.get("configurable") or {}
+    logger = configurable.get(AUDIT_LOGGER_KEY)
+    if isinstance(logger, AuditLogger):
+        return logger
+    return None
