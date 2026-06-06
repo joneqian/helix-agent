@@ -1019,6 +1019,25 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
+## Stream SE — 自我进化 Skill（Self-Evolving Skills，2026-06-06 起）— 设计 [STREAM-SE-DESIGN](./streams/STREAM-SE-DESIGN.md)
+
+把 skill 从"人写、静态启用"（J.7a/X）升级为"agent 可自我生成、被真实证据验证、有界自动演化"。**需求决策（用户确认）：全闭环 + 尽量全自动 + 重放验证为主**。核心判断：helix 已有 ~80% 地基（skill 协议/持久化/curator/高危 gate/curation 全链/aux LLM/judge/沙箱全现成），本 Stream = **补三缺口（自著工具 / 后验蒸馏 / 重放验证）+ 串闭环 + 全自动护栏**。咽喉是**重放验证**（替代人审充当安全闸；三仓与当前 helix 共缺）。实证对照见 [docs/research/2026-06-06-self-evolving-skills.md](./research/2026-06-06-self-evolving-skills.md)。
+
+> 全自动 ≠ 无界自改（[memory:no-design-choice-disguise](../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md)）：四道硬护栏永不松动 —— 高危永远人审 / 跨边界永远人审 / 自动 active 必须有 pass 证据 / 可回滚可熔断。
+
+- [x] **SE-0 设计先行**（PR #TBD）：STREAM-SE-DESIGN 全文（架构 / 数据模型 / SE-1~SE-9 子项 / 治理 / 14 条 Mini-ADR SE-A0~SE-A14）+ 3 仓实证对照 + 与 3 篇论文可追溯映射；3 个需求级决策（范围/治理/验证）经 AskUserQuestion 拍板
+- [ ] **SE-1 数据模型**：迁移 0058（`skill` 加 visibility/created_by_agent_id/forked_from；`skill_version` 加 evolution_origin/distilled_from_*/evolution_round；新表 `skill_eval_result`）+ DTO 扩展 + audit 双 Literal。纯增量 + NULL-tenant RLS（SE-A1/A2）
+- [ ] **SE-2 SkillStore 演化 API**：author/refine/fork/request_promote/record_eval_result + visibility 过滤 + §15.7 权限矩阵（base+sql+memory，RLS/隔离测）（SE-A3）
+- [ ] **SE-3 in-session 自著（Layer A = J.7b-1）**：4 个 builtin（author/refine/fork/propose）+ provenance + 高危 gate 接线；默认产出停 DRAFT（SE-A4）
+- [ ] **SE-4 重放验证 runner（咽喉）**：with-vs-without 重放 + judge/assert 打分 → `skill_eval_result`；grounding 判定 delta≥θ∧n≥N∧无新失败；CI scripted / integration 真 judge；高危走沙箱（SE-A5/A6）
+- [ ] **SE-5 蒸馏 + 归因**：LLM 从 candidate 轨迹蒸馏草案（SPARK 后验）+ 失败归因（内容错/执行错，EmbodiSkill + hermes 不捕获清单防伪进化）（SE-A7/A8）
+- [ ] **SE-6 进化 worker（Layer B 引擎）**：克隆 CurationWorker，编排 蒸馏→重放→归因→co-evolve 有界轮（生成/验证分离）→DRAFT→治理门；wire lifespan（SE-A9）
+- [ ] **SE-7 全自动护栏**：auto-promote 策略 + 速率限制 + 回归回滚 + 熔断 + 审计/指标（SE-A10/A11/A12）
+- [ ] **SE-8 admin API / UI**：review 队列 + eval 证据可视化 + lineage 图 + 手动覆盖 + 紧急停（SE-A13）
+- [ ] **SE-9 self-evolution 基准 + SLO**：证明"开自进化后成功率↑"的 eval 数据集（held-out 分离防 gaming）+ 蒸馏/重放延迟 SLO 合并门（SE-A14）
+
+---
+
 ## Phase M1 — 生产化（6-8 个月）
 
 ### 目标

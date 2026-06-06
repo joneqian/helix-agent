@@ -1,0 +1,281 @@
+# Stream SE — 自我进化 Skill(Self-Evolving Skills，设计先行)
+
+> 落实 [docs/ITERATION-PLAN.md](../ITERATION-PLAN.md) § Stream SE。
+> 在 [STREAM-J-DESIGN](./STREAM-J-DESIGN.md) § 15(J.7a skill 静态启用 / J.7b-1 agent 自著设计)与 Stream L(J.12 curation 闭环)、Stream X(平台 skill 库)既有基建之上,**把 skill 从"人写、静态启用"升级为"agent 可自我生成、被真实证据验证、有界自动演化"的一等能力**。
+>
+> **覆盖范围**:SE-0…SE-9 共 10 个子项(SE-0 = 本设计)。本文件是 Stream SE 总设计 —— 锁定总体架构、跨切面数据模型、实现顺序与依赖、每个子项范围/架构/接口/整合点/Mini-ADR。每个子项 PR 在此基础上做局部细化设计(设计先行规则递归适用)。
+
+设计先行规则([memory:feedback_design_first_iteration](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_design_first_iteration.md)):所有总体架构 / 跨切面接口 / Mini-ADR 必须在编码前于本文件锁定;每个子项 PR 只执行本文件对应章节 + 其局部细化设计。
+
+> **对标纪律**:openclaw / deer-flow / hermes-agent 作能力基线,校准"成熟长什么样"+ 找差距。**结论是独立设计,不照抄**([memory:feedback_general_platform_positioning](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_general_platform_positioning.md))。三仓实证见 [docs/research/2026-06-06-self-evolving-skills.md](../research/2026-06-06-self-evolving-skills.md) § 10。
+
+> **能力不可弱**([memory:feedback_complete_not_minimal](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_complete_not_minimal.md) / [no-design-choice-disguise](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md)):本 Stream 的咽喉是**验证(grounding)**。不允许把"只靠 LLM 自评 / 只靠 prompt 自觉"包装成设计选择 —— 那正是三仓(含当前 helix)共同的缺口,也是学界三篇论文(CoEvoSkills / SPARK / EmbodiSkill)主攻处。
+
+---
+
+## 0. 为什么做(Context)
+
+helix 当前的 skill 是"**人写、版本化、静态启用**"(Stream J.7a + X):skill 由 admin 创作、走 draft→active 审核、agent 在 manifest 里按名引用。但 [目标产品形态](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_target_product_form.md) 是 per-user 持久 agent —— agent 应当**从自己的使用经验里持续长出能力**,而不是永远等人来写 skill。
+
+研究(见上引报告)给出三条硬结论:
+1. 自进化的成败系于**验证**:没有 ground truth 时如何确认自生成 skill 真有效。靠模型自评 = 伪进化(在噪声上自我强化 → 误差雪崩、坍缩)。
+2. 三仓(openclaw/deer-flow/hermes)在"生成 + 治理"上趋同且成熟,但**全部缺自动效用验证**。
+3. helix 独有服务端 trajectory + eval 基建,**天生适合 SPARK 式"后验蒸馏 + 重放验证"** —— 这是把别人做不到的"被证据验证过的自进化"做出来的机会。
+
+**需求决策(用户已确认,需求级)**:
+- **范围 = 全闭环**:in-session 自著 + 后验蒸馏 + 重放验证 + 反思归因。
+- **治理 = 尽量全自动**:验证通过即上线,仅高危永远人审。
+- **验证 = 重放为主**:把蒸馏出的 skill 注入原任务重跑打分。
+
+**预期成果**:开启自进化后,agent 在重复性 / 可复用任务上的成功率随使用上升,且每个自动上线的 skill 都附带可溯的重放验证证据;高危与跨租户始终人审;出现退化能自动回滚。
+
+---
+
+## 1. 范围 & 边界
+
+### 1.1 In-scope(SE-0…SE-9)
+
+| 子项 | 能力 | 当前成熟度 | 本 Stream 交付 | Mini-ADR |
+|------|------|-----------|---------------|----------|
+| **SE-0** | 总设计 | — | 本文件 + ITERATION-PLAN backlog | — |
+| **SE-1** | 数据模型 | 缺失 | 迁移 0058:skill/skill_version 加归属+溯源列 + 新表 `skill_eval_result`;DTO 扩展;审计 Literal | SE-A1 SE-A2 |
+| **SE-2** | SkillStore 演化 API | 缺失 | author/refine/fork/promote/record_eval_result + visibility 过滤(base+sql+memory)| SE-A3 |
+| **SE-3** | in-session 自著(Layer A，= J.7b-1)| 仅设计 | 4 个 builtin 工具 + provenance + 高危 gate 接线 | SE-A4 |
+| **SE-4** | 重放验证 runner(咽喉)| 缺失 | with-vs-without 重放 + judge/assert 打分 → grounding 分 | SE-A5 SE-A6 |
+| **SE-5** | 蒸馏 + 归因 | 缺失 | LLM 从轨迹蒸馏草案(SPARK)+ 失败归因(内容错/执行错，EmbodiSkill)| SE-A7 SE-A8 |
+| **SE-6** | 进化 worker(Layer B 引擎)| 缺失 | 编排 蒸馏→重放→归因→co-evolve(有界轮)→DRAFT→治理门;wire lifespan | SE-A9 |
+| **SE-7** | 全自动治理护栏 | 缺失 | auto-promote 策略 + 速率限制 + 回归回滚 + 熔断 + 审计/指标 | SE-A10 SE-A11 SE-A12 |
+| **SE-8** | admin API / UI | 缺失 | review / lineage / eval 证据 / 手动覆盖 / 紧急停 | SE-A13 |
+| **SE-9** | self-evolution 基准 + SLO | 缺失 | 证明闭环有效的 eval 数据集 + 性能验收门 | SE-A14 |
+
+### 1.2 Out-of-scope(本 Stream 明确不做)
+- **J.7b-2 code 字段执行边界 / J.7b-3 运行期动态加载 / J.7b-5 平台内置 skill 库**:各自独立子项,不在本 Stream(可后续)。本 Stream 自生成 skill 默认**不含可执行 code 字段**;若 agent 声明高危工具,走人审(见 § 6)。
+- **跨租户 / 平台 skill 的自动共享**:永远人审,绝不自动(§ 6.2)。
+- **重训 / 参数更新**:自进化定义为**不动模型权重**(报告 § 8 理论边界:固定参数有表达力天花板,本 Stream 不挑战它)。
+
+---
+
+## 2. 总体架构:自进化闭环映射到 helix
+
+闭环六环节(报告 § 3)与 helix 组件的映射:
+
+```
+  环节            实现                            复用/新建
+  (1) 生成   A. in-session: author/refine/fork    SE-3 新工具 + SkillStore(现成)
+            B. 后验蒸馏: LLM 从轨迹产草案          SE-5 新 + aux LLM(现成)
+  (2) 执行   把 skill 注入 agent 跑原任务          SE-4 replay + graph runner(现成)
+  (3) 验证   with-vs-without 打分(grounding)      SE-4 新 + judge(现成) ← 咽喉
+  (4) 归因   内容错→改 / 执行·环境错→弃           SE-5 新 + reflect 思路(现成)
+  (5) 沉淀   DRAFT skill_version + eval 证据        SE-1/2 + SkillStore/curator(现成)
+  (6) 复用   skill_view 装配 + visibility 过滤      SE-2 过滤 + skill_view(现成)
+            ↑ 治理门(SE-7): 非高危+达标→自动 active; 高危/跨边界→人审
+```
+
+**两层产能源,一个验证+治理门**:
+- **Layer A(in-session,对标 hermes/deer-flow `skill_manage`)**:agent 在 run 内主动产/改 skill(SE-3)。交互式、即时。
+- **Layer B(后验蒸馏引擎,helix 差异化)**:后台 worker 离线从真实轨迹自动产 skill(SE-6)。数据驱动、规模化。
+- 二者产出的 DRAFT **必经同一个验证门(SE-4)+ 治理门(SE-7)**。这是"尽量全自动"安全性的根:**用强重放验证替代人审**,而非取消把关。
+
+> **Mini-ADR SE-A0(架构基线)**:验证门是单一收口。任何路径产生的 skill,要 active 都必须有一条 `skill_eval_result(verdict=pass)` 证据(高危除外 —— 高危即便验证通过也强制人审)。无证据的自生成 skill 只能停在 DRAFT。
+
+---
+
+## 3. 复用清单(现成基建,带锚点)
+
+| 能力 | 锚点 | 复用方式 |
+|---|---|---|
+| skill 协议/版本/高危/hash | `packages/helix-protocol/src/helix_agent/protocol/skill.py`(`SkillVersion`、`is_high_risk_skill_version`、`compute_content_hash`、`HIGH_RISK_TOOLS`)| 加字段,不改语义 |
+| skill 持久化 + curator | `packages/helix-persistence/.../persistence/skill/{base,sql,memory}.py`、`services/control-plane/src/control_plane/skill_curator.py`、迁移 0029/0042/0043/0057 | 加 store 方法 + 新迁移;curator 自动覆盖 agent_private skill |
+| skill 装配/lazy/drift/threat | `services/orchestrator/src/orchestrator/tools/skill_view.py`、`make_agent_builder`(`app.py`)| 加 visibility 过滤 + 注册新工具 |
+| 后台 worker 骨架 | `services/control-plane/src/control_plane/curation_worker.py`(`start`/`stop`/`_loop` + `_bypass_rls`/`_tenant_scope`)、`memory_consolidator.py` | 克隆为 `skill_evolution_worker.py` |
+| curation 候选(蒸馏入口)| `curation_worker.py`(产 `CurationCandidateRecord`)、`protocol/eval_dataset.py`、`persistence/curation/*` | worker B 直接消费 candidate |
+| aux LLM 调用 | `services/control-plane/src/control_plane/aux_model_adapter.py`(`LLMRouterAuxModelAdapter`/`make_llm_router_aux_model`)+ `credentials_resolver` | 蒸馏 LLM + 归因 LLM 复用 |
+| judge / eval | `tools/eval/_judge.py`(`AnthropicHaikuJudge`/`ScriptedJudge`)、`tools/eval/helix_eval.py`(`EvalCase`/`Assertion`/`run_eval`)| replay 打分复用 |
+| 沙箱执行 + 代码审计 | `services/orchestrator/src/orchestrator/tools/sandbox.py`(`ExecPythonTool`/`SupervisorClient`)、`runtime/middleware/sandbox_audit.py` | replay 高危 skill 在沙箱跑 |
+| 工具审计 + 高危 gate + 审批 | `graph_builder/builder.py`(`_emit_tool_audit`、approval gate)、`protocol/audit.py`(`TOOL_CALL`/`SKILL_HIGH_RISK_ACTIVATION_BLOCKED`)| 高危人审 + 全程审计 |
+| trajectory 记录/读取 | `services/orchestrator/src/orchestrator/trajectory/recorder.py`、`reader.py`(ShareGPT JSONL,按 tenant/outcome/date 分区)| 蒸馏与重放的输入 |
+
+> 结论:helix 已有 ~80% 地基。本 Stream 本质是**补三缺口(自著工具 / 后验蒸馏 / 重放验证)+ 串闭环 + 加全自动护栏**。
+
+---
+
+## 4. 跨切面数据模型(SE-1，纯增量迁移 0058)
+
+> Mini-ADR SE-A1:全部为 additive 列 + 一张新表,无破坏性变更;沿用 0057 的 NULL-tenant RLS 模式(平台 skill `tenant_id IS NULL`)。revision id ≤ 32 字符。
+
+### 4.1 `skill` 表加列(归属 / 血缘,落实 J.7b-1 §15.7)
+- `visibility TEXT NOT NULL DEFAULT 'tenant'` — CHECK in (`agent_private`,`tenant`)。agent 自著默认 `agent_private`(仅创建它的 agent 实例可见),促 tenant 需治理门。
+- `created_by_agent_id UUID NULL` — 自著来源 agent 实例(provenance,对标 hermes `skill_provenance`)。
+- `forked_from UUID NULL` — fork 血缘源 skill_id(对标 GitHub fork)。
+
+### 4.2 `skill_version` 表加列(进化溯源)
+- `evolution_origin TEXT NULL` — CHECK in (`in_session`,`distilled`);NULL = 人写(M0 历史行)。
+- `distilled_from_trajectory_key TEXT NULL` — Layer B 来源轨迹(可溯到原始证据)。
+- `distilled_from_candidate_id UUID NULL` — 来源 `curation_candidate.id`。
+- `evolution_round INT NOT NULL DEFAULT 0` — co-evolve 迭代轮次(SE-6)。
+
+### 4.3 新表 `skill_eval_result`(重放验证证据 —— grounding 的可溯账)
+```
+id UUID PK
+tenant_id UUID NULL                 -- 平台 skill = NULL(沿用 0057 RLS)
+skill_id UUID NOT NULL
+skill_version INT NOT NULL
+baseline_score FLOAT NOT NULL       -- 不装 skill 的重放分
+skill_score FLOAT NOT NULL          -- 装 skill 的重放分
+delta FLOAT NOT NULL                -- skill_score - baseline_score
+n_cases INT NOT NULL                -- held-out 重放样本数
+replay_source TEXT NOT NULL         -- 'trajectory' | 'eval_dataset'
+verdict TEXT NOT NULL               -- CHECK in ('pass','fail','inconclusive')
+high_risk BOOL NOT NULL
+evolution_round INT NOT NULL DEFAULT 0
+created_at TIMESTAMPTZ NOT NULL
+-- index (tenant_id, skill_id, skill_version); RLS tenant_id = GUC 或 NULL(平台)
+```
+这张表是"为什么这个 skill 被自动上线"的唯一可信依据,admin UI(SE-8)直接读它,回归回滚(SE-7)也读它。
+
+### 4.4 DTO + 审计(`protocol/skill.py` / `protocol/audit.py`)
+- `SkillVersion` 加 4 字段(§4.2);`Skill` 加 3 字段(§4.1);新增 `SkillEvalResult`、`SkillVisibility = Literal["agent_private","tenant"]`、`EvolutionOrigin = Literal["in_session","distilled"]`。均 `frozen=True`。
+- `audit.py` **双 Literal**(protocol + control-plane 两处,见 [memory:project_audit_literal_drift](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_audit_literal_drift.md)):新增 `SKILL_AUTHORED_BY_AGENT` / `SKILL_REFINED_BY_AGENT` / `SKILL_FORKED` / `SKILL_DISTILLED` / `SKILL_EVOLUTION_VERIFIED` / `SKILL_EVOLUTION_AUTO_PROMOTED` / `SKILL_EVOLUTION_ROLLED_BACK` / `SKILL_EVOLUTION_CIRCUIT_OPEN`;promote 审批复用 §15.7 的 `SKILL_PROMOTE_REQUESTED/APPROVED/REJECTED`。
+
+---
+
+## 5. 子项设计(SE-2 … SE-9)
+
+### SE-2 — SkillStore 演化 API(Mini-ADR SE-A3)
+在 `SkillStore` ABC + sql + memory 三处加(签名草案):
+- `author_skill_version(*, tenant_id, name, prompt_fragment, tool_names, ..., created_by_agent_id, origin) -> SkillVersion` — 新建 DRAFT + agent_private;复用 `is_high_risk_skill_version` 置 `high_risk`;复用 `compute_content_hash`。
+- `refine_skill(*, tenant_id, skill_id, by_agent_id, ...) -> SkillVersion` — 仅可改 `created_by_agent_id == by_agent_id` 的 skill;追加新 version(immutable,沿用现有 add_version)。
+- `fork_skill(*, tenant_id, source_skill_id, new_name, by_agent_id) -> Skill` — 复制 source 最新 version 为新 skill v1,`forked_from` 记源(不复用 SkillVersion 行,沿用现状 immutability)。
+- `request_promote / approve_promote / reject_promote` — visibility agent_private→tenant 审批流(§15.7);与 status draft→active(U-24 publish gate)**正交**。
+- `record_eval_result(SkillEvalResult) -> SkillEvalResult` + `list_eval_results(skill_id, ...)`。
+- **visibility 过滤**:`resolve_by_name` / list 在 bind 时按 `(visibility=='tenant') OR (created_by_agent_id == current_agent_id)` 过滤,确保 agent_private 只对本 agent 可见。
+
+> 权限矩阵(§15.7.3)照搬:自己 authored → refine/archive/promote;他人/admin/human skill → 仅 fork;提权(delete/pin/publish-active)→ admin-only(agent 永不能自己把 skill 设 active,只能请求)。
+
+### SE-3 — in-session 自著工具(Layer A，Mini-ADR SE-A4)
+新文件 `services/orchestrator/src/orchestrator/tools/skill_authoring.py`,4 个 builtin(对标 hermes/deer-flow `skill_manage`,但拆成语义清晰的 4 个,符合 §15.7):
+- `author_skill(name, description, prompt_fragment, tool_names) ` → SkillStore.author_skill_version(DRAFT/agent_private)。
+- `refine_skill(skill_ref, patch...)` → refine_skill。
+- `fork_skill(source_skill_ref, new_name)` → fork_skill。
+- `propose_skill_to_tenant(skill_ref, reason)` → request_promote(发起人审,不直接生效)。
+
+接线:在 `KNOWN_BUILTINS`(`tools/assembly.py`)注册;经 `make_agent_builder` 注入 `created_by_agent_id` 上下文(provenance);复用 U-22 threat scan(写时)+ U-24 高危 gate(active 时);每个动作 emit 对应 AuditAction;**速率限制**(SE-7)前置。默认产出即进验证门(SE-4/6),不直接 active。
+
+### SE-4 — 重放验证 runner(咽喉，Mini-ADR SE-A5 / SE-A6)
+新目录 `services/orchestrator/src/orchestrator/evolution/replay.py`。
+- 输入:一个候选 skill(DRAFT)+ 一组 held-out 任务(来源:① 同类 trajectory 的初始 user 消息;② `eval_dataset` 该 agent 的 golden/regression 案例)。
+- 过程:对每个任务跑两遍 agent graph —— **baseline(不装该 skill)** vs **treatment(装该 skill)**,用 `tools/eval` 的 judge(Haiku,temp=0)+ assertions 各打分。
+- 输出:`SkillEvalResult`(baseline_score / skill_score / delta / n_cases / verdict)。
+  - **Mini-ADR SE-A5(grounding 判定)**:`verdict=pass` 要求 `delta ≥ θ_delta`(默认可配)且 `n_cases ≥ N_min`(默认可配)且 treatment 无新增失败;否则 `inconclusive`(落 DRAFT 待人审)或 `fail`。
+  - **Mini-ADR SE-A6(确定性 / 成本)**:CI 用 `ScriptedJudge` + mock completion(确定性,`-m "not integration"`);真 Haiku judge + 真 graph 重放只在 integration。高危 skill 的重放在 gVisor 沙箱内(复用 ExecPythonTool 路径)。
+- 防泄漏:held-out 任务不得与蒸馏来源轨迹同一条(SPARK 的 held-out 精神),避免"对着训练样本刷分"。
+
+### SE-5 — 蒸馏 + 归因(Mini-ADR SE-A7 / SE-A8)
+- **蒸馏** `control_plane/skill_distiller.py`(SE-A7,SPARK 后验):输入一条 `curation_candidate`(优先 `positive_feedback` = 成功打法、`failed_outcome`+后续修复)+ 其轨迹;用 aux LLM(`LLMRouterAuxModelAdapter`)产出 skill 草案(prompt_fragment + tool_names + name 建议)。**只蒸馏后验证据**(真实交互),不从先验计划编。
+- **归因** `control_plane/skill_attribution.py`(SE-A8,EmbodiSkill):当重放失败,用 LLM 归因为「**skill 内容错**」(→ 进入 co-evolve 修订草案)还是「**执行 / 环境错**」(→ 丢弃该信号,不喂回)。归因 prompt 内置 hermes 的"不捕获清单"(环境依赖失败 / 工具负面断言 / 一次性瞬时错),防伪进化与坍缩。
+
+### SE-6 — 进化 worker(Layer B 引擎，Mini-ADR SE-A9)
+新文件 `control_plane/skill_evolution_worker.py`,克隆 `CurationWorker` 骨架(`start`/`stop`/`_loop`/`_bypass_rls`/`_tenant_scope`),`run_once` 编排:
+1. 扫 `curation_candidate`(status=pending,signal∈{positive_feedback, failed_outcome})。
+2. 蒸馏草案(SE-5)。
+3. **co-evolve 有界轮**(SE-A9,CoEvoSkills 精神):重放验证(SE-4)→ 若 fail 且归因为内容错(SE-5)→ 让 LLM 据 grounding 反馈修订草案 → 再验证;最多 `R_max` 轮(默认可配)。验证器(judge)与生成器(蒸馏 LLM)分离,避免自评刷分。
+4. 落 DRAFT skill_version(`evolution_origin='distilled'` + 溯源列)+ 写 `skill_eval_result`。
+5. 交治理门(SE-7)。
+wire 进 `app.py` lifespan(同 CurationWorker/MemoryConsolidator;单副本;aux LLM 缺凭证时降级为 no-op 不启动,沿用 memory consolidator 的 fallback 模式)。
+
+### SE-7 — 全自动治理护栏(Mini-ADR SE-A10/A11/A12)
+`control_plane/skill_evolution_policy.py`:
+- **auto-promote 策略(SE-A10)**:`verdict=pass` 且 `not high_risk` 且目标 visibility 在边界内 → 自动 set_status active(agent_private 直接 active;agent_private→tenant 需达标的同时仍走 request/approve,除非配置允许 tenant 内自动)。`high_risk` → 永远人审(U-24)。跨租户/平台 → 永远人审。`inconclusive`/`fail` → 停 DRAFT。
+- **回归回滚(SE-A11)**:promote 后监控该 skill 关联 run 的 outcome/feedback(复用 curation 信号);滚动窗口内成功率显著下降 → 自动 archive + `SKILL_EVOLUTION_ROLLED_BACK` 审计(对标报告 § 7 防坍缩)。
+- **速率 / 熔断(SE-A12)**:per-agent / per-tenant 每小时自著 + 自动 promote 上限;自动通道异常率超阈值 → 熔断(`SKILL_EVOLUTION_CIRCUIT_OPEN`),降级为全人审直到人工复位。
+- 内容安全复用:U-22 threat scan + content_hash drift + 沙箱。全程 AuditAction + Prometheus 指标(`helix_skill_evolution_*`)。
+
+### SE-8 — admin API / UI(Mini-ADR SE-A13)
+- API(control-plane):列 agent 自著 / 蒸馏 skill、查 `skill_eval_result` 证据、查 lineage(forked_from / distilled_from)、手动 approve/reject promote、手动 archive、**紧急停**(关闭某租户 / 全局自动通道 = 手动开熔断)。
+- UI(Stream H 设计基线):review 队列 + eval 证据可视化(baseline vs skill delta)+ lineage 图。遵 [admin UI 设计基线](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/project_admin_ui_design_baseline.md)。SDK 契约对账见 [memory:envelope-vs-raw](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_envelope_vs_raw_contract_check.md)。
+
+### SE-9 — self-evolution 基准 + SLO(Mini-ADR SE-A14)
+- `tools/eval/datasets/self_evolution/`:构造"agent 反复踩同一坑 / 重复打法"的轨迹集 → 跑 worker → 断言:蒸馏出 skill 且 `delta>0` 且同类新任务成功率↑。证明闭环真有效(非 benchmark gaming:held-out 分离 + 确定性 mock + 真 integration 两套)。
+- 性能 SLO:蒸馏延迟 / 重放延迟预算 + worker load-soak;进合并门(对标 Stream J.13 baseline 制品模式)。
+
+---
+
+## 6. 治理哲学:全自动 ≠ 无界自改
+
+> [memory:no-design-choice-disguise](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_no_design_choice_disguise.md):不允许把弱护栏说成"够用"。
+
+"尽量全自动"的安全模型 = **用强验证门替代人审,而不是取消把关**。四道永不松动的硬护栏:
+1. **高危永远人审**:`is_high_risk_skill_version`(exec_python/exec_shell/http 或 scripts/* 路径)→ active 必须 admin(复用 U-24)。
+2. **跨边界永远人审**:agent_private→tenant 需达标(可配是否自动);tenant→平台 / 跨租户**永不自动**。
+3. **必须有证据**:任何自动 active 必须有 `skill_eval_result(verdict=pass)`(SE-A0)。
+4. **可回滚 + 可熔断**:退化自动 archive;异常自动熔断降级全人审。
+
+防伪进化(报告 § 7):归因丢弃环境/执行型失败(EmbodiSkill+hermes 清单);验证器与生成器分离(CoEvoSkills);held-out 与蒸馏来源分离(SPARK);定期掺真实/golden 信号防自噬。
+
+---
+
+## 7. 实现顺序与依赖
+
+```
+SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(Layer A 自著,可独立先上,= J.7b-1)
+                                               └─► SE-4(重放验证,咽喉) ─► SE-5(蒸馏+归因) ─► SE-6(Layer B worker)
+                                                                                              └─► SE-7(护栏) ─► SE-8(API/UI) ─► SE-9(基准/SLO)
+```
+- SE-3 可在 SE-4 之前交付(它本身就是 J.7b-1,对标三仓的"能自著"),但**默认产出停 DRAFT**,直到 SE-4/SE-7 就绪才允许自动 active。
+- SE-4 是所有自动化的前置(没有验证门,任何自动 active 都不允许)。
+
+---
+
+## 8. Verification(端到端怎么证明)
+
+- **单测**(`-m "not integration"`,CI 门):DTO / store(visibility 隔离、RLS)/ 4 工具 / replay 打分方向 / 蒸馏 / 归因(环境失败被判"不学")/ 策略(高危拦截、熔断、回滚触发)。
+- **集成**(真 PG):迁移 0058 + RLS + worker `run_once` 全链 + 真 Haiku judge 重放。
+- **端到端**:踩坑轨迹 → 蒸馏 → 重放 delta>0 → 自动 active → 同类新任务成功率↑(SE-9 基准)。
+- **安全**:高危自动通道被拦 / 跨租户被拦 / 注入回归触发回滚 / 熔断生效 / agent_private 不泄漏到他 agent。
+
+---
+
+## 9. CI / 约束(复用 helix 门禁)
+
+- 迁移 0058 revision id ≤ 32 字符([memory:alembic_revision_id_32_chars](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_alembic_revision_id_32_chars.md));只在 integration 验证。
+- `audit.py` 双 Literal(protocol+control-plane);mypy 不覆盖 control-plane/src([memory:ci_lint_type_test_scopes](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/reference_ci_lint_type_test_scopes.md));pytest `-m "not integration"`。
+- CodeQL:审计 / 日志脱敏 —— 别 log 请求派生值([memory:codeql_log_injection_request_taint](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_codeql_log_injection_request_taint.md))、别 log secret 命名名字、assert 无副作用、Protocol 体用 docstring、不留未引用 module-level 名。
+- 协议改签名 sweep 含 tools/eval doubles([memory:protocol_sweep_includes_tools_eval](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/reference_protocol_sweep_includes_tools_eval.md))。
+- skill 表 RLS:**ENABLE-only 不能加 FORCE**([memory:skill_curator_owner_rls_exemption](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/reference_skill_curator_owner_rls_exemption.md)) —— evolution worker 跨租户 sweep 依赖 owner 豁免,加 FORCE 会静默停扫。
+- 每 PR:push 前 `pre-commit run --all-files`([memory:uv_lock_and_precommit_ruff](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_uv_lock_and_precommit_ruff.md) / [ruff_strict_lint_traps](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_ruff_strict_lint_traps.md))+ 同步 ITERATION-PLAN(checkbox+PR#,[memory:iteration_plan_sync_after_ship](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_iteration_plan_sync_after_ship.md))+ 零技术债收尾([memory:feedback_zero_tech_debt](../../.claude/projects/-Users-mac-src-github-jone-qian-helix-agent/memory/feedback_zero_tech_debt.md))。
+- 不碰 `infra/.env.example`(用户本地工作树改动)。
+
+---
+
+## 10. Mini-ADR 索引
+
+| ID | 决策 | 章节 |
+|---|---|---|
+| SE-A0 | 验证门单一收口:自动 active 必须有 pass 证据 | § 2 |
+| SE-A1 | 数据模型纯增量 + NULL-tenant RLS | § 4 |
+| SE-A2 | `skill_eval_result` 作 grounding 可溯账 | § 4.3 |
+| SE-A3 | SkillStore 演化 API + visibility 过滤 + §15.7 权限矩阵 | SE-2 |
+| SE-A4 | 4 个自著工具(拆分语义)+ provenance + 默认 DRAFT | SE-3 |
+| SE-A5 | grounding 判定:delta≥θ ∧ n≥N ∧ 无新失败 | SE-4 |
+| SE-A6 | 验证确定性 / 成本:CI scripted + integration 真 judge;高危走沙箱 | SE-4 |
+| SE-A7 | 蒸馏只取后验证据(SPARK) | SE-5 |
+| SE-A8 | 失败归因(内容错/执行错)+ hermes 不捕获清单(防伪进化) | SE-5 |
+| SE-A9 | co-evolve 有界轮 + 生成器/验证器分离(CoEvoSkills) | SE-6 |
+| SE-A10 | auto-promote 策略 + 边界 | SE-7 |
+| SE-A11 | 回归回滚 | SE-7 |
+| SE-A12 | 速率限制 + 熔断 | SE-7 |
+| SE-A13 | admin review / lineage / 证据 / 紧急停 | SE-8 |
+| SE-A14 | self-evolution 基准 + SLO 合并门 | SE-9 |
+
+---
+
+## 附:与三篇论文 / 三仓的对应(可追溯性)
+
+| 来源 | 思想 | 本 Stream 落点 |
+|---|---|---|
+| SPARK / PDI(2605.09192)| 后验、从环境证据蒸馏;held-out grounding | SE-5 蒸馏 + SE-4 重放(held-out 分离)+ `skill_eval_result.delta` |
+| CoEvoSkills(2604.01687)| 生成器↔验证器共进化(无 ground truth)| SE-6 co-evolve 有界轮 + 生成/验证分离 |
+| EmbodiSkill(2605.10332)| 区分技能内容错 vs 执行失误 | SE-5 归因 |
+| hermes background_review | 后台隔离复查 + 不捕获环境失败清单 | SE-6 worker + SE-5 归因清单 |
+| deer-flow skill_manage | 自著 CRUD + 写时安全扫描 + 历史归属 | SE-3 工具 + U-22 scan + provenance 列 |
+| openclaw(反例)| 有 skill 基建但无生成闭环 | 警示:基建 ≠ 自进化 → 本 Stream 重心在闭环与验证 |
