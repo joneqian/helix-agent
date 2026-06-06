@@ -505,6 +505,13 @@ class Settings(BaseSettings):
     #: ``None`` (default) makes the OAuth initiate endpoint return 503.
     mcp_oauth_redirect_uri: str | None = None
 
+    #: Path to the MCP connector catalog env-seed template (Stream MCP-OAUTH
+    #: OA-5), e.g. ``configs/mcp-catalog-seed.json``. On startup each entry whose
+    #: ``${VAR}`` placeholders all resolve from the environment is created (idem-
+    #: potently); entries with an unset placeholder are skipped. ``None``
+    #: (default) seeds nothing.
+    mcp_catalog_seed_file: str | None = None
+
     #: When the runtime has a Redis URL (``quota_redis_url``) and
     #: ``single_instance`` is ``False``, the gateway / tenant limiter
     #: use Redis (multi-replica safe). On the default single-instance
