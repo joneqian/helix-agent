@@ -48,6 +48,7 @@ from orchestrator.tools.locks import NullWorkspaceLock, WorkspaceLock
 from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
 from orchestrator.tools.registry import ToolRegistry
 from orchestrator.tools.sandbox import ExecPythonTool, SupervisorClient
+from orchestrator.tools.skill_authoring import SKILL_AUTHORING_BUILTINS
 from orchestrator.tools.subagent import MAX_SUBAGENT_DEPTH, ChildAgentBuilder, SubAgentTool
 from orchestrator.tools.vision import AskImageTool
 from orchestrator.tools.web_search import DEFAULT_MAX_RESULTS, TavilyClient, WebSearchTool
@@ -72,6 +73,12 @@ KNOWN_BUILTINS = frozenset(
         "save_artifact",
         "list_artifacts",
         "ask_for_approval",
+        # Stream SE (SE-3b) — in-session skill authoring (Layer A). Registered
+        # in ``agent_factory.build_agent`` (it alone has agent_name + the
+        # SkillStore); ``_register_builtin`` treats them as no-ops.
+        "author_skill",
+        "refine_skill",
+        "fork_skill",
     }
 )
 
@@ -322,6 +329,10 @@ def _register_builtin(
         # Stream J.8 — zero-dependency builtin; ``tools_node`` intercepts
         # the call before dispatch (see graph_builder/_approval.py).
         registry.register(AskForApprovalTool())
+    elif entry.name in SKILL_AUTHORING_BUILTINS:
+        # Stream SE (SE-3b) — registered in ``agent_factory.build_agent``
+        # (it has agent_name + the SkillStore); no-op here.
+        pass
 
 
 def _register_web_search(registry: ToolRegistry, entry: BuiltinToolSpec, env: ToolEnv) -> None:

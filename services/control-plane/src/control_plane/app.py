@@ -905,6 +905,8 @@ def create_app(
                     skill_store=resolved_skill_store,
                     skill_activity_recorder=skill_activity_recorder,
                     tenant_config_service=resolved_tenant_config_service,
+                    # Stream SE (SE-3b) — audit for in-session skill authoring.
+                    audit_logger=resolved_audit,
                 )
                 # Stream MCP-OAUTH (OA-3b) — let get_agent decide per-user builds.
                 resolved_agent_runtime.user_oauth_pool_provider = _user_mcp_oauth_pool_provider

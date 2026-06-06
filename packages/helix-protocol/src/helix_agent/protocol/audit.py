@@ -135,6 +135,14 @@ class AuditAction(StrEnum):
     SKILL_VIEW_BLOCKED_ARCHIVED = "skill:view_blocked_archived"
     SKILL_PINNED = "skill:pinned"
     SKILL_UNPINNED = "skill:unpinned"
+    # skill — Stream SE (SE-3b) in-session agent self-authoring (Layer A).
+    # Emitted by the author_skill / refine_skill / fork_skill builtins when
+    # an agent creates / refines / forks a skill in a run. All produce
+    # DRAFT + agent_private rows; activation still goes through U-24 + the
+    # SE-7 governance gate (these are never auto-active).
+    SKILL_AUTHORED_BY_AGENT = "skill:authored_by_agent"
+    SKILL_REFINED_BY_AGENT = "skill:refined_by_agent"
+    SKILL_FORKED_BY_AGENT = "skill:forked_by_agent"
     # artifact (Stream J.9-step3 — Mini-ADR J-25). ``ARTIFACT_SAVE`` is
     # reserved for the orchestrator-side save-artifact tool emit; that
     # wiring lands when ToolEnv gains an :class:`AuditLogger` handle.
