@@ -192,6 +192,88 @@ async def test_invalidate_rebuilds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refresher_renews_near_expiry_and_attaches() -> None:
+    """OA-6: a wired refresher renews a near-expiry token so the connector
+    still attaches (instead of being skipped as it would be without one)."""
+    import httpx
+
+    from control_plane.mcp_oauth_refresh import McpOAuthRefresher
+    from helix_agent.testing import InMemorySecretStore
+
+    cat_store = InMemoryMcpConnectorCatalogStore()
+    oauth_store = InMemoryMcpOAuthConnectionStore()
+    sec = InMemorySecretStore()
+    tid, uid = uuid4(), "user-1"
+    cat_id = await _seed_catalog(cat_store)
+    rec = await oauth_store.create(
+        tenant_id=tid,
+        user_id=uid,
+        catalog_id=cat_id,
+        name="linear",
+        resolved_url="https://mcp.linear.app/sse",
+        oauth_state="st",
+        pkce_verifier="pv",
+    )
+    access_ref = f"secret://helix-agent/tenant/{tid}/mcp-oauth/{rec.id}/access"
+    refresh_ref = f"secret://helix-agent/tenant/{tid}/mcp-oauth/{rec.id}/refresh"
+    await sec.put(access_ref.removeprefix("secret://"), "AT1")
+    await sec.put(refresh_ref.removeprefix("secret://"), "RT1")
+    await oauth_store.update(
+        connection_id=rec.id,
+        tenant_id=tid,
+        user_id=uid,
+        patch=McpOAuthConnectionPatch(
+            status="connected",
+            access_token_ref=access_ref,
+            refresh_token_ref=refresh_ref,
+            token_expires_at=_NOW + timedelta(seconds=10),
+            clear_flow_state=True,
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/.well-known/oauth-protected-resource":
+            return httpx.Response(
+                200,
+                json={
+                    "authorization_servers": ["https://auth.linear.app"],
+                    "resource": "https://mcp.linear.app/sse",
+                },
+            )
+        if path == "/.well-known/oauth-authorization-server":
+            return httpx.Response(
+                200,
+                json={
+                    "authorization_endpoint": "https://auth.linear.app/authorize",
+                    "token_endpoint": "https://auth.linear.app/token",
+                },
+            )
+        if path == "/token":
+            return httpx.Response(200, json={"access_token": "AT2", "expires_in": 3600})
+        return httpx.Response(404)
+
+    refresher = McpOAuthRefresher(
+        oauth_store=oauth_store,
+        catalog_store=cat_store,
+        secret_store=sec,
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        clock=lambda: _NOW,
+    )
+    calls: list[str] = []
+    svc = UserMcpOAuthPoolService(
+        oauth_store=oauth_store,
+        catalog_store=cat_store,
+        client_factory=_factory_spy(calls),
+        refresher=refresher,
+        clock=lambda: _NOW,
+    )
+    pool = await svc.get_or_build(tid, uid)
+    assert pool.names() == ["linear"]  # refreshed + attached, not skipped
+    assert await sec.get(access_ref.removeprefix("secret://")) == "AT2"
+
+
+@pytest.mark.asyncio
 async def test_users_isolated() -> None:
     cat_store = InMemoryMcpConnectorCatalogStore()
     oauth_store = InMemoryMcpOAuthConnectionStore()

@@ -93,6 +93,8 @@ from control_plane.keycloak import (
 )
 from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
 from control_plane.manifest import ManifestLoader
+from control_plane.mcp_oauth import default_http_client
+from control_plane.mcp_oauth_refresh import McpOAuthRefresher
 from control_plane.memory import MemoryDLQWorker
 from control_plane.memory_consolidator import (
     ConsolidatorAuxModel,
@@ -733,11 +735,19 @@ def create_app(
                 async def _tenant_mcp_pool_provider(tenant_id):  # type: ignore[no-untyped-def]
                     return await tenant_mcp_pool_service.get_or_build(tenant_id)
 
-                # Stream MCP-OAUTH (OA-3b) — per-(tenant,user) OAuth MCP pool.
+                # Stream MCP-OAUTH (OA-3b) — per-(tenant,user) OAuth MCP pool;
+                # OA-6 refresher lazily renews near-expiry access tokens at build.
+                mcp_oauth_refresher = McpOAuthRefresher(
+                    oauth_store=resolved_mcp_oauth_connection_store,
+                    catalog_store=resolved_mcp_connector_catalog_store,
+                    secret_store=resolved_secret_store,
+                    http_factory=default_http_client,
+                )
                 user_mcp_oauth_pool_service = UserMcpOAuthPoolService(
                     oauth_store=resolved_mcp_oauth_connection_store,
                     catalog_store=resolved_mcp_connector_catalog_store,
                     client_factory=_tenant_mcp_client_factory,
+                    refresher=mcp_oauth_refresher,
                 )
                 stack.push_async_callback(user_mcp_oauth_pool_service.close_all)
                 _app.state.user_mcp_oauth_pool_service = user_mcp_oauth_pool_service

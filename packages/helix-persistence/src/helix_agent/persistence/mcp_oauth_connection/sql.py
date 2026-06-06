@@ -174,6 +174,8 @@ class SqlMcpOAuthConnectionStore(McpOAuthConnectionStore):
             if patch.clear_flow_state:
                 existing.oauth_state = None
                 existing.pkce_verifier = None
+            if patch.clear_last_error:
+                existing.last_error = None
             existing.updated_at = _utc_now()
             # Validate the prospective record before commit (parity with the
             # in-memory store): a violated invariant rolls back, no corrupt row.

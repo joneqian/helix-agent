@@ -9,8 +9,10 @@ Each OAuth connection becomes a **bearer**-style ``MCPServerConfig`` whose
 access token from the secret store and injects ``Authorization: Bearer``. No
 oauth2 client branch is needed.
 
-Tokens that have expired are skipped (proactive refresh lands in OA-6); an
-expired connector simply isn't attached, so the rest of the agent still builds.
+A :class:`McpOAuthRefresher` (OA-6) is consulted per connection: it refreshes a
+near-expiry access token in place, or reports the connection unusable (revoked /
+expired), in which case it simply isn't attached and the rest of the agent still
+builds. When no refresher is wired (some tests), an expired token is skipped.
 
 Concurrency mirrors :class:`TenantMcpPoolService` (Stream V-D): a per-key lock
 deduplicates builds, and a generation counter + rebuild-on-conflict closes the
@@ -25,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
+from control_plane.mcp_oauth_refresh import McpOAuthRefresher
 from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.persistence import McpConnectorCatalogStore, McpOAuthConnectionStore
 from helix_agent.protocol import McpOAuthConnectionRecord
@@ -58,11 +61,13 @@ class UserMcpOAuthPoolService:
         oauth_store: McpOAuthConnectionStore,
         catalog_store: McpConnectorCatalogStore,
         client_factory: McpClientFactory,
+        refresher: McpOAuthRefresher | None = None,
         clock: Clock = _utc_now,
     ) -> None:
         self._oauth_store = oauth_store
         self._catalog_store = catalog_store
         self._client_factory = client_factory
+        self._refresher = refresher
         self._clock = clock
         self._pools: dict[tuple[UUID, str], MCPServerPool] = {}
         self._locks_guard = asyncio.Lock()
@@ -77,11 +82,19 @@ class UserMcpOAuthPoolService:
                 self._key_locks[key] = lock
             return lock
 
+    async def _resolve_usable(
+        self, record: McpOAuthConnectionRecord
+    ) -> McpOAuthConnectionRecord | None:
+        """Return a usable record (refreshing via OA-6 when wired), else ``None``."""
+        if self._refresher is not None:
+            return await self._refresher.ensure_fresh(record)
+        return record if self._usable(record) else None
+
     def _usable(self, record: McpOAuthConnectionRecord) -> bool:
         if record.status != "connected" or not record.access_token_ref:
             return False
-        # Expired access token: skip (OA-6 adds proactive refresh). Without a
-        # refresh path here, attaching it would just fail at call time.
+        # No refresher wired (some tests): skip an expired token — attaching it
+        # would just fail at call time.
         return not (
             record.token_expires_at is not None and record.token_expires_at <= self._clock()
         )
@@ -119,9 +132,10 @@ class UserMcpOAuthPoolService:
                     tenant_id=tenant_id, user_id=user_id
                 )
                 for record in records:
-                    if not self._usable(record):
+                    usable = await self._resolve_usable(record)
+                    if usable is None:
                         continue
-                    config = await self._record_to_config(record)
+                    config = await self._record_to_config(usable)
                     if config is None:
                         continue
                     try:
