@@ -46,15 +46,18 @@ from langgraph.graph.state import CompiledStateGraph
 from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.persistence import MemoryStore
 from helix_agent.persistence.memory import MemoryWritebackDLQ
+from helix_agent.persistence.skill.base import SkillStore
 from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.protocol import (
     AgentSpec,
+    BuiltinToolSpec,
     ModelSpec,
     Skill,
     SkillVersion,
     parse_agent_ref,
     parse_skill_ref,
 )
+from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.middleware import MiddlewareChain
 from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from orchestrator.context import ContextCompressor
@@ -97,6 +100,10 @@ from orchestrator.middleware_assembly import MiddlewareEnv, build_middleware_cha
 from orchestrator.multimodal import ImageResolver
 from orchestrator.runner import GraphRunner
 from orchestrator.tools import ToolEnv, build_tool_registry
+from orchestrator.tools.skill_authoring import (
+    SKILL_AUTHORING_BUILTINS,
+    build_skill_authoring_tools,
+)
 from orchestrator.tools.update_plan import UpdatePlanTool
 
 logger = logging.getLogger("helix.orchestrator.agent_factory")
@@ -287,6 +294,13 @@ async def build_agent(
     # (tests + eval CLI commonly leave it unset; activity simply isn't
     # tracked, the Curator works off whatever last_used_at the DB has).
     skill_activity_recorder: SkillActivityRecorder | None = None,
+    # Stream SE (SE-3b) — the raw SkillStore + audit logger backing the
+    # in-session authoring builtins (author_skill / refine_skill / fork_skill).
+    # ``skill_resolver`` (a read-only resolve callable) is not enough — the
+    # authoring tools WRITE. ``None`` → a manifest that declares an authoring
+    # builtin raises :class:`AgentFactoryError` (dep not wired).
+    skill_store: SkillStore | None = None,
+    audit_logger: AuditLogger | None = None,
 ) -> BuiltAgent:
     """Assemble a :class:`BuiltAgent` from a validated :class:`AgentSpec`.
 
@@ -454,6 +468,31 @@ async def build_agent(
                 activity_recorder=skill_activity_recorder,
             )
         )
+
+    # Stream SE (SE-3b) — in-session skill authoring builtins (Layer A). A
+    # manifest opts in by declaring author_skill / refine_skill / fork_skill
+    # in ``tools:``. They WRITE, so they need the raw SkillStore + the owning
+    # agent_name (= spec.metadata.name, stable across versions); declaring one
+    # without ``skill_store`` wired is an un-buildable manifest.
+    declared_authoring = [
+        e.name
+        for e in spec.spec.tools
+        if isinstance(e, BuiltinToolSpec) and e.name in SKILL_AUTHORING_BUILTINS
+    ]
+    if declared_authoring:
+        if skill_store is None:
+            raise AgentFactoryError(
+                "manifest declares a skill-authoring builtin "
+                f"({', '.join(sorted(declared_authoring))}) but no SkillStore is "
+                "configured (build_agent skill_store)"
+            )
+        for tool in build_skill_authoring_tools(
+            declared=declared_authoring,
+            store=skill_store,
+            agent_name=spec.metadata.name,
+            audit_logger=audit_logger,
+        ):
+            registry.register(tool)
 
     final_system_prompt = _assemble_system_prompt(
         base=spec.spec.system_prompt.template,

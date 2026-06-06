@@ -37,6 +37,7 @@ from helix_agent.persistence.skill import SkillStore
 from helix_agent.persistence.token_usage_store import TokenUsageStore
 from helix_agent.protocol import AgentSpec, ModelSpec, Provider, TenantPlan, Tool, tier_satisfies
 from helix_agent.runtime.audit import DefaultSecretRedactor
+from helix_agent.runtime.audit.logger import AuditLogger
 from helix_agent.runtime.llm import InMemoryRedisCache, LLMResponseCache
 from helix_agent.runtime.middleware import RecordingLangfuseClient
 from helix_agent.runtime.runs import RunEventStore, RunManager, RunStore
@@ -315,6 +316,10 @@ def make_agent_builder(
     skill_store: SkillStore | None = None,
     skill_activity_recorder: SkillActivityRecorder | None = None,
     tenant_config_service: TenantConfigService | None = None,
+    # Stream SE (SE-3b) — backs the in-session skill-authoring builtins'
+    # audit emit (SKILL_AUTHORED_BY_AGENT etc.). ``None`` → tools still work,
+    # audit is simply not written.
+    audit_logger: AuditLogger | None = None,
 ) -> AgentBuilder:
     """Production :data:`AgentBuilder` bound to a SecretStore + checkpointer.
 
@@ -419,6 +424,9 @@ def make_agent_builder(
             provider_key_resolver=provider_key_resolver,
             skill_resolver=skill_resolver,
             skill_activity_recorder=skill_activity_recorder,
+            # Stream SE (SE-3b) — raw store + audit for in-session authoring.
+            skill_store=skill_store,
+            audit_logger=audit_logger,
         )
 
     return _build
