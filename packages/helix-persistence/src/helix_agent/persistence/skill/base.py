@@ -86,7 +86,8 @@ class SkillStore(abc.ABC):
         # Stream SE (Mini-ADR SE-A1 / SE-A3). Defaults preserve the M0
         # human-authored shape: tenant-visible, no agent provenance.
         visibility: SkillVisibility = "tenant",
-        created_by_agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         forked_from: UUID | None = None,
     ) -> Skill:
         """Insert a new skill row (status=draft, latest_version=0).
@@ -96,9 +97,10 @@ class SkillStore(abc.ABC):
         meaningful for platform skills (a tenant's own skills are always
         usable), but accepted on the tenant path for symmetry (Mini-ADR X-2).
 
-        ``visibility`` / ``created_by_agent_id`` / ``forked_from`` (Stream
-        SE) default to the human-authored shape; agent self-authored skills
-        pass ``visibility='agent_private'`` + the authoring agent id.
+        ``visibility`` / ``created_by_user_id`` / ``created_by_agent_name`` /
+        ``forked_from`` (Stream SE) default to the human-authored shape;
+        agent self-authored skills pass ``visibility='agent_private'`` + the
+        owning per-user agent (``created_by_user_id`` + ``created_by_agent_name``).
         """
 
     @abc.abstractmethod
@@ -246,7 +248,8 @@ class SkillStore(abc.ABC):
         tenant_id: UUID,
         source_skill_id: UUID,
         new_name: str,
-        by_agent_id: UUID,
+        by_user_id: UUID,
+        by_agent_name: str,
         new_skill_id: UUID,
         new_version_id: UUID,
     ) -> Skill:
@@ -255,8 +258,9 @@ class SkillStore(abc.ABC):
         Concrete composition over the abstract primitives (Mini-ADR SE-A3,
         §15.7 "fork is the reuse path"): copy the source skill's *latest*
         version content into a brand-new ``agent_private`` skill (v1) owned
-        by ``by_agent_id`` with ``forked_from = source_skill_id``. The new
-        skill starts in ``DRAFT`` like any freshly authored skill.
+        by the per-user agent (``by_user_id`` + ``by_agent_name``) with
+        ``forked_from = source_skill_id``. The new skill starts in ``DRAFT``
+        like any freshly authored skill.
 
         Raises :class:`SkillNotFoundError` if the source skill is unknown
         for this tenant, :class:`SkillVersionNotFoundError` if it has no
@@ -281,7 +285,8 @@ class SkillStore(abc.ABC):
             description=src_version.description,
             category=src_version.category,
             visibility="agent_private",
-            created_by_agent_id=by_agent_id,
+            created_by_user_id=by_user_id,
+            created_by_agent_name=by_agent_name,
             forked_from=source_skill_id,
         )
         await self.add_version(

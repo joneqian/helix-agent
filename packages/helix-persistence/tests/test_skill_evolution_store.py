@@ -43,20 +43,22 @@ async def _seed_skill(
 @pytest.mark.asyncio
 async def test_create_skill_threads_ownership() -> None:
     store = InMemorySkillStore()
-    tid, agent_id, src = uuid4(), uuid4(), uuid4()
+    tid, user_id, src = uuid4(), uuid4(), uuid4()
     sid = uuid4()
     await store.create_skill(
         skill_id=sid,
         tenant_id=tid,
         name="agent-skill",
         visibility="agent_private",
-        created_by_agent_id=agent_id,
+        created_by_user_id=user_id,
+        created_by_agent_name="researcher",
         forked_from=src,
     )
     got = await store.get_skill(skill_id=sid, tenant_id=tid)
     assert got is not None
     assert got.visibility == "agent_private"
-    assert got.created_by_agent_id == agent_id
+    assert got.created_by_user_id == user_id
+    assert got.created_by_agent_name == "researcher"
     assert got.forked_from == src
 
 
@@ -68,7 +70,8 @@ async def test_create_skill_defaults_tenant_visibility() -> None:
     await store.create_skill(skill_id=sid, tenant_id=tid, name="human-skill")
     got = await store.get_skill(skill_id=sid, tenant_id=tid)
     assert got is not None and got.visibility == "tenant"
-    assert got.created_by_agent_id is None and got.forked_from is None
+    assert got.created_by_user_id is None and got.created_by_agent_name is None
+    assert got.forked_from is None
 
 
 # ── add_version: evolution provenance ─────────────────────────────────────
@@ -107,20 +110,22 @@ async def test_add_version_threads_evolution_fields() -> None:
 @pytest.mark.asyncio
 async def test_fork_skill_copies_latest_and_sets_lineage() -> None:
     store = InMemorySkillStore()
-    tid, agent_id = uuid4(), uuid4()
+    tid, user_id = uuid4(), uuid4()
     src = await _seed_skill(store, tid, name="researcher")
     new_sid, new_vid = uuid4(), uuid4()
     forked = await store.fork_skill(
         tenant_id=tid,
         source_skill_id=src,
         new_name="my-researcher",
-        by_agent_id=agent_id,
+        by_user_id=user_id,
+        by_agent_name="my-agent",
         new_skill_id=new_sid,
         new_version_id=new_vid,
     )
     assert forked.name == "my-researcher"
     assert forked.visibility == "agent_private"
-    assert forked.created_by_agent_id == agent_id
+    assert forked.created_by_user_id == user_id
+    assert forked.created_by_agent_name == "my-agent"
     assert forked.forked_from == src
     assert forked.latest_version == 1
     # content copied from source latest version
@@ -140,7 +145,8 @@ async def test_fork_skill_unknown_source_raises() -> None:
             tenant_id=uuid4(),
             source_skill_id=uuid4(),
             new_name="x",
-            by_agent_id=uuid4(),
+            by_user_id=uuid4(),
+            by_agent_name="a",
             new_skill_id=uuid4(),
             new_version_id=uuid4(),
         )
@@ -157,7 +163,8 @@ async def test_fork_skill_source_without_version_raises() -> None:
             tenant_id=tid,
             source_skill_id=src,
             new_name="copy",
-            by_agent_id=uuid4(),
+            by_user_id=uuid4(),
+            by_agent_name="a",
             new_skill_id=uuid4(),
             new_version_id=uuid4(),
         )

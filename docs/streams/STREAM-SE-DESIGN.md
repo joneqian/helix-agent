@@ -105,7 +105,7 @@ helix 当前的 skill 是"**人写、版本化、静态启用**"(Stream J.7a + X
 
 ### 4.1 `skill` 表加列(归属 / 血缘,落实 J.7b-1 §15.7)
 - `visibility TEXT NOT NULL DEFAULT 'tenant'` — CHECK in (`agent_private`,`tenant`)。agent 自著默认 `agent_private`(仅创建它的 agent 实例可见),促 tenant 需治理门。
-- `created_by_agent_id UUID NULL` — 自著来源 agent 实例(provenance,对标 hermes `skill_provenance`)。
+- `created_by_user_id UUID NULL` + `created_by_agent_name TEXT NULL` — 自著来源 owner = **per-user 持久 agent** =(tenant, user_id, agent_name),跨 manifest 版本稳定(SE-3a 决策,迁移 0066 改 SE-1 的 created_by_agent_id;provenance 对标 hermes `skill_provenance`)。
 - `forked_from UUID NULL` — fork 血缘源 skill_id(对标 GitHub fork)。
 
 ### 4.2 `skill_version` 表加列(进化溯源)

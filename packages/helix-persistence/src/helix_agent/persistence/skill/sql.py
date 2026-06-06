@@ -47,9 +47,10 @@ def _skill_row_to_dto(row: SkillRow) -> Skill:
         last_used_at=row.last_used_at,
         state_changed_at=row.state_changed_at,
         # Stream SE (Mini-ADR SE-A1) — ownership / lineage. Existing rows
-        # carry migration 0065 defaults (visibility='tenant', NULL ids).
+        # carry migration 0065/0066 defaults (visibility='tenant', NULL owner).
         visibility=row.visibility,  # type: ignore[arg-type]
-        created_by_agent_id=row.created_by_agent_id,
+        created_by_user_id=row.created_by_user_id,
+        created_by_agent_name=row.created_by_agent_name,
         forked_from=row.forked_from,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -122,7 +123,8 @@ class SqlSkillStore(SkillStore):
         category: str | None = None,
         required_tier: TenantPlan = TenantPlan.FREE,
         visibility: SkillVisibility = "tenant",
-        created_by_agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         forked_from: UUID | None = None,
     ) -> Skill:
         return await self._create_skill_row(
@@ -133,7 +135,8 @@ class SqlSkillStore(SkillStore):
             category=category,
             required_tier=required_tier,
             visibility=visibility,
-            created_by_agent_id=created_by_agent_id,
+            created_by_user_id=created_by_user_id,
+            created_by_agent_name=created_by_agent_name,
             forked_from=forked_from,
         )
 
@@ -147,7 +150,8 @@ class SqlSkillStore(SkillStore):
         category: str | None,
         required_tier: TenantPlan,
         visibility: SkillVisibility = "tenant",
-        created_by_agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         forked_from: UUID | None = None,
     ) -> Skill:
         now = datetime.now(UTC)
@@ -162,7 +166,8 @@ class SqlSkillStore(SkillStore):
                 category=category,
                 required_tier=required_tier.value,
                 visibility=visibility,
-                created_by_agent_id=created_by_agent_id,
+                created_by_user_id=created_by_user_id,
+                created_by_agent_name=created_by_agent_name,
                 forked_from=forked_from,
                 created_at=now,
                 updated_at=now,
