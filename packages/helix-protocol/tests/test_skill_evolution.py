@@ -69,16 +69,23 @@ def test_skill_visibility_defaults_tenant() -> None:
     """Existing rows (no visibility) default to 'tenant' — additive, no behavior change."""
     s = _skill()
     assert s.visibility == "tenant"
-    assert s.created_by_agent_id is None
+    assert s.created_by_user_id is None
+    assert s.created_by_agent_name is None
     assert s.forked_from is None
 
 
 def test_skill_visibility_agent_private() -> None:
-    agent_id = uuid4()
+    user_id = uuid4()
     src = uuid4()
-    s = _skill(visibility="agent_private", created_by_agent_id=agent_id, forked_from=src)
+    s = _skill(
+        visibility="agent_private",
+        created_by_user_id=user_id,
+        created_by_agent_name="researcher",
+        forked_from=src,
+    )
     assert s.visibility == "agent_private"
-    assert s.created_by_agent_id == agent_id
+    assert s.created_by_user_id == user_id
+    assert s.created_by_agent_name == "researcher"
     assert s.forked_from == src
 
 

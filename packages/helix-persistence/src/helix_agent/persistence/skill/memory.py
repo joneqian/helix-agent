@@ -74,7 +74,8 @@ class InMemorySkillStore(SkillStore):
         category: str | None = None,
         required_tier: TenantPlan = TenantPlan.FREE,
         visibility: SkillVisibility = "tenant",
-        created_by_agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         forked_from: UUID | None = None,
     ) -> Skill:
         return await self._create_skill_row(
@@ -85,7 +86,8 @@ class InMemorySkillStore(SkillStore):
             category=category,
             required_tier=required_tier,
             visibility=visibility,
-            created_by_agent_id=created_by_agent_id,
+            created_by_user_id=created_by_user_id,
+            created_by_agent_name=created_by_agent_name,
             forked_from=forked_from,
         )
 
@@ -99,7 +101,8 @@ class InMemorySkillStore(SkillStore):
         category: str | None,
         required_tier: TenantPlan,
         visibility: SkillVisibility = "tenant",
-        created_by_agent_id: UUID | None = None,
+        created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         forked_from: UUID | None = None,
     ) -> Skill:
         for existing in self._skills.values():
@@ -116,7 +119,8 @@ class InMemorySkillStore(SkillStore):
             category=category,
             required_tier=required_tier,
             visibility=visibility,
-            created_by_agent_id=created_by_agent_id,
+            created_by_user_id=created_by_user_id,
+            created_by_agent_name=created_by_agent_name,
             forked_from=forked_from,
             # Sprint #4 — match the SQL ``server_default=text("now()")``
             # so the in-memory and Postgres backends emit the same

@@ -69,14 +69,16 @@ class SkillRow(Base):
     state_changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )
-    # Stream SE (Mini-ADR SE-A1) — migration 0065. ``visibility`` defaults
-    # to 'tenant' so M0 human-authored skills keep current sharing; agent
-    # self-authored skills go 'agent_private' until a governance gate
-    # promotes them. ``created_by_agent_id`` / ``forked_from`` are
-    # provenance / lineage pointers (no FK — deleting a source skill must
-    # not cascade-delete its forks/derivatives).
+    # Stream SE (Mini-ADR SE-A1) — migration 0065 + 0066. ``visibility``
+    # defaults to 'tenant' so M0 human-authored skills keep current sharing;
+    # agent self-authored skills go 'agent_private'. owner = per-user
+    # persistent agent = (tenant_id, created_by_user_id, created_by_agent_name)
+    # — stable across manifest versions (agent_name, not a version-specific
+    # spec id). ``forked_from`` is a lineage pointer (no FK — deleting a
+    # source skill must not cascade-delete its forks/derivatives).
     visibility: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'tenant'"))
-    created_by_agent_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_by_agent_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     forked_from: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

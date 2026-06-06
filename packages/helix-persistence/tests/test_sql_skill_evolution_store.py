@@ -2,8 +2,8 @@
 
 Pins on a real PG (migration 0065 applied) that:
 
-* the ownership/lineage columns (``visibility`` / ``created_by_agent_id`` /
-  ``forked_from``) and evolution-provenance columns
+* the ownership/lineage columns (``visibility`` / ``created_by_user_id`` /
+  ``created_by_agent_name`` / ``forked_from``) and evolution-provenance columns
   (``evolution_origin`` / ``distilled_from_*`` / ``evolution_round``)
   round-trip through the SQL store;
 * ``fork_skill`` copies the source's latest version into a new
@@ -114,7 +114,7 @@ async def test_evolution_columns_round_trip(
     skill_store: tuple[SqlSkillStore, AsyncEngine],
 ) -> None:
     store, engine = skill_store
-    tenant, agent_id, src, cand = uuid4(), uuid4(), uuid4(), uuid4()
+    tenant, user_id, src, cand = uuid4(), uuid4(), uuid4(), uuid4()
     try:
         current_tenant_id_var.set(tenant)
         sid = uuid4()
@@ -123,13 +123,15 @@ async def test_evolution_columns_round_trip(
             tenant_id=tenant,
             name=f"agent-{uuid4().hex[:8]}",
             visibility="agent_private",
-            created_by_agent_id=agent_id,
+            created_by_user_id=user_id,
+            created_by_agent_name="researcher",
             forked_from=src,
         )
         got = await store.get_skill(skill_id=sid, tenant_id=tenant)
         assert got is not None
         assert got.visibility == "agent_private"
-        assert got.created_by_agent_id == agent_id
+        assert got.created_by_user_id == user_id
+        assert got.created_by_agent_name == "researcher"
         assert got.forked_from == src
 
         v = await store.add_version(
@@ -156,7 +158,7 @@ async def test_fork_skill_real_pg(
     skill_store: tuple[SqlSkillStore, AsyncEngine],
 ) -> None:
     store, engine = skill_store
-    tenant, agent_id = uuid4(), uuid4()
+    tenant, user_id = uuid4(), uuid4()
     try:
         current_tenant_id_var.set(tenant)
         src = uuid4()
@@ -173,7 +175,8 @@ async def test_fork_skill_real_pg(
             tenant_id=tenant,
             source_skill_id=src,
             new_name=f"fork-{uuid4().hex[:8]}",
-            by_agent_id=agent_id,
+            by_user_id=user_id,
+            by_agent_name="my-agent",
             new_skill_id=new_sid,
             new_version_id=new_vid,
         )

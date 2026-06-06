@@ -243,10 +243,14 @@ class Skill(BaseModel):
     state_changed_at: datetime | None = None
     # ── Stream SE — 归属 / 血缘(Mini-ADR SE-A1,落实 J.7b-1 §15.7)。 ──
     # ``visibility`` 默认 ``tenant`` 保持 M0 现状(人写 skill 租户内共享);
-    # agent 自著走 ``agent_private`` 隔离。``created_by_agent_id`` 记自著来源
-    # agent 实例(provenance);``forked_from`` 记 fork 血缘源 skill_id。
+    # agent 自著走 ``agent_private`` 隔离。owner = **per-user 持久 agent** =
+    # (tenant_id, created_by_user_id, created_by_agent_name):某用户的某 agent
+    # 自著的 skill 只对"该用户的该 agent"可见,跨 manifest 版本稳定(用 agent_name
+    # 而非版本级 spec id)。human 创建时两者皆 NULL。``forked_from`` 记 fork 血缘
+    # 源 skill_id。
     visibility: SkillVisibility = "tenant"
-    created_by_agent_id: UUID | None = None
+    created_by_user_id: UUID | None = None
+    created_by_agent_name: str | None = None
     forked_from: UUID | None = None
     created_at: datetime
     updated_at: datetime
