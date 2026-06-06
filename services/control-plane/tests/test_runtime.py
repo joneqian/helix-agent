@@ -206,7 +206,9 @@ async def test_invalidate_tenant_drops_only_that_tenants_cached_agents() -> None
     """invalidate_tenant(a) drops all entries for tenant a, leaves tenant b cached."""
     builds: list[tuple[UUID | None, str | None]] = []
 
-    async def _builder(spec: AgentSpec, *, tenant_id: UUID | None = None) -> object:
+    async def _builder(
+        spec: AgentSpec, *, tenant_id: UUID | None = None, user_id: str | None = None
+    ) -> object:
         builds.append((tenant_id, spec.metadata.name if spec is not None else None))
         return object()  # stand-in BuiltAgent
 
@@ -235,7 +237,9 @@ async def test_invalidate_tenant_fans_out_to_registered_hooks() -> None:
     """Audit #1: invalidate_tenant fans out to registered hooks (e.g. the
     sub-agent builder cache, which caches built agents independently)."""
 
-    async def _builder(spec: AgentSpec, *, tenant_id: UUID | None = None) -> object:
+    async def _builder(
+        spec: AgentSpec, *, tenant_id: UUID | None = None, user_id: str | None = None
+    ) -> object:
         return object()
 
     runtime = AgentRuntime(
@@ -248,6 +252,73 @@ async def test_invalidate_tenant_fans_out_to_registered_hooks() -> None:
     t = uuid4()
     runtime.invalidate_tenant(t)
     assert seen == [t]
+
+
+# ---------------------------------------------------------------------------
+# Stream MCP-OAUTH (OA-3b) — per-user build keying via user_oauth_pool_provider
+# ---------------------------------------------------------------------------
+
+
+def _runtime_with_oauth(builds: list[tuple[str | None, ...]], users_with_oauth: set[str]):  # type: ignore[no-untyped-def]
+    from orchestrator.tools.mcp import MCPServerPool, MCPToolDef, RecordingMCPClient
+
+    async def _builder(
+        spec: AgentSpec, *, tenant_id: UUID | None = None, user_id: str | None = None
+    ) -> object:
+        builds.append((str(tenant_id), user_id))
+        return object()
+
+    async def _provider(tenant_id: UUID, user_id: str) -> MCPServerPool:
+        pool = MCPServerPool()
+        if user_id in users_with_oauth:
+            await pool.add(
+                "linear",
+                RecordingMCPClient(tools=(MCPToolDef(name="t", description="", input_schema={}),)),
+            )
+        return pool
+
+    return AgentRuntime(
+        run_manager=RunManager(store=None),  # type: ignore[arg-type]
+        stream_bridge=InMemoryStreamBridge(),
+        agent_builder=_builder,  # type: ignore[arg-type]
+        user_oauth_pool_provider=_provider,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_agent_per_user_key_only_when_oauth_present() -> None:
+    builds: list[tuple[str | None, ...]] = []
+    runtime = _runtime_with_oauth(builds, users_with_oauth={"u-oauth"})
+    t = uuid4()
+    spec = _make_spec(name="x", version="1")
+
+    # User WITH oauth → per-user build; same user re-uses the per-user cache.
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u-oauth")
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u-oauth")
+    # User WITHOUT oauth → shared (no-oauth) build; another no-oauth user reuses it.
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u-plain")
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u-plain2")
+
+    # 2 builds total: one per-user (u-oauth) + one shared (no-oauth users).
+    assert len(builds) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_user_drops_only_that_users_per_user_agents() -> None:
+    builds: list[tuple[str | None, ...]] = []
+    runtime = _runtime_with_oauth(builds, users_with_oauth={"u1", "u2"})
+    t = uuid4()
+    spec = _make_spec(name="x", version="1")
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u1")
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u2")
+    assert len(builds) == 2
+
+    runtime.invalidate_user(t, "u1")
+
+    # u1 rebuilds; u2 still cached.
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u1")
+    await runtime.get_agent(tenant_id=t, name="x", version="1", spec=spec, user_id="u2")
+    assert len(builds) == 3
 
 
 # ---------------------------------------------------------------------------

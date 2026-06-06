@@ -28,6 +28,7 @@ from control_plane.platform_embedding_config import PlatformEmbeddingConfigServi
 from control_plane.tenancy import TenantConfigNotConfiguredError, TenantConfigService
 from control_plane.tenant_mcp_pool import TenantMcpPoolProvider
 from control_plane.tenant_scope import bypass_rls_session
+from control_plane.user_mcp_oauth_pool import UserMcpOAuthPoolProvider
 from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
 from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.common.url_validation import validate_remote_url
@@ -93,11 +94,20 @@ class AgentBuilder(Protocol):
     the platform default). Optional + defaulted so test stubs that ignore
     tenancy still conform."""
 
-    async def __call__(self, spec: AgentSpec, *, tenant_id: UUID | None = None) -> BuiltAgent:
-        """Build the agent for ``spec``; ``tenant_id`` selects the per-tenant ToolEnv."""
+    async def __call__(
+        self, spec: AgentSpec, *, tenant_id: UUID | None = None, user_id: str | None = None
+    ) -> BuiltAgent:
+        """Build the agent for ``spec``; ``tenant_id`` selects the per-tenant ToolEnv,
+        ``user_id`` (= ``principal.subject_id``) the per-user OAuth MCP pool (OA-3b)."""
 
 
 logger = logging.getLogger(__name__)
+
+# Built-agent cache key. 3-tuple for the shared (no-OAuth) build; 4-tuple
+# ``(tenant, name, version, user_id)`` when the caller has connected OAuth
+# connectors (Stream MCP-OAUTH, OA-3b). ``k[0]`` is the tenant in both shapes,
+# so ``invalidate_tenant`` works uniformly.
+_CacheKey = tuple[UUID, str, str] | tuple[UUID, str, str, str]
 
 
 @dataclass
@@ -119,7 +129,11 @@ class AgentRuntime:
     #: purely in-memory; production wiring passes an
     #: :class:`InMemoryRunEventStore` (dev) or :class:`SqlRunEventStore`.
     run_event_store: RunEventStore | None = None
-    _cache: dict[tuple[UUID, str, str], BuiltAgent] = field(default_factory=dict, repr=False)
+    #: Stream MCP-OAUTH (OA-3b) — resolves the caller's per-user OAuth MCP pool.
+    #: Used only to decide whether a build must be per-user (the user has ≥1
+    #: connected OAuth connector); the builder re-resolves it (cheap, cached).
+    user_oauth_pool_provider: UserMcpOAuthPoolProvider | None = None
+    _cache: dict[_CacheKey, BuiltAgent] = field(default_factory=dict, repr=False)
     #: Extra per-tenant cache invalidators fanned out by ``invalidate_tenant``
     #: — the sub-agent builder registers its own cache here (Stream V-D, audit
     #: #1) since it caches built agents independently of ``_cache``.
@@ -132,18 +146,25 @@ class AgentRuntime:
         name: str,
         version: str,
         spec: AgentSpec,
+        user_id: str | None = None,
     ) -> BuiltAgent:
         """Return the :class:`BuiltAgent` for a manifest, building on cache miss.
 
-        ``spec`` is only consulted on a miss — the cache key is the
-        manifest identity, so a redeployed manifest under a *new*
-        version naturally gets a fresh build.
+        ``spec`` is only consulted on a miss. The cache key is the manifest
+        identity ``(tenant, name, version)``; it is extended with ``user_id``
+        ONLY when that user has ≥1 connected OAuth connector (Stream MCP-OAUTH,
+        OA-3b) — so the common no-OAuth agent stays shared across users and only
+        OAuth users get a per-user build.
         """
-        key = (tenant_id, name, version)
+        key: _CacheKey = (tenant_id, name, version)
+        if user_id is not None and self.user_oauth_pool_provider is not None:
+            user_pool = await self.user_oauth_pool_provider(tenant_id, user_id)
+            if user_pool.names():
+                key = (tenant_id, name, version, user_id)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        built = await self.agent_builder(spec, tenant_id=tenant_id)
+        built = await self.agent_builder(spec, tenant_id=tenant_id, user_id=user_id)
         self._cache[key] = built
         return built
 
@@ -168,6 +189,19 @@ class AgentRuntime:
             del self._cache[key]
         for hook in self._invalidation_hooks:
             hook(tenant_id)
+
+    def invalidate_user(self, tenant_id: UUID, user_id: str) -> None:
+        """Drop the per-user cached agents for ``(tenant_id, user_id)``.
+
+        Called when the user's OAuth connections change (connect / disconnect)
+        so the next run rebuilds against the refreshed per-user OAuth pool
+        (Stream MCP-OAUTH, OA-3b). Only 4-tuple (per-user) keys match; the
+        shared no-OAuth builds are left intact.
+        """
+        for key in [
+            k for k in self._cache if k[0] == tenant_id and len(k) == 4 and k[3] == user_id
+        ]:
+            del self._cache[key]
 
 
 def make_provider_key_resolver(
@@ -275,6 +309,7 @@ def make_agent_builder(
     subagent_spec_resolver: SubagentSpecResolver | None = None,
     mcp_allowlist_provider: Callable[[UUID], Awaitable[Sequence[str]]] | None = None,
     tenant_mcp_pool_provider: TenantMcpPoolProvider | None = None,
+    user_mcp_oauth_pool_provider: UserMcpOAuthPoolProvider | None = None,
     credentials_resolver: CredentialsResolver | None = None,
     platform_embedding_config_service: PlatformEmbeddingConfigService | None = None,
     skill_store: SkillStore | None = None,
@@ -309,7 +344,9 @@ def make_agent_builder(
     orchestrator gate stays as defense.
     """
 
-    async def _build(spec: AgentSpec, *, tenant_id: UUID | None = None) -> BuiltAgent:
+    async def _build(
+        spec: AgentSpec, *, tenant_id: UUID | None = None, user_id: str | None = None
+    ) -> BuiltAgent:
         # Stream T (PR B) — build-time embedding gate. A manifest that
         # declares long-term memory needs a configured platform embedder;
         # the dynamic embedder object is always present, so we check the
@@ -340,6 +377,17 @@ def make_agent_builder(
             if tenant_pool.names():
                 base_env = build_tool_env if build_tool_env is not None else ToolEnv()
                 build_tool_env = replace(base_env, tenant_mcp_pool=tenant_pool)
+        # Stream MCP-OAUTH (OA-3b) — attach the caller's own OAuth-connected MCP
+        # pool (per-(tenant,user)). user_id = principal.subject_id.
+        if (
+            user_mcp_oauth_pool_provider is not None
+            and tenant_id is not None
+            and user_id is not None
+        ):
+            user_pool = await user_mcp_oauth_pool_provider(tenant_id, user_id)
+            if user_pool.names():
+                base_env = build_tool_env if build_tool_env is not None else ToolEnv()
+                build_tool_env = replace(base_env, user_mcp_oauth_pool=user_pool)
         # Stream Q (Mini-ADR Q-5) / Stream Y-2 — resolve each model's key from
         # the tenant's platform-configured credential. Y-2: manifest api_key_ref
         # is ignored for agent builds, so this resolver is the ONLY key source.

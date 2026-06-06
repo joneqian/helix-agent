@@ -149,6 +149,7 @@ from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
 from control_plane.tenant_mcp_pool import TenantMcpPoolService
 from control_plane.tenant_status import TenantStatusService
+from control_plane.user_mcp_oauth_pool import UserMcpOAuthPoolService
 from control_plane.workspace_lock import PgWorkspaceLock
 from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.common.health import DefaultHealthProvider
@@ -732,6 +733,18 @@ def create_app(
                 async def _tenant_mcp_pool_provider(tenant_id):  # type: ignore[no-untyped-def]
                     return await tenant_mcp_pool_service.get_or_build(tenant_id)
 
+                # Stream MCP-OAUTH (OA-3b) — per-(tenant,user) OAuth MCP pool.
+                user_mcp_oauth_pool_service = UserMcpOAuthPoolService(
+                    oauth_store=resolved_mcp_oauth_connection_store,
+                    catalog_store=resolved_mcp_connector_catalog_store,
+                    client_factory=_tenant_mcp_client_factory,
+                )
+                stack.push_async_callback(user_mcp_oauth_pool_service.close_all)
+                _app.state.user_mcp_oauth_pool_service = user_mcp_oauth_pool_service
+
+                async def _user_mcp_oauth_pool_provider(tenant_id, user_id):  # type: ignore[no-untyped-def]
+                    return await user_mcp_oauth_pool_service.get_or_build(tenant_id, user_id)
+
                 # Stream J.6 — object store for uploaded images + the
                 # image resolver both multimodal paths draw on (Path A
                 # content blocks / Path B ask_image).
@@ -867,6 +880,8 @@ def create_app(
                     platform_embedding_config_service=(resolved_platform_embedding_config_service),
                     # Stream V (Mini-ADR V-4) — tenant's own remote MCP pool.
                     tenant_mcp_pool_provider=_tenant_mcp_pool_provider,
+                    # Stream MCP-OAUTH (OA-3b) — caller's per-user OAuth MCP pool.
+                    user_mcp_oauth_pool_provider=_user_mcp_oauth_pool_provider,
                     # Stream X (Mini-ADR X-4) — first wiring of skill resolution
                     # into the agent build: tenant-first / platform-fallback +
                     # plan-tier gate, plus bind-activity tracking.
@@ -874,6 +889,8 @@ def create_app(
                     skill_activity_recorder=skill_activity_recorder,
                     tenant_config_service=resolved_tenant_config_service,
                 )
+                # Stream MCP-OAUTH (OA-3b) — let get_agent decide per-user builds.
+                resolved_agent_runtime.user_oauth_pool_provider = _user_mcp_oauth_pool_provider
                 # Stream T (PR B) — these background workers (ingestion runner,
                 # DLQ worker, consolidator) are ALWAYS started. ``embedder`` is a
                 # ``DynamicResolvingEmbedder`` that resolves the live platform
