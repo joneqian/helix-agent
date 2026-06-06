@@ -197,6 +197,10 @@ async def test_eval_result_round_trip_and_tenant_isolation(
     skill_a = uuid4()
     try:
         current_tenant_id_var.set(tenant_a)
+        # The eval row FK-references skill.id, so the skill must exist first.
+        await store.create_skill(
+            skill_id=skill_a, tenant_id=tenant_a, name=f"eval-{uuid4().hex[:8]}"
+        )
         await store.record_eval_result(
             result=SkillEvalResult(
                 id=uuid4(),
