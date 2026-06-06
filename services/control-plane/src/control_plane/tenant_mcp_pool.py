@@ -29,6 +29,9 @@ from orchestrator.tools.mcp import (
 
 logger = logging.getLogger("helix.control_plane.tenant_mcp_pool")
 
+# Bounded rebuild attempts when invalidation keeps landing mid-build (audit #2).
+_MAX_BUILD_ATTEMPTS = 5
+
 # Provider handed to the agent builder: tenant_id -> that tenant's remote pool.
 TenantMcpPoolProvider = Callable[[UUID], Awaitable[MCPServerPool]]
 
@@ -95,50 +98,57 @@ class TenantMcpPoolService:
         bumps the generation under ``_locks_guard`` while a build may be
         in-flight.  The build captures the generation before building and
         re-checks it before caching.  If the generation changed the build was
-        invalidated mid-flight: the pool is served once to this caller but NOT
-        cached, so the next caller triggers a fresh rebuild.
+        invalidated mid-flight — the just-built pool is closed and the build is
+        **retried** (audit #2). Serving the invalidated pool would hand the
+        caller a closed, empty pool (``close_all`` clears its clients), so a
+        rebuild is the only way to return fresh, usable data. Retries are
+        bounded; under a sustained invalidation storm the last attempt serves a
+        fresh-but-uncached pool rather than spinning forever.
         """
-        lock = await self._tenant_lock(tenant_id)
-        async with lock:
-            cached = self._pools.get(tenant_id)
-            if cached is not None:
-                return cached
-            async with self._locks_guard:
-                gen = self._generation.get(tenant_id, 0)
-            pool = MCPServerPool()
-            records = await self._store.list_for_tenant(tenant_id=tenant_id)
-            for record in records:
-                if not record.enabled:
-                    continue
-                try:
-                    client = await self._client_factory(_record_to_config(record))
-                    await pool.add(record.name, client)
-                except MCPServerPoolLimitError:
-                    # Cap reached: close the just-opened client (it was never
-                    # added, so pool.close_all can't reach it) and stop —
-                    # further adds would also be rejected.
+        for attempt in range(_MAX_BUILD_ATTEMPTS):
+            last_attempt = attempt == _MAX_BUILD_ATTEMPTS - 1
+            lock = await self._tenant_lock(tenant_id)
+            async with lock:
+                cached = self._pools.get(tenant_id)
+                if cached is not None:
+                    return cached
+                async with self._locks_guard:
+                    gen = self._generation.get(tenant_id, 0)
+                pool = MCPServerPool()
+                records = await self._store.list_for_tenant(tenant_id=tenant_id)
+                for record in records:
+                    if not record.enabled:
+                        continue
                     try:
-                        await client.close()
+                        client = await self._client_factory(_record_to_config(record))
+                        await pool.add(record.name, client)
+                    except MCPServerPoolLimitError:
+                        # Cap reached: close the just-opened client (it was never
+                        # added, so pool.close_all can't reach it) and stop —
+                        # further adds would also be rejected.
+                        try:
+                            await client.close()
+                        except Exception:
+                            logger.warning("tenant_mcp_pool.cap_orphan_close_failed")
+                        logger.warning("tenant_mcp_pool.server_cap_reached")
+                        break
                     except Exception:
-                        logger.warning("tenant_mcp_pool.cap_orphan_close_failed")
-                    logger.warning("tenant_mcp_pool.server_cap_reached")
-                    break
-                except Exception:
-                    logger.warning("tenant_mcp_pool.server_build_failed")
-            async with self._locks_guard:
-                if self._generation.get(tenant_id, 0) != gen:
-                    # Invalidation landed mid-build; don't cache the stale pool.
-                    stale = pool
-                else:
-                    self._pools[tenant_id] = pool
-                    return pool
-        # Outside the tenant lock and _locks_guard: close the stale pool, then
-        # serve it once to this caller (it is fresh data, just uncached).
-        try:
-            await stale.close_all()
-        except Exception:
-            logger.warning("tenant_mcp_pool.stale_close_failed")
-        return stale
+                        logger.warning("tenant_mcp_pool.server_build_failed")
+                async with self._locks_guard:
+                    if self._generation.get(tenant_id, 0) == gen:
+                        self._pools[tenant_id] = pool
+                        return pool
+                    if last_attempt:
+                        # Give up retrying — serve this fresh pool uncached
+                        # (still usable; the next caller rebuilds).
+                        return pool
+            # Invalidation landed mid-build: close the orphan and retry so the
+            # caller gets a usable pool instead of a closed, empty one.
+            try:
+                await pool.close_all()
+            except Exception:
+                logger.warning("tenant_mcp_pool.stale_close_failed")
+        raise RuntimeError("get_or_build: retry loop exited without returning")  # pragma: no cover
 
     async def invalidate(self, tenant_id: UUID) -> None:
         """Close + drop the tenant's cached pool (next build rebuilds it)."""
