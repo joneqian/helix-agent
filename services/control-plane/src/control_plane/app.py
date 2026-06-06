@@ -21,9 +21,11 @@ Wiring overview (see [STREAM-B-DESIGN § 2.2](../../../docs/streams/STREAM-B-DES
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
@@ -80,6 +82,7 @@ from control_plane.auth import (
     build_mtls_verifier,
 )
 from control_plane.aux_model_adapter import make_llm_router_aux_model
+from control_plane.catalog_seed import CatalogSeedError, load_catalog_seed, seed_catalog
 from control_plane.curation_worker import CurationWorker
 from control_plane.encrypted_secret_store import (
     SqlEncryptedSecretStore,
@@ -665,6 +668,10 @@ def create_app(
             otlp_endpoint=resolved_settings.otlp_traces_endpoint,
         )
         async with AsyncExitStack() as stack:
+            # Stream MCP-OAUTH (OA-5) — env-seed the connector catalog before
+            # serving: oauth2 connectors whose ${VAR} client_id placeholders
+            # resolve from the environment are created idempotently.
+            await _seed_mcp_catalog(resolved_settings, resolved_mcp_connector_catalog_store)
             # Wire the agent runtime's backends before serving: the
             # checkpointer (E.1) plus the tool / middleware env bundles
             # (PR1.5). No run starts before lifespan completes, so the
@@ -1337,6 +1344,29 @@ def _signal_legacy_credentials_derivation(settings: Settings) -> None:
             "platform_tool_credentials[web_search]"
         )
         record_legacy_credentials_fallback(role="tavily")
+
+
+async def _seed_mcp_catalog(settings: Settings, store: McpConnectorCatalogStore) -> None:
+    """Env-seed the connector catalog from ``settings.mcp_catalog_seed_file``
+    (Stream MCP-OAUTH OA-5). No-op when unset. A malformed template fails fast."""
+    if not settings.mcp_catalog_seed_file:
+        return
+    path = Path(settings.mcp_catalog_seed_file)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"mcp_catalog_seed_file not readable: {path}") from exc
+    try:
+        entries, skipped = load_catalog_seed(raw, os.environ)
+    except CatalogSeedError as exc:
+        raise RuntimeError(f"invalid mcp_catalog_seed_file {path}: {exc}") from exc
+    created, existing = await seed_catalog(store=store, entries=entries)
+    logger.info(
+        "control_plane.mcp_catalog.seeded created=%s existing=%s skipped_unset=%s",
+        created,
+        existing,
+        skipped,
+    )
 
 
 def _build_secret_store(settings: Settings, sql_stores: _SqlStores | None) -> SecretStore:
