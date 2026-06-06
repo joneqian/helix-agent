@@ -935,7 +935,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] **OA-3b-后续（可选）**：子 agent(委派)解析调用方 OAuth 池（需 SubAgentTool 透传 user_id）
 - [x] **OA-4 连接管理端点 + 状态可观测**（PR #445）：`GET /v1/mcp-oauth/connections`（当前用户连接:status/scopes/expiry/last_error,**token ref + 流程态永不暴露**)+ `DELETE /v1/mcp-oauth/connections/{id}`（断开:best-effort 覆写 token 吊销[SecretStore 无 delete]+ 删行 + invalidate user pool/agents + 审计 MCP_SERVER_DELETE scope=oauth）。callback/disconnect 共用 `_invalidate_user_caches`。8 API 测。per-user pool 维度已在 OA-3b 落地
 - [ ] **OA-5 扩连接器**：Notion/Jira/Sentry/Asana 进 catalog（复用引擎）
-- [ ] **OA-6 刷新/UX 硬化**：后台预刷新 + 撤销处理 + 过期提示 + 审计/metrics
+- [x] **OA-6 token 刷新硬化**（PR #446）：`McpOAuthRefresher`(`mcp_oauth_refresh.py`)在 pool 构建期(per-user 锁下)惰性刷新——临过期(< 60s skew)经 OA-2 引擎 `refresh_token` 换新 access、覆写 secret ref(含轮换 refresh token)、回写 `token_expires_at`/`last_refresh_at`、清 `last_error`、置 `connected`。失败分类:`invalid_grant`→`revoked`(需重连);其它失败仅在已过期时→`error`(下次构建重试),未过期则原样服务当前 token。引擎 `McpOAuthError.oauth_error` 暴露 RFC 6749 error 字段供区分;`McpOAuthConnectionPatch.clear_last_error`(镜像 clear_flow_state)清恢复态;状态/过期经 OA-4 list 暴露。不做后台调度(不活跃用户无需刷新)。诚实限制:跨副本并发刷新可能竞 refresh-token 轮换(进程内 per-user 锁串行)。10 单测(refresh/revoked/transient×2/expired-no-refresh/rotated/pool-wiring)+2 引擎测
 
 **关键路径** OA-0→OA-1a→OA-1b→OA-2→OA-3（首连接器端到端）→OA-4→OA-5→OA-6。**out-of-scope**：per-tenant 共享连接、DCR/CIMD（用静态预注册 client_id）。
 

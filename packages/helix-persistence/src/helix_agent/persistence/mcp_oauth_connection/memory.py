@@ -116,6 +116,8 @@ class InMemoryMcpOAuthConnectionStore(McpOAuthConnectionStore):
             if patch.clear_flow_state:
                 updates["oauth_state"] = None
                 updates["pkce_verifier"] = None
+            if patch.clear_last_error:
+                updates["last_error"] = None
             # Re-validate the merged row (model_copy doesn't run validators) so a
             # cross-field invariant violation rejects before persisting.
             updated = McpOAuthConnectionRecord.model_validate(

@@ -216,6 +216,24 @@ async def test_refresh_token_returns_new_access() -> None:
 
 
 @pytest.mark.asyncio
+async def test_token_error_exposes_oauth_error() -> None:
+    """OA-6: the RFC 6749 ``error`` field is surfaced so callers can tell a
+    terminal ``invalid_grant`` from a transient fault."""
+    async with _client(_token_handler(status=400, body={"error": "invalid_grant"})) as http:
+        with pytest.raises(McpOAuthError) as exc:
+            await refresh_token(metadata=_META, client_id="cid", refresh_token="RT", http=http)
+    assert exc.value.oauth_error == "invalid_grant"
+
+
+@pytest.mark.asyncio
+async def test_token_error_without_body_has_no_oauth_error() -> None:
+    async with _client(_token_handler(status=503, body={})) as http:
+        with pytest.raises(McpOAuthError) as exc:
+            await refresh_token(metadata=_META, client_id="cid", refresh_token="RT", http=http)
+    assert exc.value.oauth_error is None
+
+
+@pytest.mark.asyncio
 async def test_access_token_not_in_repr() -> None:
     async with _client(_token_handler()) as http:
         tok = await exchange_code(

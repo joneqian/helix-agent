@@ -86,6 +86,8 @@ class McpOAuthConnectionPatch(BaseModel):
 
     ``clear_flow_state`` nulls ``oauth_state`` + ``pkce_verifier`` (used once the
     callback exchange succeeds) — Optional-means-unchanged can't express a clear.
+    ``clear_last_error`` nulls ``last_error`` (a recovered connection — e.g. a
+    successful OA-6 refresh — must drop the stale error) for the same reason.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -98,6 +100,7 @@ class McpOAuthConnectionPatch(BaseModel):
     last_refresh_at: datetime | None = None
     last_error: str | None = None
     clear_flow_state: bool = False
+    clear_last_error: bool = False
 
     @field_validator("access_token_ref", "refresh_token_ref")
     @classmethod

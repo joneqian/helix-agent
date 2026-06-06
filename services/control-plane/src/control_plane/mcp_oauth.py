@@ -41,12 +41,17 @@ _STATE_BYTES = 32
 
 class McpOAuthError(Exception):
     """An MCP OAuth step failed. ``code`` is a stable machine token; ``message``
-    is scrubbed (never carries a token / authorization code)."""
+    is scrubbed (never carries a token / authorization code).
 
-    def __init__(self, code: str, message: str) -> None:
+    ``oauth_error`` is the RFC 6749 §5.2 ``error`` field from a token-endpoint
+    failure (e.g. ``invalid_grant``), when present — it lets callers distinguish
+    a terminal failure (a revoked refresh token) from a transient one."""
+
+    def __init__(self, code: str, message: str, *, oauth_error: str | None = None) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+        self.oauth_error = oauth_error
 
 
 @dataclass(frozen=True)
@@ -186,7 +191,22 @@ async def _post_token(
     except httpx.HTTPError as exc:
         raise McpOAuthError("MCP_OAUTH_TOKEN_FAILED", "token request failed") from exc
     if resp.status_code != 200:
-        raise McpOAuthError("MCP_OAUTH_TOKEN_FAILED", f"token status {resp.status_code}")
+        # RFC 6749 §5.2: an error response is JSON with an ``error`` field. Surface
+        # it (never the description, which may echo input) so callers can tell a
+        # terminal ``invalid_grant`` from a transient server fault.
+        oauth_error: str | None = None
+        if len(resp.content) <= _MAX_RESPONSE_BYTES:
+            try:
+                body = resp.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and isinstance(body.get("error"), str):
+                oauth_error = body["error"]
+        raise McpOAuthError(
+            "MCP_OAUTH_TOKEN_FAILED",
+            f"token status {resp.status_code}",
+            oauth_error=oauth_error,
+        )
     if len(resp.content) > _MAX_RESPONSE_BYTES:
         raise McpOAuthError("MCP_OAUTH_TOKEN_FAILED", "token response too large")
     try:
