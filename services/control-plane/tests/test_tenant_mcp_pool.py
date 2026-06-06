@@ -155,23 +155,14 @@ async def test_invalidation_during_build_is_not_lost() -> None:
     await svc.invalidate(tid)  # invalidation lands mid-build
 
     release.set()  # unblock the build
-    served = await build_task  # the in-flight caller is still served a pool...
+    served = await build_task
 
-    # ...but because the invalidation landed mid-build, that pool must NOT have
-    # been cached (serve-once-uncached — the generation-counter guarantee).
+    # audit #2: the invalidation landed mid-build, so the first pool is closed
+    # and the build is RETRIED — the in-flight caller gets a fresh, *usable*
+    # pool (not a closed, empty one), and that fresh pool IS cached.
     assert served is not None
-    assert svc._pools.get(tid) is None
-
-    # Next call must trigger a real rebuild (not a cache hit).
-    rebuild_calls: list[str] = []
-
-    async def _counting_factory(config: MCPServerConfig) -> RecordingMCPClient:
-        rebuild_calls.append(config.name)
-        return RecordingMCPClient(tools=())
-
-    svc._client_factory = _counting_factory
-    await svc.get_or_build(tid)
-    assert rebuild_calls == ["github"]  # rebuilt fresh; stale pool was not served from cache
+    assert served.names() == ["github"]  # usable, not an empty closed pool
+    assert svc._pools.get(tid) is served  # rebuilt fresh and cached
 
 
 @pytest.mark.asyncio
