@@ -942,7 +942,7 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 **MCP 基建加固 follow-up**（加固审计 #438 后口头提的 3 项）：
 - [x] **#1 OAuth-only 连接器支持** — 即 Stream MCP-OAUTH 全套（OA-0~OA-6，上文）
 - [x] **#3 DNS-rebind / egress 防御决议**（PR #448）：[ADR-0009](./adr/0009-control-plane-egress-ssrf-dns-rebind.md) — DNS-rebind 防御放基础设施 egress 层（部署须拒 control-plane 出方向私网/loopback/链路本地），不在 app 层做 resolve-then-pin 半成品；保留 `validate_remote_url` 作纵深第一层；沙箱 `helix-sandbox-egress` 只覆盖沙箱出站不覆盖 control-plane connect-out。`url_validation.py` docstring 指向该 ADR。纯文档
-- [ ] **#2 catalog/instance 健康状态字段**：现 `mcp_probe.py` 能探活但结果不持久化（protocol 无 health/last_probe 字段）→ 加字段 + store + migration + probe 写入 + list 暴露
+- [x] **#2 instance 健康状态字段**（PR #449）：探活结果原本不持久化 → `tenant_mcp_server` 加 `last_probe_at`/`last_probe_status`(`Literal["ok","error"]`)/`last_probe_error`(都 None=从未探活=unknown)+ migration 0064(含 CHECK)+ 专用 store 方法 `record_probe_result`(不经用户 Patch 防伪造,**不动 updated_at**——探活非配置变更)。写入点:注册/catalog 实例化(探活成功→ok)、`GET /{name}/tools`(按需探活 ok / **失败→error**,捕获掉线)、`PATCH`(重探成功→ok)。health 经 list/`_public` 自动暴露;best-effort 写(health 写失败不影响主操作)。health 纯观测、不进 hot path、不触发 pool invalidation。**不做后台周期探活**(超范围,注明)。健康加在 instance 而非 catalog(catalog 是带占位符模板不可探活)/oauth-conn(已有自身生命周期 status)。13 测(store 4 + API 3 health + 既有回归 + SQL 集成 1)
 
 ### Stream X — Platform Skill Library（平台精选库 + 租户自建，混合）— 设计 [STREAM-X-DESIGN](./streams/STREAM-X-DESIGN.md)
 

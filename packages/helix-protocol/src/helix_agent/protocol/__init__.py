@@ -173,6 +173,7 @@ from helix_agent.protocol.tenant_config import (
 )
 from helix_agent.protocol.tenant_mcp_server import (
     McpServerAuthType,
+    McpServerProbeStatus,
     McpServerTransport,
     TenantMcpServerPatch,
     TenantMcpServerRecord,
@@ -271,6 +272,7 @@ __all__ = [
     "McpOAuthConnectionPatch",
     "McpOAuthConnectionRecord",
     "McpServerAuthType",
+    "McpServerProbeStatus",
     "McpServerTransport",
     "MemberRole",
     "MemberStatus",

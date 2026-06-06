@@ -46,3 +46,9 @@ class TenantMcpServerRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    # Connectivity health (#2) — result of the most recent probe; all NULL until
+    # first probed. CHECK constraint on last_probe_status declared in migration
+    # 0064. Health is observational; it never gates tool assembly.
+    last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_probe_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_probe_error: Mapped[str | None] = mapped_column(Text, nullable=True)

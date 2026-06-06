@@ -19,6 +19,7 @@ from helix_agent.protocol.platform_secret import validate_secret_ref
 
 __all__ = [
     "McpServerAuthType",
+    "McpServerProbeStatus",
     "McpServerTransport",
     "TenantMcpServerPatch",
     "TenantMcpServerRecord",
@@ -26,6 +27,9 @@ __all__ = [
 
 McpServerTransport = Literal["sse", "streamable_http"]
 McpServerAuthType = Literal["none", "bearer"]
+# Result of the most recent connectivity probe. ``None`` on the record means the
+# server has never been probed (treat as "unknown" in the UI).
+McpServerProbeStatus = Literal["ok", "error"]
 
 # Server name is used in the runtime tool namespace (``mcp:<name>.<tool>``)
 # and in the secret path — restrict to a safe slug.
@@ -57,6 +61,12 @@ class TenantMcpServerRecord(BaseModel):
     created_at: datetime
     updated_at: datetime
     created_by: str
+    # Connectivity health (#2): the result of the most recent probe (registration,
+    # on-demand tools listing, or update re-probe). All three None = never probed.
+    # Health is observational — it never gates tool assembly.
+    last_probe_at: datetime | None = None
+    last_probe_status: McpServerProbeStatus | None = None
+    last_probe_error: str | None = None
 
     @field_validator("token_secret_ref")
     @classmethod
