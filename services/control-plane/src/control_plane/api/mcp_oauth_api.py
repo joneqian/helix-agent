@@ -282,6 +282,14 @@ def build_mcp_oauth_router() -> APIRouter:
             trace_id=current_trace_id_hex(),
             details={"scope": "oauth", "name": updated.name, "source": "oauth_callback"},
         )
+        # OA-3b — drop the user's cached OAuth pool + per-user agents so the next
+        # run rebuilds with the new connection. Both are optional (tests).
+        pool_svc = getattr(request.app.state, "user_mcp_oauth_pool_service", None)
+        if pool_svc is not None:
+            await pool_svc.invalidate(tenant_id, user_id)
+        agent_runtime = getattr(request.app.state, "agent_runtime", None)
+        if agent_runtime is not None:
+            agent_runtime.invalidate_user(tenant_id, user_id)
         return JSONResponse(
             status_code=200,
             content={"connection_id": str(updated.id), "name": updated.name, "status": "connected"},

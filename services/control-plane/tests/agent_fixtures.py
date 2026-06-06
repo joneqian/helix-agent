@@ -50,8 +50,10 @@ def stub_agent_runtime(
     that exercise the replay path.
     """
 
-    async def _build(spec: object, *, tenant_id: object | None = None) -> BuiltAgent:
-        del spec, tenant_id
+    async def _build(
+        spec: object, *, tenant_id: object | None = None, user_id: str | None = None
+    ) -> BuiltAgent:
+        del spec, tenant_id, user_id
         graph = GraphRunner(checkpointer=InMemorySaver()).compile(
             build_react_graph(llm_caller=_fake_llm, tool_registry=ToolRegistry())
         )

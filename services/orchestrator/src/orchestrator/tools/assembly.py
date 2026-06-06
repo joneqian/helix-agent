@@ -103,6 +103,12 @@ class ToolEnv:
     #: ``mcp_allowlist``), this pool is the tenant's own and is never gated by
     #: the allowlist. ``None`` → the tenant registered no remote servers.
     tenant_mcp_pool: MCPServerPool | None = None
+    #: Stream MCP-OAUTH (OA-3b) — the calling **user's** OAuth-connected MCP
+    #: servers (per-(tenant,user)), built by the control plane from the user's
+    #: ``mcp_oauth_connection`` rows. Like ``tenant_mcp_pool`` it is the
+    #: caller's own and never gated by the allowlist; ``None`` → the user has no
+    #: connected OAuth connectors.
+    user_mcp_oauth_pool: MCPServerPool | None = None
     #: Sandbox Supervisor client backing the ``exec_python`` builtin (F.4).
     supervisor_client: SupervisorClient | None = None
     #: Artifact registry backing the ``save_artifact`` / ``list_artifacts``
@@ -439,10 +445,10 @@ def _register_http(registry: ToolRegistry, env: ToolEnv) -> None:
 
 
 async def _register_mcp(registry: ToolRegistry, entry: MCPToolSpec, env: ToolEnv) -> None:
-    if env.mcp_pool is None and env.tenant_mcp_pool is None:
+    if env.mcp_pool is None and env.tenant_mcp_pool is None and env.user_mcp_oauth_pool is None:
         raise AgentFactoryError(
             "'mcp' tool declared but no MCP server pool is configured "
-            "(ToolEnv.mcp_pool / ToolEnv.tenant_mcp_pool)"
+            "(ToolEnv.mcp_pool / ToolEnv.tenant_mcp_pool / ToolEnv.user_mcp_oauth_pool)"
         )
     allow = set(entry.allow_tools) or None
     server_select = set(entry.servers) or None  # None = no per-agent restriction
@@ -485,6 +491,28 @@ async def _register_mcp(registry: ToolRegistry, entry: MCPToolSpec, env: ToolEnv
             if server_select is not None and server_name not in server_select:
                 continue
             client = env.tenant_mcp_pool.get(server_name)
+            if client is None:  # pragma: no cover
+                continue
+            await register_mcp_tools(
+                server_name=server_name,
+                client=client,
+                registry=registry,
+                allow_tools=allow,
+                deferred=True,
+            )
+            registered_servers.add(server_name)
+
+    # User OAuth pool — the calling user's own OAuth-connected servers
+    # (Stream MCP-OAUTH, OA-3b). Never gated by the allowlist; a name already
+    # registered by the platform or tenant pool wins (skip the duplicate).
+    if env.user_mcp_oauth_pool is not None:
+        for server_name in env.user_mcp_oauth_pool.names():
+            if server_name in registered_servers:
+                logger.info("user_mcp_oauth.server_shadowed")
+                continue
+            if server_select is not None and server_name not in server_select:
+                continue
+            client = env.user_mcp_oauth_pool.get(server_name)
             if client is None:  # pragma: no cover
                 continue
             await register_mcp_tools(

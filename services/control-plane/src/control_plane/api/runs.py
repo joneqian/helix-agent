@@ -311,6 +311,9 @@ def build_runs_router() -> APIRouter:
                 name=meta.agent_name,
                 version=meta.agent_version,
                 spec=record.spec,
+                # Stream MCP-OAUTH (OA-3b) — subject_id keys the per-user OAuth
+                # MCP pool (= mcp_oauth_connection.user_id).
+                user_id=request.state.principal.subject_id,
             )
         except AgentFactoryError as exc:
             raise HTTPException(
@@ -691,6 +694,8 @@ def build_runs_router() -> APIRouter:
                 name=meta.agent_name,
                 version=meta.agent_version,
                 spec=spec_record.spec,
+                # Stream MCP-OAUTH (OA-3b) — per-user OAuth MCP pool key.
+                user_id=request.state.principal.subject_id,
             )
         except AgentFactoryError as exc:
             raise HTTPException(
