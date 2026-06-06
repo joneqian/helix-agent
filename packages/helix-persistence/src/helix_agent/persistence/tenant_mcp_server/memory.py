@@ -13,6 +13,7 @@ from helix_agent.persistence.tenant_mcp_server.base import (
 )
 from helix_agent.protocol import (
     McpServerAuthType,
+    McpServerProbeStatus,
     McpServerTransport,
     TenantMcpServerPatch,
     TenantMcpServerRecord,
@@ -96,6 +97,31 @@ class InMemoryTenantMcpServerStore(TenantMcpServerStore):
                 changes["enabled"] = patch.enabled
             updated = TenantMcpServerRecord.model_validate(
                 existing.model_copy(update=changes).model_dump()
+            )
+            self._rows[key] = updated
+            return updated
+
+    async def record_probe_result(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        status: McpServerProbeStatus,
+        probed_at: datetime,
+        error: str | None = None,
+    ) -> TenantMcpServerRecord:
+        async with self._lock:
+            key = (tenant_id, name)
+            existing = self._rows.get(key)
+            if existing is None:
+                raise TenantMcpServerNotFoundError(tenant_id=tenant_id, name=name)
+            # Health columns only — updated_at is left untouched (not a config change).
+            updated = existing.model_copy(
+                update={
+                    "last_probe_at": probed_at,
+                    "last_probe_status": status,
+                    "last_probe_error": error if status == "error" else None,
+                }
             )
             self._rows[key] = updated
             return updated

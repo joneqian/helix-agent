@@ -549,3 +549,88 @@ async def test_probe_endpoints_have_dedicated_rate_limit(
     assert r1.status_code == 200, r1.text
     assert r2.status_code == 429
     assert r2.json()["detail"]["code"] == "MCP_PROBE_RATE_LIMITED"
+
+
+# ---------------------------------------------------------------------------
+# Connectivity health (#2)
+# ---------------------------------------------------------------------------
+
+
+async def _register_ok(
+    client: AsyncClient, headers: dict[str, str], *, name: str = "github"
+) -> None:
+    resp = await client.post(
+        "/v1/mcp-servers",
+        json={
+            "name": name,
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
+            "auth_type": "none",
+            "timeout_s": 30.0,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_register_seeds_health_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful registration probe seeds last_probe_status=ok on the row."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        resp = await client.post(
+            "/v1/mcp-servers",
+            json={
+                "name": "github",
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "auth_type": "none",
+                "timeout_s": 30.0,
+            },
+            headers=admin_headers,
+        )
+        assert resp.status_code == 201, resp.text
+        data = resp.json()["data"]
+        assert data["last_probe_status"] == "ok"
+        assert data["last_probe_at"] is not None
+        assert data["last_probe_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_tools_failure_persists_error_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An on-demand tools probe that fails persists last_probe_status=error,
+    visible on the subsequent list."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        await _register_ok(client, admin_headers)  # health starts ok
+        # Now the server becomes unreachable.
+        monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_fail)
+        tools = await client.get("/v1/mcp-servers/github/tools", headers=admin_headers)
+        assert tools.status_code == 502, tools.text
+        listed = await client.get("/v1/mcp-servers", headers=admin_headers)
+        row = next(r for r in listed.json()["data"] if r["name"] == "github")
+        assert row["last_probe_status"] == "error"
+        assert row["last_probe_error"] == "MCP_SERVER_PROBE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_tools_success_sets_health_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recovered on-demand tools probe flips health back to ok and clears error."""
+    app, admin_headers, _ = await _make_app_with_admin()
+    monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        await _register_ok(client, admin_headers)
+        monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_fail)
+        await client.get("/v1/mcp-servers/github/tools", headers=admin_headers)  # -> error
+        monkeypatch.setattr("control_plane.api.mcp_servers.probe_remote_mcp", _fake_probe_ok)
+        ok = await client.get("/v1/mcp-servers/github/tools", headers=admin_headers)
+        assert ok.status_code == 200, ok.text
+        listed = await client.get("/v1/mcp-servers", headers=admin_headers)
+        row = next(r for r in listed.json()["data"] if r["name"] == "github")
+        assert row["last_probe_status"] == "ok"
+        assert row["last_probe_error"] is None

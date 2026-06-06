@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -27,9 +28,11 @@ from helix_agent.persistence import (
 from helix_agent.protocol import (
     AuditAction,
     McpServerAuthType,
+    McpServerProbeStatus,
     McpServerTransport,
     Principal,
     TenantMcpServerPatch,
+    TenantMcpServerRecord,
     TenantPlan,
     tier_satisfies,
 )
@@ -222,10 +225,33 @@ async def _resolve_plan(tenant_config_service: object, tenant_id: UUID) -> Tenan
 def _public(record: object) -> dict[str, object]:
     # Serialize the record WITHOUT exposing the token_secret_ref — a ref
     # (not a secret value) but dropped from the public payload to keep the
-    # API surface minimal.
+    # API surface minimal. Health fields (last_probe_*) flow through.
     data: dict[str, object] = record.model_dump(mode="json")  # type: ignore[attr-defined]
     data.pop("token_secret_ref", None)
     return data
+
+
+async def _record_health(
+    store: TenantMcpServerStore,
+    *,
+    tenant_id: UUID,
+    name: str,
+    status: McpServerProbeStatus,
+    error: str | None = None,
+) -> TenantMcpServerRecord | None:
+    """Best-effort persist of a probe result (#2). A health-write failure must
+    never fail the caller's main operation, so it's swallowed (logged)."""
+    try:
+        return await store.record_probe_result(
+            tenant_id=tenant_id,
+            name=name,
+            status=status,
+            probed_at=datetime.now(tz=UTC),
+            error=error,
+        )
+    except Exception:
+        logger.warning("mcp_server.health_record_failed name=%s status=%s", name, status)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +374,11 @@ def build_mcp_servers_router() -> APIRouter:
                     "message": "name already registered",
                 },
             ) from exc
+        # Probe succeeded above (step 4) → seed health as ok (#2).
+        record = (
+            await _record_health(store, tenant_id=tenant_id, name=record.name, status="ok")
+            or record
+        )
         logger.info("mcp_server.registered server=%s transport=%s", record.name, record.transport)
         await emit(
             audit,
@@ -561,6 +592,11 @@ def build_mcp_servers_router() -> APIRouter:
                 status_code=409,
                 detail={"code": "MCP_SERVER_DUPLICATE", "message": "name already registered"},
             ) from exc
+        # Probe succeeded above (step 7) → seed health as ok (#2).
+        record = (
+            await _record_health(store, tenant_id=tenant_id, name=record.name, status="ok")
+            or record
+        )
         logger.info("mcp_server.instantiated server=%s catalog=%s", record.name, entry.name)
         await emit(
             audit,
@@ -688,9 +724,14 @@ def build_mcp_servers_router() -> APIRouter:
                 timeout_s=record.timeout_s,
             )
         except McpProbeError as exc:
+            # On-demand probe is the live-health signal — persist the failure (#2).
+            await _record_health(
+                store, tenant_id=principal.tenant_id, name=name, status="error", error=exc.code
+            )
             raise HTTPException(
                 status_code=502, detail={"code": exc.code, "message": exc.message}
             ) from exc
+        await _record_health(store, tenant_id=principal.tenant_id, name=name, status="ok")
         return {
             "success": True,
             "data": [{"name": t.name, "description": t.description or ""} for t in tools],
@@ -737,7 +778,8 @@ def build_mcp_servers_router() -> APIRouter:
         # next_token_secret_ref: will be set to the new ref only when rotating; else None
         # (TenantMcpServerPatch treats None as "leave unchanged").
         next_token_secret_ref: str | None = None
-        if payload.url is not None or payload.token is not None:
+        reprobed = payload.url is not None or payload.token is not None
+        if reprobed:
             raw_token: str | None
             if payload.token is not None:
                 raw_token = payload.token.get_secret_value()
@@ -777,6 +819,10 @@ def build_mcp_servers_router() -> APIRouter:
                 status_code=404,
                 detail={"code": "MCP_SERVER_NOT_FOUND", "message": "not found"},
             ) from exc
+        if reprobed:  # re-probe above succeeded → refresh health to ok (#2)
+            record = (
+                await _record_health(store, tenant_id=tenant_id, name=name, status="ok") or record
+            )
         await emit(
             audit,
             tenant_id=tenant_id,

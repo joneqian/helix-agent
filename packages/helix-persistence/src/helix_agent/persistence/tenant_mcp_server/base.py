@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import abc
+from datetime import datetime
 from uuid import UUID
 
 from helix_agent.protocol import (
     McpServerAuthType,
+    McpServerProbeStatus,
     McpServerTransport,
     TenantMcpServerPatch,
     TenantMcpServerRecord,
@@ -68,6 +70,22 @@ class TenantMcpServerStore(abc.ABC):
     ) -> TenantMcpServerRecord:
         """Apply a partial update. Raises
         :class:`TenantMcpServerNotFoundError` if absent."""
+
+    @abc.abstractmethod
+    async def record_probe_result(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        status: McpServerProbeStatus,
+        probed_at: datetime,
+        error: str | None = None,
+    ) -> TenantMcpServerRecord:
+        """Persist the latest connectivity-probe result (#2) on the row.
+
+        Sets ``last_probe_at`` / ``last_probe_status`` / ``last_probe_error``
+        only — it does NOT bump ``updated_at`` (a probe is not a config change).
+        Raises :class:`TenantMcpServerNotFoundError` if absent."""
 
     @abc.abstractmethod
     async def delete(self, *, tenant_id: UUID, name: str) -> None:

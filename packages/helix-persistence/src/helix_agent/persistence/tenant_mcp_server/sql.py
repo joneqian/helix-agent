@@ -19,6 +19,7 @@ from helix_agent.persistence.tenant_mcp_server.base import (
 )
 from helix_agent.protocol import (
     McpServerAuthType,
+    McpServerProbeStatus,
     McpServerTransport,
     TenantMcpServerPatch,
     TenantMcpServerRecord,
@@ -44,6 +45,9 @@ def _row_to_record(row: TenantMcpServerRow) -> TenantMcpServerRecord:
         created_at=row.created_at,
         updated_at=row.updated_at,
         created_by=row.created_by,
+        last_probe_at=row.last_probe_at,
+        last_probe_status=row.last_probe_status,  # type: ignore[arg-type]
+        last_probe_error=row.last_probe_error,
     )
 
 
@@ -138,6 +142,31 @@ class SqlTenantMcpServerStore(TenantMcpServerStore):
             # violates a cross-field invariant, _row_to_record raises and the
             # context-manager rolls back — no corrupt row is persisted (parity
             # with the in-memory store's validate-before-write semantics).
+            record = _row_to_record(existing)
+            await session.commit()
+            return record
+
+    async def record_probe_result(
+        self,
+        *,
+        tenant_id: UUID,
+        name: str,
+        status: McpServerProbeStatus,
+        probed_at: datetime,
+        error: str | None = None,
+    ) -> TenantMcpServerRecord:
+        async with self._sf() as session:
+            stmt = select(TenantMcpServerRow).where(
+                TenantMcpServerRow.tenant_id == tenant_id,
+                TenantMcpServerRow.name == name,
+            )
+            existing = (await session.execute(stmt)).scalar_one_or_none()
+            if existing is None:
+                raise TenantMcpServerNotFoundError(tenant_id=tenant_id, name=name)
+            existing.last_probe_at = probed_at
+            existing.last_probe_status = status
+            existing.last_probe_error = error if status == "error" else None
+            # Deliberately not touching updated_at — health is not a config change.
             record = _row_to_record(existing)
             await session.commit()
             return record

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -139,6 +140,58 @@ async def test_create_without_catalog_id_defaults_none() -> None:
     tid = uuid4()
     created = await _make(store, tid)
     assert created.catalog_id is None
+
+
+@pytest.mark.asyncio
+async def test_health_unset_until_probed() -> None:
+    store = InMemoryTenantMcpServerStore()
+    tid = uuid4()
+    created = await _make(store, tid)
+    assert created.last_probe_at is None
+    assert created.last_probe_status is None
+    assert created.last_probe_error is None
+
+
+@pytest.mark.asyncio
+async def test_record_probe_result_ok_clears_error_and_keeps_updated_at() -> None:
+    store = InMemoryTenantMcpServerStore()
+    tid = uuid4()
+    created = await _make(store, tid)
+    # First an error, then a recovery.
+    at1 = datetime(2026, 6, 6, 10, 0, tzinfo=UTC)
+    await store.record_probe_result(
+        tenant_id=tid, name="github", status="error", probed_at=at1, error="MCP_PROBE_TIMEOUT"
+    )
+    at2 = datetime(2026, 6, 6, 11, 0, tzinfo=UTC)
+    ok = await store.record_probe_result(
+        tenant_id=tid, name="github", status="ok", probed_at=at2, error="ignored"
+    )
+    assert ok.last_probe_status == "ok"
+    assert ok.last_probe_at == at2
+    assert ok.last_probe_error is None  # ok clears any prior error
+    assert ok.updated_at == created.updated_at  # a probe is not a config change
+
+
+@pytest.mark.asyncio
+async def test_record_probe_result_error_persists_message() -> None:
+    store = InMemoryTenantMcpServerStore()
+    tid = uuid4()
+    await _make(store, tid)
+    at = datetime(2026, 6, 6, 12, 0, tzinfo=UTC)
+    rec = await store.record_probe_result(
+        tenant_id=tid, name="github", status="error", probed_at=at, error="MCP_PROBE_CONNECT"
+    )
+    assert rec.last_probe_status == "error"
+    assert rec.last_probe_error == "MCP_PROBE_CONNECT"
+
+
+@pytest.mark.asyncio
+async def test_record_probe_result_absent_raises() -> None:
+    store = InMemoryTenantMcpServerStore()
+    with pytest.raises(TenantMcpServerNotFoundError):
+        await store.record_probe_result(
+            tenant_id=uuid4(), name="nope", status="ok", probed_at=datetime.now(tz=UTC)
+        )
 
 
 @pytest.mark.asyncio

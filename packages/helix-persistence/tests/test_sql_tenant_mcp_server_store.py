@@ -334,3 +334,45 @@ async def test_rls_blocks_cross_tenant_write(
     finally:
         current_tenant_id_var.set(None)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_record_probe_result_persists_health(
+    tenant_mcp_server_store: tuple[SqlTenantMcpServerStore, AsyncEngine],
+) -> None:
+    """record_probe_result persists health columns (migration 0064 + CHECK) and
+    leaves updated_at untouched (a probe is not a config change)."""
+    from datetime import UTC, datetime
+
+    store, engine = tenant_mcp_server_store
+    try:
+        tid = uuid4()
+        current_tenant_id_var.set(tid)
+        created = await store.create(
+            tenant_id=tid,
+            name="github",
+            transport="streamable_http",
+            url="https://mcp.example.com/mcp",
+            auth_type="none",
+            token_secret_ref=None,
+            timeout_s=30.0,
+            created_by="admin@acme",
+        )
+        assert created.last_probe_status is None  # never probed yet
+
+        at_err = datetime(2026, 6, 6, 10, 0, tzinfo=UTC)
+        await store.record_probe_result(
+            tenant_id=tid, name="github", status="error", probed_at=at_err, error="MCP_PROBE_X"
+        )
+        at_ok = datetime(2026, 6, 6, 11, 0, tzinfo=UTC)
+        ok = await store.record_probe_result(
+            tenant_id=tid, name="github", status="ok", probed_at=at_ok
+        )
+        assert ok.last_probe_status == "ok"
+        assert ok.last_probe_error is None  # ok clears the prior error
+        assert ok.updated_at == created.updated_at  # not bumped by a probe
+
+        got = await store.get(tenant_id=tid, name="github")
+        assert got is not None and got.last_probe_status == "ok"
+    finally:
+        await engine.dispose()
