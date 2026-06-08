@@ -358,6 +358,7 @@ export function SkillDetail() {
               style={{ width: 160 }}
               loading={statusSubmitting}
               disabled={statusSubmitting}
+              aria-label={t("skills.change_status")}
               data-testid="skill-status-select"
               options={STATUS_OPTIONS.map((s) => {
                 const isActiveBlocked = s === "active" && isLatestHighRisk && !isAdmin;
@@ -413,6 +414,7 @@ export function SkillDetail() {
               }
             }}
             style={{ minWidth: 220 }}
+            aria-label={t("skills.detail_version_picker_label")}
             data-testid="skill-version-picker"
             options={versions.map((v) => ({
               value: v.version,
