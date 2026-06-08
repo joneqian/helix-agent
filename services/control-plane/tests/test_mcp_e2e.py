@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import socket
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import pytest
 import uvicorn
@@ -71,8 +71,16 @@ async def _run_uvicorn(app: object, port: int) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Bounded teardown: an open SSE stream can keep uvicorn's graceful
+        # shutdown waiting forever, which (with no pytest-level timeout) hangs
+        # the whole job until CI cancels it. Cap the wait, then force-cancel.
         server.should_exit = True
-        _ = await task
+        try:
+            await asyncio.wait_for(task, timeout=10.0)
+        except (TimeoutError, asyncio.CancelledError):
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                _ = await task  # assign-to-_ dodges CodeQL py/ineffectual-statement
 
 
 @pytest.mark.asyncio
