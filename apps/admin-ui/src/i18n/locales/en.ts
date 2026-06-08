@@ -1103,6 +1103,8 @@ export interface TranslationKeys {
     kill_switch_active: string;
     kill_switch_tenant_label: string;
     kill_switch_global_label: string;
+    kill_switch_tenant_aria: string;
+    kill_switch_global_aria: string;
   };
 }
 
@@ -2249,6 +2251,8 @@ const en: TranslationKeys = {
     kill_switch_active: "Auto-evolution active",
     kill_switch_tenant_label: "Tenant",
     kill_switch_global_label: "Global",
+    kill_switch_tenant_aria: "Toggle tenant auto-evolution emergency stop",
+    kill_switch_global_aria: "Toggle global auto-evolution emergency stop",
   },
 };
 

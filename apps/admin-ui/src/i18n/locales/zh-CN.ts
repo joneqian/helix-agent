@@ -1127,6 +1127,8 @@ const zhCN: TranslationKeys = {
     kill_switch_active: "自动演化运行中",
     kill_switch_tenant_label: "本租户",
     kill_switch_global_label: "全局",
+    kill_switch_tenant_aria: "切换本租户自动演化紧急停",
+    kill_switch_global_aria: "切换全局自动演化紧急停",
   },
 };
 

@@ -115,6 +115,7 @@ export function SkillEvolutionKillSwitch() {
         checked={state.tenant?.engaged ?? false}
         loading={busy}
         onChange={(next) => onToggle("tenant", next)}
+        aria-label={t("skill_evolution.kill_switch_tenant_aria")}
         data-testid="skill-kill-switch-tenant"
       />
       {isSystemAdmin && (
@@ -127,6 +128,7 @@ export function SkillEvolutionKillSwitch() {
             checked={state.global?.engaged ?? false}
             loading={busy}
             onChange={(next) => onToggle("global", next)}
+            aria-label={t("skill_evolution.kill_switch_global_aria")}
             data-testid="skill-kill-switch-global"
           />
         </>
