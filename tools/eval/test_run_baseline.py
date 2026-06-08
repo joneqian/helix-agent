@@ -18,12 +18,11 @@ from run_baseline import (  # type: ignore[import-not-found]  # noqa: E402
 )
 
 
-def test_runner_registry_has_fourteen_capabilities() -> None:
-    """Stream J ships 15 sub-items; J.13 is the harness itself and is excluded.
-
-    The shipped registry covers J.1-J.12 + J.14 + J.15 = 14.
+def test_runner_registry_has_fifteen_capabilities() -> None:
+    """Stream J ships 14 baseline capabilities (J.13 is the harness itself);
+    Stream SE adds the SE.9 self-evolution benchmark = 15.
     """
-    assert len(_RUNNERS) == 14
+    assert len(_RUNNERS) == 15
     seen = {r.capability for r in _RUNNERS}
     assert seen == {
         "J.1_plan_execute",
@@ -40,19 +39,21 @@ def test_runner_registry_has_fourteen_capabilities() -> None:
         "J.12_learning",
         "J.14_per_user_isolation",
         "J.15_persistent_volume",
+        "SE.9_self_evolution",
     }
 
 
 @pytest.mark.asyncio
-async def test_run_baseline_produces_fourteen_pass(tmp_path: Path) -> None:
-    """J.12 closeout — all 14 shipped capabilities PASS, none DEFERRED."""
+async def test_run_baseline_produces_fifteen_pass(tmp_path: Path) -> None:
+    """SE-9 closeout — all 15 shipped capabilities PASS, none DEFERRED."""
     out = tmp_path / "baseline.yaml"
     reports = await run_baseline(out_path=out)
 
     pass_caps = sorted(c for c, r in reports.items() if r.status == "PASS")
     deferred_caps = sorted(c for c, r in reports.items() if r.status == "DEFERRED")
     # ``sorted()`` is lexicographic — "J.10" < "J.11" < "J.1_" because
-    # '0' < '1' < '_' at the fourth character.
+    # '0' < '1' < '_' at the fourth character; "SE.*" (uppercase 'S') sorts
+    # after every "J.*".
     assert pass_caps == [
         "J.10_trigger",
         "J.11_model_routing",
@@ -68,6 +69,7 @@ async def test_run_baseline_produces_fourteen_pass(tmp_path: Path) -> None:
         "J.7_skill",
         "J.8_hitl",
         "J.9_artifact",
+        "SE.9_self_evolution",
     ]
     assert deferred_caps == []
     assert all(r.status != "FAIL" for r in reports.values())
