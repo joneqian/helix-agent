@@ -45,6 +45,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
 from helix_agent.common.observability import helix_counter, helix_histogram
+from helix_agent.common.skill_run_usage import SkillRunUsageRecorder
 from helix_agent.persistence import ApprovalStore
 from helix_agent.protocol import (
     ApprovalRecord,
@@ -226,6 +227,7 @@ async def run_agent(
     audit_logger: AuditLogger | None = None,
     stream_mode: str = DEFAULT_STREAM_MODE,
     trajectory_recorder: TrajectoryRecorder | None = None,
+    skill_run_usage_recorder: SkillRunUsageRecorder | None = None,
     approval_store: ApprovalStore | None = None,
     event_store: RunEventStore | None = None,
 ) -> None:
@@ -383,6 +385,11 @@ async def run_agent(
                 record,
                 outcome="cancelled" if final is RunStatus.INTERRUPTED else "success",
             )
+            _dispatch_skill_run_usage(
+                skill_run_usage_recorder,
+                record,
+                outcome="cancelled" if final is RunStatus.INTERRUPTED else "success",
+            )
 
     except RunCancelledError:
         # A node surfaced cooperative cancellation mid-step (E.15) — a
@@ -401,6 +408,7 @@ async def run_agent(
         _dispatch_trajectory(
             trajectory_recorder, graph, effective_config, record, outcome="cancelled"
         )
+        _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="cancelled")
     except asyncio.CancelledError:
         # Task-level cancellation (event-loop shutdown / explicit
         # task.cancel()). The cooperative abort_event path above is the
@@ -446,6 +454,7 @@ async def run_agent(
         _dispatch_trajectory(
             trajectory_recorder, graph, effective_config, record, outcome="max_steps"
         )
+        _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="max_steps")
     except Exception as exc:
         session_outcome = "error"
         await run_manager.set_status(run_id, RunStatus.ERROR, error=str(exc))
@@ -469,6 +478,7 @@ async def run_agent(
             status="error",
         )
         _dispatch_trajectory(trajectory_recorder, graph, effective_config, record, outcome="failed")
+        _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="failed")
     finally:
         # Stream M Gate — emit on every terminal path. Always synchronous
         # so the ``asyncio.CancelledError`` teardown path (no await) still
@@ -496,6 +506,10 @@ _BACKGROUND_TRAJECTORY_TASKS: set[asyncio.Task[None]] = set()
 #: its own errors; this deadline guards against an unrecoverably-slow
 #: ObjectStore put dragging the run's terminal path or piling up tasks.
 _TRAJECTORY_DISPATCH_TIMEOUT_S: float = 5.0
+
+#: Strong refs to in-flight skill-run-usage dispatch tasks (Stream SE,
+#: SE-7d-3b-ii) — same GC guard as the trajectory tasks.
+_BACKGROUND_SKILL_USAGE_TASKS: set[asyncio.Task[None]] = set()
 
 
 def _dispatch_trajectory(
@@ -562,6 +576,57 @@ async def _record_trajectory_safe(
             "run_agent.trajectory_dispatch_failed run_id=%s outcome=%s",
             record.run_id,
             outcome,
+        )
+
+
+def _dispatch_skill_run_usage(
+    recorder: SkillRunUsageRecorder | None,
+    record: RunRecord,
+    *,
+    outcome: TrajectoryOutcome,
+) -> None:
+    """Stream SE (SE-7d-3b-ii) — fire-and-forget ``skill_run_usage`` emit.
+
+    One row per distilled skill version bound into this run, tagged with the
+    terminal ``outcome``, so the rollback monitor can attribute regressions.
+    No-op when no recorder is wired or no distilled skill was bound. Returns
+    immediately; the write happens in a background task with a hard timeout so
+    a slow store cannot stall the run's terminal path.
+    """
+    if recorder is None or not record.bound_distilled_skills:
+        return
+    task = asyncio.create_task(_record_skill_run_usage_safe(recorder, record, outcome=outcome))
+    _BACKGROUND_SKILL_USAGE_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_SKILL_USAGE_TASKS.discard)
+
+
+async def _record_skill_run_usage_safe(
+    recorder: SkillRunUsageRecorder,
+    record: RunRecord,
+    *,
+    outcome: TrajectoryOutcome,
+) -> None:
+    """Background body for :func:`_dispatch_skill_run_usage`."""
+    try:
+        async with asyncio.timeout(_TRAJECTORY_DISPATCH_TIMEOUT_S):
+            for skill in record.bound_distilled_skills:
+                await recorder.record(
+                    skill_id=skill.skill_id,
+                    skill_version=skill.skill_version,
+                    tenant_id=record.tenant_id,
+                    agent_name=skill.agent_name,
+                    thread_id=record.thread_id,
+                    outcome=outcome,
+                )
+    except TimeoutError:
+        logger.warning(
+            "run_agent.skill_run_usage_timeout run_id=%s outcome=%s", record.run_id, outcome
+        )
+    except Exception:
+        # The recorder swallows its own errors; this is the belt-and-braces
+        # guard. Best-effort by design — never fail the run's terminal path.
+        logger.exception(
+            "run_agent.skill_run_usage_failed run_id=%s outcome=%s", record.run_id, outcome
         )
 
 
