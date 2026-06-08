@@ -24,7 +24,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from control_plane.skill_rollback import RollbackAction
@@ -86,7 +86,7 @@ class RollbackMonitor:
 
     skill_store: SkillStore
     gate: RollbackGate
-    config: RollbackMonitorConfig = RollbackMonitorConfig()
+    config: RollbackMonitorConfig = field(default_factory=RollbackMonitorConfig)
     clock: Callable[[], datetime] = _utcnow
     interval_s: int = 3600
 
@@ -183,6 +183,8 @@ class RollbackMonitor:
         try:
             await self._task
         except asyncio.CancelledError:
+            # Expected: we just cancelled the loop task; awaiting it re-raises
+            # the cancellation. Swallow it — clean shutdown, nothing to handle.
             pass
         finally:
             self._task = None
