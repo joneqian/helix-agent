@@ -128,3 +128,11 @@ capabilities:
     score:
       pass_rate: 1.0
     status: PASS
+  SE.9_self_evolution:
+    metric_type: pass-rate
+    sample_size: 10
+    threshold:
+      pass_rate: 1.0
+    score:
+      pass_rate: 1.0
+    status: PASS

@@ -1,0 +1,29 @@
+# Stream SE (SE-9) — self-evolution benchmark dataset (Mini-ADR SE-A14).
+#
+# Deterministic scenarios proving the self-evolving-skill closed loop is real
+# (not benchmark-gaming) on fakes — no LLM, CI path. Each case maps to a
+# scenario runner in ``tools/eval/self_evolution.py``. The real LLM/graph path
+# is the SE-6/SE-4c integration seam (no model key in CI).
+name: se9_self_evolution_m0
+capability: SE.9_self_evolution
+cases:
+  - id: closed-loop-grounds
+    scenario: closed_loop_grounds
+  - id: held-out-success-up
+    scenario: held_out_success_up
+  - id: held-out-excludes-distill-source
+    scenario: held_out_excludes_distill_source
+  - id: no-gain-inconclusive
+    scenario: no_gain_inconclusive
+  - id: harmful-fails
+    scenario: harmful_fails
+  - id: promote-auto-when-grounded
+    scenario: promote_auto_when_grounded
+  - id: kill-switch-blocks-auto
+    scenario: kill_switch_blocks_auto
+  - id: rollback-on-regression
+    scenario: rollback_on_regression
+  - id: rollback-keeps-healthy
+    scenario: rollback_keeps_healthy
+  - id: replay-latency-within-budget
+    scenario: replay_latency_within_budget

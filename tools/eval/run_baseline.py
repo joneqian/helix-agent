@@ -54,6 +54,7 @@ import persistent_volume as _pv  # type: ignore[import-not-found]  # noqa: E402
 import plan_execute as _pe  # type: ignore[import-not-found]  # noqa: E402
 import rag as _rag  # type: ignore[import-not-found]  # noqa: E402
 import reflect as _rf  # type: ignore[import-not-found]  # noqa: E402
+import self_evolution as _se  # type: ignore[import-not-found]  # noqa: E402
 import skill as _sk  # type: ignore[import-not-found]  # noqa: E402
 import sub_agent as _sa  # type: ignore[import-not-found]  # noqa: E402
 import trigger as _trigger  # type: ignore[import-not-found]  # noqa: E402
@@ -212,6 +213,11 @@ async def _run_learning() -> CapabilityReport:
     return await _learning.evaluate_set(cases)
 
 
+async def _run_self_evolution() -> CapabilityReport:
+    cases = _se.load_cases(_DATASETS / "self_evolution" / "m0_baseline.yaml")
+    return await _se.evaluate_set(cases)
+
+
 # ---------------------------------------------------------------------------
 # Registry — single source of truth for what enters the baseline.
 # ---------------------------------------------------------------------------
@@ -326,6 +332,14 @@ _RUNNERS: tuple[_Runner, ...] = (
         "pass-rate",
         {"pass_rate": 0.90},
         _run_persistent_volume,
+        "",
+    ),
+    # Stream SE (SE-9, Mini-ADR SE-A14) — self-evolution closed-loop benchmark.
+    _Runner(
+        "SE.9_self_evolution",
+        "pass-rate",
+        {"pass_rate": 1.0},
+        _run_self_evolution,
         "",
     ),
 )
