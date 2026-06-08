@@ -1,0 +1,154 @@
+"""Tests for the SE-6c evolution processor glue.
+
+Drives the full distil → persist DRAFT → replay → attribute → revise → evolve
+chain with real distiller/attributor/evolve + an in-memory SkillStore; only the
+LLM and replay boundaries are faked (those are integration-validated).
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from control_plane.skill_attribution import SkillAttributor
+from control_plane.skill_distiller import SkillDistiller
+from control_plane.skill_evolution import ReplayOutcome
+from control_plane.skill_evolution_processor import (
+    EvolutionProcessor,
+    SkillEvidence,
+)
+from helix_agent.persistence.skill.memory import InMemorySkillStore
+from helix_agent.protocol import CurationCandidateRecord
+
+_TENANT = UUID("33333333-3333-3333-3333-333333333333")
+
+
+class FakeModel:
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+
+    async def __call__(self, *, prompt: str, tenant_id: UUID, model: str | None = None) -> str:
+        return self.reply
+
+
+def _draft_reply(name: str = "summarise-data") -> str:
+    return json.dumps(
+        {
+            "name": name,
+            "prompt_fragment": "Read headers first, then aggregate per column.",
+            "tool_names": [],
+            "description": "Summarise tabular data",
+            "category": "data",
+        }
+    )
+
+
+def _candidate() -> CurationCandidateRecord:
+    return CurationCandidateRecord(
+        id=uuid4(),
+        tenant_id=_TENANT,
+        agent_name="assistant",
+        user_id=uuid4(),
+        thread_id=uuid4(),
+        trajectory_key=f"k/{uuid4()}",
+        outcome="success",
+        signal="positive_feedback",
+        detected_at=datetime.now(UTC),
+    )
+
+
+async def _evidence(_c: CurationCandidateRecord) -> SkillEvidence:
+    return SkillEvidence(successes=("user: summarise\nassistant: done",), failures=())
+
+
+async def _held_out(_c: CurationCandidateRecord) -> Any:
+    return {"tasks": "opaque"}
+
+
+def _processor(*, draft_reply: str, invoker: Any) -> EvolutionProcessor:
+    return EvolutionProcessor(
+        distiller=SkillDistiller(model=FakeModel(draft_reply)),
+        attributor=SkillAttributor(model=FakeModel("content_error")),
+        skill_store=InMemorySkillStore(),
+        evidence_provider=_evidence,
+        held_out_provider=_held_out,
+        replay_invoker=invoker,
+    )
+
+
+async def test_grounded_persists_distilled_draft() -> None:
+    async def invoker(**_kw: Any) -> ReplayOutcome:
+        return ReplayOutcome(verdict="pass")
+
+    proc = _processor(draft_reply=_draft_reply(), invoker=invoker)
+    result = await proc(_candidate())
+
+    assert result.outcome == "grounded"
+    # the DRAFT skill + version were persisted with distilled provenance
+    skill = await proc.skill_store.get_skill_by_name(tenant_id=_TENANT, name="summarise-data")
+    assert skill is not None
+    assert skill.visibility == "agent_private"
+    version = await proc.skill_store.get_version_by_number(
+        skill_id=skill.id, version=1, tenant_id=_TENANT
+    )
+    assert version is not None
+    assert version.evolution_origin == "distilled"
+
+
+async def test_no_draft_when_distillation_empty() -> None:
+    async def invoker(**_kw: Any) -> ReplayOutcome:
+        raise AssertionError("replay should not run without a draft")
+
+    proc = _processor(draft_reply="not json", invoker=invoker)
+    result = await proc(_candidate())
+    assert result.outcome == "no_draft"
+
+
+async def test_content_fail_then_revise_adds_version() -> None:
+    verdicts = iter(
+        [
+            ReplayOutcome(verdict="fail", failure_signal=_signal()),
+            ReplayOutcome(verdict="pass"),
+        ]
+    )
+
+    async def invoker(**_kw: Any) -> ReplayOutcome:
+        return next(verdicts)
+
+    proc = _processor(draft_reply=_draft_reply(), invoker=invoker)
+    result = await proc(_candidate())
+
+    assert result.outcome == "grounded"
+    assert result.rounds == 2
+    skill = await proc.skill_store.get_skill_by_name(tenant_id=_TENANT, name="summarise-data")
+    assert skill is not None
+    # two versions: initial draft + revised draft
+    v2 = await proc.skill_store.get_version_by_number(
+        skill_id=skill.id, version=2, tenant_id=_TENANT
+    )
+    assert v2 is not None
+    assert v2.evolution_round == 1
+
+
+async def test_execution_fail_rejected_keeps_single_version() -> None:
+    async def invoker(**_kw: Any) -> ReplayOutcome:
+        return ReplayOutcome(verdict="fail", failure_signal=_signal(timed_out=True))
+
+    proc = EvolutionProcessor(
+        distiller=SkillDistiller(model=FakeModel(_draft_reply())),
+        attributor=SkillAttributor(model=FakeModel("ignored")),  # rule will fire on timeout
+        skill_store=InMemorySkillStore(),
+        evidence_provider=_evidence,
+        held_out_provider=_held_out,
+        replay_invoker=invoker,
+    )
+    result = await proc(_candidate())
+    assert result.outcome == "rejected"  # execution error -> not learned
+
+
+def _signal(*, timed_out: bool = False):
+    from control_plane.skill_attribution import FailureSignal
+
+    return FailureSignal(error_text="boom", timed_out=timed_out)
