@@ -365,6 +365,9 @@ def build_runs_router() -> APIRouter:
             is_resume=bool(prior_runs),
             trace_id=trace_id,
         )
+        # SE-7d-3b-ii — carry the build-time distilled skills to the run's
+        # terminal hook so it can emit skill_run_usage for the rollback monitor.
+        run_record.bound_distilled_skills = built.bound_distilled_skills
         graph_input = {
             "messages": [
                 SystemMessage(content=built.system_prompt),
@@ -413,6 +416,7 @@ def build_runs_router() -> APIRouter:
                 approval_store=approvals,
                 # Stream H.3 PR 3 — durable SSE mirror.
                 event_store=runtime.run_event_store,
+                skill_run_usage_recorder=runtime.skill_run_usage_recorder,
             )
         )
         await runtime.run_manager.attach_task(run_id, worker)
@@ -735,6 +739,8 @@ def build_runs_router() -> APIRouter:
             is_resume=True,
             trace_id=trace_id,  # Mini-ADR H-9.5
         )
+        # SE-7d-3b-ii — carry build-time distilled skills to the terminal hook.
+        run_record.bound_distilled_skills = built.bound_distilled_skills
         config: RunnableConfig = {
             "configurable": {
                 "thread_id": str(thread_id),
@@ -757,6 +763,7 @@ def build_runs_router() -> APIRouter:
                 approval_store=approvals,
                 # Stream H.3 PR 3 — durable SSE mirror.
                 event_store=runtime.run_event_store,
+                skill_run_usage_recorder=runtime.skill_run_usage_recorder,
             )
         )
         await runtime.run_manager.attach_task(continuation_run_id, worker)

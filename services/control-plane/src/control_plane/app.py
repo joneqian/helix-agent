@@ -154,6 +154,7 @@ from control_plane.skill_curator import SkillCurator
 from control_plane.skill_evolution_limits import CircuitBreaker
 from control_plane.skill_evolution_worker import SkillEvolutionWorker
 from control_plane.skill_rollback_monitor import RollbackMonitor
+from control_plane.skill_run_usage_recorder import StoreSkillRunUsageRecorder
 from control_plane.subagent_runtime import make_child_agent_builder
 from control_plane.tenancy import TenantConfigService
 from control_plane.tenant_mcp_pool import TenantMcpPoolService
@@ -498,6 +499,13 @@ def create_app(
         run_store=resolved_run_store,
         run_event_store=resolved_run_event_store,
     )
+    # SE-7d-3b-ii — wire run-end skill_run_usage emission (feeds the rollback
+    # monitor). Gated with the monitor: one flag controls the whole SE-7d data
+    # path. Cheap — most runs bind zero distilled skills, so the emit is a no-op.
+    if resolved_settings.enable_skill_rollback_monitor:
+        resolved_agent_runtime.skill_run_usage_recorder = StoreSkillRunUsageRecorder(
+            store=resolved_skill_store
+        )
     # Late-bound PII resolver: lets the audit logger reference
     # tenant_config without forcing it to exist yet (D.2 cycle break).
     pii_resolver = TenantConfigPiiResolver()

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
+from helix_agent.common.skill_run_usage import BoundDistilledSkill
 from helix_agent.runtime.runs.schemas import (
     TERMINAL_RUN_STATUSES,
     DisconnectMode,
@@ -62,6 +63,11 @@ class RunRecord:
     #: create time by the caller. ``None`` for auto-triggered runs
     #: (scheduler / J.13a curation) where no caller-bound trace exists.
     trace_id: str | None = None
+    #: Stream SE (SE-7d-3b-ii) — distilled skill versions bound into this run's
+    #: agent at build time (from ``BuiltAgent.bound_distilled_skills``). The SSE
+    #: worker emits one ``skill_run_usage`` row per entry at the run's terminal
+    #: hook so the rollback monitor can attribute the outcome. Not serialized.
+    bound_distilled_skills: tuple[BoundDistilledSkill, ...] = ()
 
 
 def _record_to_info(record: RunRecord) -> RunInfo:

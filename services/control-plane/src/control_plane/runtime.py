@@ -31,6 +31,7 @@ from control_plane.tenant_scope import bypass_rls_session
 from control_plane.user_mcp_oauth_pool import UserMcpOAuthPoolProvider
 from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
 from helix_agent.common.skill_activity import SkillActivityRecorder
+from helix_agent.common.skill_run_usage import SkillRunUsageRecorder
 from helix_agent.common.url_validation import validate_remote_url
 from helix_agent.persistence import ArtifactStore, KnowledgeStore
 from helix_agent.persistence.skill import SkillStore
@@ -134,6 +135,10 @@ class AgentRuntime:
     #: Used only to decide whether a build must be per-user (the user has ≥1
     #: connected OAuth connector); the builder re-resolves it (cheap, cached).
     user_oauth_pool_provider: UserMcpOAuthPoolProvider | None = None
+    #: Stream SE (SE-7d-3b-ii) — emits ``skill_run_usage`` at each run's terminal
+    #: hook (one row per distilled skill bound), feeding the rollback monitor.
+    #: ``None`` disables emission (the monitor then stays a safe no-op).
+    skill_run_usage_recorder: SkillRunUsageRecorder | None = None
     _cache: dict[_CacheKey, BuiltAgent] = field(default_factory=dict, repr=False)
     #: Extra per-tenant cache invalidators fanned out by ``invalidate_tenant``
     #: — the sub-agent builder registers its own cache here (Stream V-D, audit

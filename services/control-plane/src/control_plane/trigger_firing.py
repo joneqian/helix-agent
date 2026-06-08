@@ -200,6 +200,8 @@ async def fire_trigger(
         user_id=trigger.user_id,
         is_resume=False,
     )
+    # SE-7d-3b-ii — carry build-time distilled skills to the terminal hook.
+    run_record.bound_distilled_skills = built.bound_distilled_skills
     seed = trigger.config.get("seed_input")
     seed_text = (
         seed
@@ -248,6 +250,7 @@ async def fire_trigger(
             approval_store=approval_store,
             # Stream H.3 PR 3 — durable SSE mirror.
             event_store=runtime.run_event_store,
+            skill_run_usage_recorder=runtime.skill_run_usage_recorder,
         )
     )
     await runtime.run_manager.attach_task(run_id, worker)
