@@ -50,6 +50,7 @@ import {
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
 import { PageHeader } from "../components/PageHeader";
+import { SkillEvolutionKillSwitch } from "../components/SkillEvolutionKillSwitch";
 
 const { Text } = Typography;
 
@@ -336,6 +337,7 @@ export function SkillsList() {
         subtitle={t("skills.subtitle")}
         actions={
           <>
+            <SkillEvolutionKillSwitch />
             {isCrossTenant && (
               <Tag icon={<Globe2 size={12} strokeWidth={1.5} />} color="purple" data-testid="skills-cross-banner">
                 {t("skills.cross_tenant_banner")}

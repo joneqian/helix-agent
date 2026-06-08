@@ -60,7 +60,9 @@ import {
 import { useAuth } from "../auth/AuthContext";
 import { AddFileModal } from "./skill_detail/AddFileModal";
 import { FileEditor } from "./skill_detail/FileEditor";
+import { EvalEvidencePanel } from "./skill_detail/EvalEvidencePanel";
 import { GovernancePanel } from "./skill_detail/GovernancePanel";
+import { LineagePanel } from "./skill_detail/LineagePanel";
 import { FileTree, SKILL_MD_PATH } from "./skill_detail/FileTree";
 import { MetadataPanel } from "./skill_detail/MetadataPanel";
 import {
@@ -356,6 +358,7 @@ export function SkillDetail() {
               style={{ width: 160 }}
               loading={statusSubmitting}
               disabled={statusSubmitting}
+              aria-label={t("skills.change_status")}
               data-testid="skill-status-select"
               options={STATUS_OPTIONS.map((s) => {
                 const isActiveBlocked = s === "active" && isLatestHighRisk && !isAdmin;
@@ -383,6 +386,8 @@ export function SkillDetail() {
       )}
 
       <GovernancePanel skill={skill} isAdmin={isAdmin} onChanged={refresh} />
+      <EvalEvidencePanel skillId={skill.id} />
+      <LineagePanel skillId={skill.id} />
 
       <Card size="small" style={{ marginBottom: 16 }} data-testid="skill-version-bar">
         <Space size={12} wrap>
@@ -409,6 +414,7 @@ export function SkillDetail() {
               }
             }}
             style={{ minWidth: 220 }}
+            aria-label={t("skills.detail_version_picker_label")}
             data-testid="skill-version-picker"
             options={versions.map((v) => ({
               value: v.version,

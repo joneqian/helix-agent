@@ -1078,6 +1078,33 @@ export interface TranslationKeys {
     no_version_to_propose: string;
     filter_visibility: string;
     filter_visibility_all: string;
+    eval_title: string;
+    eval_empty: string;
+    eval_n_cases: string;
+    eval_aria: string;
+    eval_baseline: string;
+    eval_with_skill: string;
+    verdict_pass: string;
+    verdict_fail: string;
+    verdict_inconclusive: string;
+    lineage_title: string;
+    lineage_versions: string;
+    lineage_fork_aria: string;
+    origin_human: string;
+    origin_in_session: string;
+    origin_distilled: string;
+    kill_switch_engaged_toast: string;
+    kill_switch_released_toast: string;
+    kill_switch_confirm_title: string;
+    kill_switch_confirm_body: string;
+    kill_switch_engage: string;
+    kill_switch_hint: string;
+    kill_switch_halted: string;
+    kill_switch_active: string;
+    kill_switch_tenant_label: string;
+    kill_switch_global_label: string;
+    kill_switch_tenant_aria: string;
+    kill_switch_global_aria: string;
   };
 }
 
@@ -2198,6 +2225,34 @@ const en: TranslationKeys = {
     no_version_to_propose: "This skill has no published version to propose",
     filter_visibility: "Visibility filter",
     filter_visibility_all: "All visibility",
+    eval_title: "Replay evidence",
+    eval_empty: "No replay verification yet",
+    eval_n_cases: "{{n}} cases",
+    eval_aria: "baseline {{baseline}} vs with-skill {{skill}}",
+    eval_baseline: "baseline",
+    eval_with_skill: "with skill",
+    verdict_pass: "pass",
+    verdict_fail: "fail",
+    verdict_inconclusive: "inconclusive",
+    lineage_title: "Lineage",
+    lineage_versions: "Versions",
+    lineage_fork_aria: "fork lineage diagram",
+    origin_human: "human",
+    origin_in_session: "self-authored",
+    origin_distilled: "distilled",
+    kill_switch_engaged_toast: "Emergency stop engaged",
+    kill_switch_released_toast: "Emergency stop released",
+    kill_switch_confirm_title: "Engage emergency stop?",
+    kill_switch_confirm_body:
+      "Auto-promotion of new skills is degraded to human review until released.",
+    kill_switch_engage: "Engage",
+    kill_switch_hint: "Persistent emergency stop for auto-promotion",
+    kill_switch_halted: "Auto-evolution halted",
+    kill_switch_active: "Auto-evolution active",
+    kill_switch_tenant_label: "Tenant",
+    kill_switch_global_label: "Global",
+    kill_switch_tenant_aria: "Toggle tenant auto-evolution emergency stop",
+    kill_switch_global_aria: "Toggle global auto-evolution emergency stop",
   },
 };
 
