@@ -41,6 +41,7 @@ from control_plane.tenant_scope import (
     CrossTenant,
     SingleTenant,
     applied_scope,
+    bypass_rls_session,
     ensure_tenant_scope,
 )
 from helix_agent.common.observability import current_trace_id_hex
@@ -53,6 +54,8 @@ from helix_agent.persistence import (
 from helix_agent.protocol import (
     AuditAction,
     AuditResult,
+    KillSwitch,
+    KillSwitchScope,
     PromoteRequestStatus,
     SkillEvalResult,
     SkillPromoteRequest,
@@ -73,6 +76,13 @@ class _DecideBody(BaseModel):
     """``POST /promote-requests/{rid}/approve|reject`` body."""
 
     decision_reason: str = Field(default="", max_length=1024)
+
+
+class _KillSwitchBody(BaseModel):
+    """``POST /kill-switch/engage|release`` body (SE-8-3)."""
+
+    scope: KillSwitchScope
+    reason: str = Field(default="", max_length=1024)
 
 
 def _promote_request_dict(req: SkillPromoteRequest) -> dict[str, Any]:
@@ -111,6 +121,27 @@ def _eval_result_dict(r: SkillEvalResult) -> dict[str, Any]:
         "high_risk": r.high_risk,
         "evolution_round": r.evolution_round,
         "created_at": r.created_at.isoformat(),
+    }
+
+
+def _kill_switch_dict(sw: KillSwitch | None) -> dict[str, Any] | None:
+    if sw is None:
+        return None
+    return {
+        "id": str(sw.id),
+        "scope": sw.scope,
+        "tenant_id": str(sw.tenant_id) if sw.tenant_id is not None else None,
+        "engaged": sw.engaged,
+        "reason": sw.reason,
+        "engaged_by_user_id": (
+            str(sw.engaged_by_user_id) if sw.engaged_by_user_id is not None else None
+        ),
+        "engaged_at": sw.engaged_at.isoformat() if sw.engaged_at is not None else None,
+        "released_by_user_id": (
+            str(sw.released_by_user_id) if sw.released_by_user_id is not None else None
+        ),
+        "released_at": sw.released_at.isoformat() if sw.released_at is not None else None,
+        "updated_at": sw.updated_at.isoformat(),
     }
 
 
@@ -334,6 +365,113 @@ def build_skill_evolution_router() -> APIRouter:
                 "versions": [_version_dict(v) for v in versions],
             },
         )
+
+    # ------------------------------------------------ kill-switch (SE-8-3)
+
+    @router.get("/kill-switch", response_model=None)
+    async def get_kill_switch(
+        request: Request,
+        store: Annotated[SkillStore, Depends(_get_skill_store)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        tenant_id: Annotated[UUID | None, Query()] = None,
+    ) -> JSONResponse:
+        scope = await _single_scope(request, tenant_id, audit, "GET .../kill-switch")
+        async with applied_scope(scope):
+            tenant_sw = await store.get_kill_switch(scope="tenant", tenant_id=scope.tenant_id)
+        # The global row is NULL-tenant — read it under bypass (a tenant-scoped
+        # session can't see it). Read-only for a tenant admin; engaging it is
+        # system_admin-only (see engage/release below).
+        async with bypass_rls_session():
+            global_sw = await store.get_kill_switch(scope="global", tenant_id=None)
+        effective = bool(
+            (global_sw is not None and global_sw.engaged)
+            or (tenant_sw is not None and tenant_sw.engaged)
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "global": _kill_switch_dict(global_sw),
+                "tenant": _kill_switch_dict(tenant_sw),
+                "effective_halted": effective,
+            },
+        )
+
+    @router.post("/kill-switch/engage", response_model=None)
+    async def engage_kill_switch(
+        body: _KillSwitchBody,
+        request: Request,
+        store: Annotated[SkillStore, Depends(_get_skill_store)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        tenant_id: Annotated[UUID | None, Query()] = None,
+    ) -> JSONResponse:
+        return await _set_kill_switch(request, body, store, audit, tenant_id, engaged=True)
+
+    @router.post("/kill-switch/release", response_model=None)
+    async def release_kill_switch(
+        body: _KillSwitchBody,
+        request: Request,
+        store: Annotated[SkillStore, Depends(_get_skill_store)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        tenant_id: Annotated[UUID | None, Query()] = None,
+    ) -> JSONResponse:
+        return await _set_kill_switch(request, body, store, audit, tenant_id, engaged=False)
+
+    async def _set_kill_switch(
+        request: Request,
+        body: _KillSwitchBody,
+        store: SkillStore,
+        audit: AuditLogger,
+        tenant_id: UUID | None,
+        *,
+        engaged: bool,
+    ) -> JSONResponse:
+        actor = _actor_uuid(request)
+        action = (
+            AuditAction.SKILL_EVOLUTION_KILL_SWITCH_ENGAGED
+            if engaged
+            else AuditAction.SKILL_EVOLUTION_KILL_SWITCH_RELEASED
+        )
+        if body.scope == "global":
+            # The whole-platform stop is system_admin-only.
+            if not request.state.principal.is_system_admin:
+                raise HTTPException(
+                    status_code=403,
+                    detail="only a system admin may operate the global kill-switch",
+                )
+            async with bypass_rls_session():
+                sw = await store.set_kill_switch(
+                    switch_id=_new_uuid(),
+                    scope="global",
+                    tenant_id=None,
+                    engaged=engaged,
+                    reason=body.reason,
+                    actor_user_id=actor,
+                )
+            audit_tenant = request.state.principal.tenant_id  # home tenant for attribution
+        else:
+            scope = await _single_scope(request, tenant_id, audit, "POST .../kill-switch")
+            async with applied_scope(scope):
+                sw = await store.set_kill_switch(
+                    switch_id=_new_uuid(),
+                    scope="tenant",
+                    tenant_id=scope.tenant_id,
+                    engaged=engaged,
+                    reason=body.reason,
+                    actor_user_id=actor,
+                )
+            audit_tenant = scope.tenant_id
+        await audit_emit(
+            audit,
+            tenant_id=audit_tenant,
+            actor_id=getattr(request.state, "actor_id", "anonymous"),
+            action=action,
+            resource_type="skill_evolution_kill_switch",
+            resource_id=str(sw.id),
+            result=AuditResult.SUCCESS,
+            trace_id=current_trace_id_hex(),
+            details={"scope": body.scope},
+        )
+        return JSONResponse(status_code=200, content=_kill_switch_dict(sw))
 
     return router
 

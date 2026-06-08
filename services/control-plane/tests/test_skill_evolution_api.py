@@ -20,7 +20,7 @@ from control_plane.app import create_app
 from control_plane.audit import build_default_audit_logger
 from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
-from helix_agent.protocol import AuditAction, AuditQuery, SkillEvalResult
+from helix_agent.protocol import AuditAction, AuditQuery, Role, SkillEvalResult
 from tests.auth_fixtures import (
     TEST_AUDIENCE,
     TEST_ISSUER,
@@ -215,3 +215,73 @@ async def test_lineage_unknown_skill_404(setup: Setup) -> None:
     client, _, _ = setup
     r = await client.get(f"/v1/skill-evolution/skills/{uuid4()}/lineage")
     assert r.status_code == 404
+
+
+# ── kill-switch (SE-8-3) ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tenant_kill_switch_engage_release(setup: Setup) -> None:
+    client, _, audit_store = setup
+    # initially nothing engaged
+    g0 = (await client.get("/v1/skill-evolution/kill-switch")).json()
+    assert g0["effective_halted"] is False
+    assert g0["tenant"] is None and g0["global"] is None
+
+    # engage tenant scope
+    e = await client.post(
+        "/v1/skill-evolution/kill-switch/engage",
+        json={"scope": "tenant", "reason": "runaway evolution"},
+    )
+    assert e.status_code == 200, e.text
+    assert e.json()["engaged"] is True
+
+    g1 = (await client.get("/v1/skill-evolution/kill-switch")).json()
+    assert g1["effective_halted"] is True
+    assert g1["tenant"]["engaged"] is True
+
+    # release
+    r = await client.post("/v1/skill-evolution/kill-switch/release", json={"scope": "tenant"})
+    assert r.status_code == 200 and r.json()["engaged"] is False
+    g2 = (await client.get("/v1/skill-evolution/kill-switch")).json()
+    assert g2["effective_halted"] is False
+
+    actions = {x.action for x in (await audit_store.query(AuditQuery(tenant_id=_TENANT))).entries}
+    assert AuditAction.SKILL_EVOLUTION_KILL_SWITCH_ENGAGED in actions
+    assert AuditAction.SKILL_EVOLUTION_KILL_SWITCH_RELEASED in actions
+
+
+@pytest.mark.asyncio
+async def test_global_kill_switch_forbidden_for_tenant_admin(setup: Setup) -> None:
+    client, _, _ = setup
+    r = await client.post("/v1/skill-evolution/kill-switch/engage", json={"scope": "global"})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_global_kill_switch_system_admin() -> None:
+    audit_store = InMemoryAuditLogStore()
+    app = create_app(
+        settings=_settings(),
+        audit_logger=build_default_audit_logger(audit_store),
+        jwt_verifier=build_test_jwt_verifier(),
+        enable_reaper=False,
+    )
+    sysadmin = uuid4()
+    await app.state.role_binding_repo.create(
+        subject_type="user",
+        subject_id=sysadmin,
+        tenant_id=None,
+        role=Role.SYSTEM_ADMIN,
+        platform_scope=True,
+        granted_by="seed",
+    )
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_TENANT, subject=str(sysadmin))}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test", headers=headers) as c:
+        e = await c.post("/v1/skill-evolution/kill-switch/engage", json={"scope": "global"})
+        assert e.status_code == 200, e.text
+        assert e.json()["scope"] == "global" and e.json()["engaged"] is True
+        g = (await c.get("/v1/skill-evolution/kill-switch")).json()
+        assert g["global"]["engaged"] is True
+        assert g["effective_halted"] is True

@@ -155,6 +155,41 @@ async def test_audit_emitted_on_promote() -> None:
     assert len(written) == 1
 
 
+async def test_kill_switch_engaged_stays_draft() -> None:
+    # SE-8 (SE-A13c) — a persistent manual stop degrades even a fully eligible
+    # candidate to human review.
+    store = InMemorySkillStore()
+    skill_id = await _draft_skill(store)
+    await store.set_kill_switch(switch_id=uuid4(), scope="tenant", tenant_id=_TENANT, engaged=True)
+    gate = _gate(store)
+    decision = await gate.maybe_promote(
+        candidate=_candidate(),
+        skill_id=skill_id,
+        auto_promote_eligible=True,
+        high_risk=False,
+        now=_NOW,
+    )
+    assert decision.action is PromoteAction.HUMAN_REVIEW
+    assert "kill-switch" in decision.reason
+    assert await _status(store, skill_id) is SkillStatus.DRAFT
+
+
+async def test_global_kill_switch_halts_any_tenant() -> None:
+    store = InMemorySkillStore()
+    skill_id = await _draft_skill(store)
+    await store.set_kill_switch(switch_id=uuid4(), scope="global", tenant_id=None, engaged=True)
+    gate = _gate(store)
+    decision = await gate.maybe_promote(
+        candidate=_candidate(),
+        skill_id=skill_id,
+        auto_promote_eligible=True,
+        high_risk=False,
+        now=_NOW,
+    )
+    assert decision.action is PromoteAction.HUMAN_REVIEW
+    assert await _status(store, skill_id) is SkillStatus.DRAFT
+
+
 async def test_no_audit_when_not_promoted() -> None:
     store = InMemorySkillStore()
     skill_id = await _draft_skill(store)

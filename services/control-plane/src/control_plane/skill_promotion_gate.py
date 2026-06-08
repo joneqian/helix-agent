@@ -49,12 +49,17 @@ class PromotionGate:
     ) -> PromoteDecision:
         """Decide + (if AUTO_PROMOTE) flip the DRAFT to ACTIVE. Always grounded."""
         key = _scope_key(candidate.tenant_id, candidate.agent_name)
+        # SE-8 (SE-A13c) — persistent manual emergency stop. The worker runs
+        # cross-tenant (owner / bypass), so this reads the global NULL-tenant
+        # row alongside the candidate's tenant row.
+        evolution_halted = await self.skill_store.is_evolution_halted(tenant_id=candidate.tenant_id)
         decision = decide_promotion(
             grounded=True,
             auto_promote_eligible=auto_promote_eligible,
             high_risk=high_risk,
             breaker_open=self.breaker.is_open(key, now),
             within_rate_limit=self.rate_limiter.within_limit(key, now),
+            evolution_halted=evolution_halted,
         )
         if should_auto_promote(decision):
             await self.skill_store.set_status(
