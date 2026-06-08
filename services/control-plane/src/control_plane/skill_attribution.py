@@ -94,7 +94,7 @@ _ENV_MARKERS: tuple[str, ...] = (
     "permission denied",
     "eacces",
     "out of memory",
-    "oom",
+    "oomkilled",
     "no space left",
 )
 
