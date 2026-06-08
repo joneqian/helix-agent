@@ -94,7 +94,9 @@ jobs:
         run: uv sync --frozen
 
       - name: Run pytest (unit)
-        run: uv run pytest -v -m "not integration"
+        # --timeout: a hung test (e.g. uvicorn SSE shutdown) fails fast + names
+        # itself instead of hanging the job until the 10-min cancel.
+        run: uv run pytest -v -m "not integration" --timeout=120 --timeout-method=thread
 
   test-integration:
     name: Test (integration)
