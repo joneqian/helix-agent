@@ -433,11 +433,26 @@ SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(L
 
 ---
 
+## 9bis. SE-10 — 文本类 harness 组件进化扩展(借鉴 agentic-harness-engineering）
+
+把 SE 进化对象从「仅 skill」扩到三类**无执行风险文本组件**,全部复用同一 `SkillVersion` 载体 + with-vs-without 重放门 + 治理门。代码类组件(工具实现/中间件/子agent)**不进化**(红线)。
+
+- **C1 system_prompt 增量**(agent 行为补丁)· **C2 tool_description 补充**(澄清已绑定工具用法,纯文本)· **C3 memory_entry**(可复用长期记忆事实)。
+- **数据模型(SE-A15)**:`skill` 加 `component_type`(默认 `skill`,CHECK 四值)+ `target_tool_name`(⇔ `tool_description`),迁移 `0069_skill_component_type` 纯增量,无新表、无 RLS 变更。`Skill` DTO 加同名字段 + `ComponentType` Literal + 互斥校验。
+- **装配渲染(SE-A16)**:三类都注册为 skill ref,replay 注入维度(`spec.skills`)不变,`GraphReplayTaskRunner` 零改。`_load_skills` 按 `result.skill.component_type` 分流到三个 render——`<behavior-patch>` / `<tool-note tool="X">` / `<long-term-memory>` 三个**advisory 系统提示块**(与 `<skill>` 同 J-23 §15.6(c) 红线),**不**改 ToolSpec(比改工具描述更 injection-safe);文本组件不带 tools、不进 skill_view、但仍入 `resolved_versions` 供 SE-7 回滚覆盖。resolver 不带 `skill` 时回退 `skill`(向后兼容)。
+- **生成(in-session)**:3 个 builtin `note_behavior_patch` / `clarify_tool_usage` / `remember`,复用 `AuthorSkillTool` 全部纪律(U-22 扫描 / DRAFT / agent_private / provenance / audit);文本组件 tool_names 恒空 → 永不高危。审计复用 `SKILL_AUTHORED_BY_AGENT` + `component_type` detail(不增 AuditAction)。
+- **治理(SE-A17)**:**无需改 `decide_promotion`** —— 读现状代码确认:agent_private→tenant 的可见性提升本就走独立的 `skill_promote_request` 人审流(对所有 component_type 一致),C1「agent_private 内可自动 active、跨租户永人审」**已被现有两段式治理满足**;auto-active 仅作用于该 agent 自身 run(爆炸半径已受限)。(设计假设 age:原 SE-A17 以为要加 gate 分支,读码后证实冗余。)
+- **scope 边界(诚实)**:本 PR 交付 C1/C2/C3 的**数据/装配/in-session 生成/重放验证/治理**全链;Layer B 蒸馏产文本组件(distiller `component_type` 分流)留作 **SE-10b** 跟进(in-session 已覆盖三类生成,非能力缺失);SE-9 eval 加 component 场景同 SE-10b(重放门已 component-agnostic,渲染产 prompt delta 已单测)。
+- 验证:`test_skill_component_evolution.py`(6 测:3 builtin 落对 component_type + 3 render 分流 + 向后兼容);protocol/persistence round-trip;mypy/ruff 绿。
+
 ## 10. Mini-ADR 索引
 
 | ID | 决策 | 章节 |
 |---|---|---|
 | SE-A0 | 验证门单一收口:自动 active 必须有 pass 证据 | § 2 |
+| SE-A15 | SE-10 进化对象扩展=泛化 SkillVersion + `component_type`,不新建表(复用单一重放门) | § 9bis |
+| SE-A16 | 三类文本组件渲染为 advisory 系统提示块(behavior-patch/tool-note/long-term-memory),不改 ToolSpec;replay 维度不变 | § 9bis |
+| SE-A17 | C1 治理无需改 decide_promotion:跨租户人审已由现有 promote_request 流满足;auto-active 仅限 agent_private | § 9bis |
 | SE-A1 | 数据模型纯增量 + NULL-tenant RLS | § 4 |
 | SE-A2 | `skill_eval_result` 作 grounding 可溯账 | § 4.3 |
 | SE-A3 | SkillStore 演化 API + visibility 过滤 + §15.7 权限矩阵 | SE-2 |

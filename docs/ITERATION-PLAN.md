@@ -1075,6 +1075,14 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 > **Stream SE 整体收官** — SE-0 设计 / SE-1~7 自著+蒸馏+重放验证+归因+co-evolve+全自动护栏 / SE-8 admin API+UI / SE-9 基准+SLO 合并门。自进化 skill 从"人写静态启用"升级为"agent 自生成、被重放证据验证、有界自动演化、可治理可回滚可熔断"的一等能力。
 
+> **SE-10 ~ SE-15 借鉴增强（2026-06-08 起，源自 agentic-harness-engineering 对照）** — 6 个增量子项，设计见 [STREAM-SE-DESIGN](./streams/STREAM-SE-DESIGN.md)。三原则：泛化复用现有验证门 / 不新建并行子系统 / 守代码进化红线。
+- [x] **SE-10 文本类 harness 组件进化扩展**（本次，SE-A15~A17）：进化对象从「仅 skill」扩到三类无执行风险文本组件——C1 system_prompt 增量 / C2 tool_description 补充 / C3 memory_entry。`skill` 加 `component_type`+`target_tool_name`（迁移 0069 纯增量，无新表/RLS）；`Skill` DTO + `ComponentType` Literal + 互斥校验；3 store create_skill 透传。装配：`_load_skills` 按 component_type 分流渲染为 `<behavior-patch>`/`<tool-note>`/`<long-term-memory>` advisory 系统提示块（不改 ToolSpec，replay 维度不变，`GraphReplayTaskRunner` 零改）；文本组件入 resolved_versions 供回滚覆盖。in-session 3 builtin `note_behavior_patch`/`clarify_tool_usage`/`remember`（复用 AuthorSkill 全纪律，恒非高危）。治理：读码证实现有 promote_request 人审流已满足 C1 跨租户人审，`decide_promotion` 无需改。6 单测 + mypy/ruff 绿。**跟进 SE-10b**：Layer B 蒸馏产文本组件 + SE-9 eval component 场景（in-session 已覆盖三类生成，重放门已 component-agnostic）。
+- [ ] **SE-11 进化变更预测—自动证伪纪律**（SE-A18/A19）
+- [ ] **SE-12 分层带源失败报告**（SE-A20~A23）
+- [ ] **SE-13 进化前领域预研**（SE-A24~A28）
+- [ ] **SE-14 Best-of-N 候选多样性**（SE-A29~A33）
+- [x] **SE-15 harness 规范 + linter + profile 对账**（独立分支交付，SE-A34~A37）
+
 ---
 
 ## Phase M1 — 生产化（6-8 个月）
