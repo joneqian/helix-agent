@@ -433,26 +433,49 @@ SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(L
 
 ---
 
-## 9bis. SE-10 — 文本类 harness 组件进化扩展(借鉴 agentic-harness-engineering）
+## 10. agentic-harness-engineering 借鉴增强(SE-10 ~ SE-15)
 
-把 SE 进化对象从「仅 skill」扩到三类**无执行风险文本组件**,全部复用同一 `SkillVersion` 载体 + with-vs-without 重放门 + 治理门。代码类组件(工具实现/中间件/子agent)**不进化**(红线)。
+深度对照外部研究仓 `agentic-harness-engineering`(Terminal-Bench 2.0 #3,「模型冻结、进化 7 正交 harness 组件」)后,提炼 6 个增量子项。三原则:**泛化复用现有验证门、不新建并行子系统、守代码进化红线**(工具实现/中间件/子agent 代码不进化,强制人审)。完整设计见各子项小节;对账见 `docs/research/2026-06-08-hermes-vs-stream-l-harness-reconciliation.md`。
 
-- **C1 system_prompt 增量**(agent 行为补丁)· **C2 tool_description 补充**(澄清已绑定工具用法,纯文本)· **C3 memory_entry**(可复用长期记忆事实)。
-- **数据模型(SE-A15)**:`skill` 加 `component_type`(默认 `skill`,CHECK 四值)+ `target_tool_name`(⇔ `tool_description`),迁移 `0069_skill_component_type` 纯增量,无新表、无 RLS 变更。`Skill` DTO 加同名字段 + `ComponentType` Literal + 互斥校验。
-- **装配渲染(SE-A16)**:三类都注册为 skill ref,replay 注入维度(`spec.skills`)不变,`GraphReplayTaskRunner` 零改。`_load_skills` 按 `result.skill.component_type` 分流到三个 render——`<behavior-patch>` / `<tool-note tool="X">` / `<long-term-memory>` 三个**advisory 系统提示块**(与 `<skill>` 同 J-23 §15.6(c) 红线),**不**改 ToolSpec(比改工具描述更 injection-safe);文本组件不带 tools、不进 skill_view、但仍入 `resolved_versions` 供 SE-7 回滚覆盖。resolver 不带 `skill` 时回退 `skill`(向后兼容)。
-- **生成(in-session)**:3 个 builtin `note_behavior_patch` / `clarify_tool_usage` / `remember`,复用 `AuthorSkillTool` 全部纪律(U-22 扫描 / DRAFT / agent_private / provenance / audit);文本组件 tool_names 恒空 → 永不高危。审计复用 `SKILL_AUTHORED_BY_AGENT` + `component_type` detail(不增 AuditAction)。
-- **治理(SE-A17)**:**无需改 `decide_promotion`** —— 读现状代码确认:agent_private→tenant 的可见性提升本就走独立的 `skill_promote_request` 人审流(对所有 component_type 一致),C1「agent_private 内可自动 active、跨租户永人审」**已被现有两段式治理满足**;auto-active 仅作用于该 agent 自身 run(爆炸半径已受限)。(设计假设 age:原 SE-A17 以为要加 gate 分支,读码后证实冗余。)
-- **scope 边界(诚实)**:本 PR 交付 C1/C2/C3 的**数据/装配/in-session 生成/重放验证/治理**全链;Layer B 蒸馏产文本组件(distiller `component_type` 分流)留作 **SE-10b** 跟进(in-session 已覆盖三类生成,非能力缺失);SE-9 eval 加 component 场景同 SE-10b(重放门已 component-agnostic,渲染产 prompt delta 已单测)。
-- 验证:`test_skill_component_evolution.py`(6 测:3 builtin 落对 component_type + 3 render 分流 + 向后兼容);protocol/persistence round-trip;mypy/ruff 绿。
+| 子项 | 借鉴点 | 状态 |
+|---|---|---|
+| SE-10 | 进化对象从「仅 skill」扩到文本类组件(system_prompt 增量 / tool 描述 / 长期记忆),复用同一重放门 | ✅ 已落 |
+| SE-11 | 变更「预测—自动证伪」纪律(predicted_impact → verdict),叠加不替代回滚 | 设计待落 |
+| SE-12 | 分层 + 带源回链失败报告(Agent Debugger 式 overview/detail) | 设计待落 |
+| SE-13 | 进化前领域预研(冷启动 + KB/web → DRAFT 先验) | 设计待落 |
+| SE-14 | Best-of-N 候选多样性(策略 hint 分流 + winner 选举) | 设计待落 |
+| SE-15 | harness 规范 + linter + profile 对账 | ✅ 已落 |
 
-## 10. Mini-ADR 索引
+### SE-10 — 文本类 harness 组件进化扩展(Mini-ADR SE-A15 / A16 / A17)
+
+把 SE 进化对象从「仅 skill」扩到三类**无执行风险文本组件**(C1 system_prompt 增量 · C2 tool_description 补充 · C3 memory_entry),全部复用同一 `SkillVersion` 载体 + with-vs-without 重放门 + 治理门。代码类组件**不进化**(红线)。
+
+- **SE-A15 数据模型**:`skill` 加 `component_type`(CHECK 四值)+ `target_tool_name`(⇔ `tool_description`),迁移 `0069_skill_component_type` 纯增量无新表/RLS;`Skill` DTO + `ComponentType` Literal + 互斥校验。泛化 `SkillVersion` 不新建表(复用单一重放门)。
+- **SE-A16 装配渲染**:三类注册为 skill ref,replay 注入维度(`spec.skills`)不变,`GraphReplayTaskRunner` 零改;`_load_skills` 按 `result.skill.component_type` 分流渲染为 `<behavior-patch>`/`<tool-note>`/`<long-term-memory>` advisory 系统提示块(同 J-23 §15.6(c) 红线,**不改 ToolSpec**);文本组件不带 tools/不进 skill_view,但入 `resolved_versions` 供 SE-7 回滚;resolver 无 `skill` 回退 `skill`(向后兼容)。
+- **SE-A17 治理无需改 `decide_promotion`**:读码证实 agent_private→tenant 的可见性提升本走独立 `skill_promote_request` 人审流,C1 跨租户永人审已被现有两段式治理满足;auto-active 仅作用该 agent 自身 run。
+- in-session 3 builtin `note_behavior_patch`/`clarify_tool_usage`/`remember`(复用 AuthorSkill 全纪律,恒非高危)。**SE-10b 跟进**:Layer B 蒸馏产文本组件 + SE-9 eval component 场景。验证:`test_skill_component_evolution.py`(6 测)。
+
+### SE-F(SE-15)— harness 规范 + linter(Mini-ADR SE-A34 / A35 / A36 / A37)
+
+helix 是**声明式 harness**(`AgentSpec` manifest 装配成 `BuiltAgent`),非外部那种文件树式工作区。SE-15 把外部 HARNESS.md v1.0 的 7 组件**映射到 AgentSpec 字段**(规范 `docs/HARNESS-COMPLIANCE.md`),并补一个可执行校验器,覆盖 `model_validator` 表达不了的跨组件 / 命名 / 合规规则。
+
+- **SE-A34 映射而非照搬**:7 组件 ↔ AgentSpec(system_prompt+dynamic_context / tools / 工具注册 / middleware / skills / subagents / memory.long_term);不复制外部目录结构(声明式 vs 文件树是不同形态)。
+- **SE-A35 linter 只补 validator 覆盖不到的**:R1 schema 合规(error)/ R2 builtin∈KNOWN_BUILTINS(error)/ R3 启用的 HIGH_RISK_TOOLS ⊆ approval_required_tools(error,manifest 层映射 SE 高危永人审)/ R4 名 kebab(warn)/ R5 system_prompt 不嵌代码(warn,正交性)/ R6 vision 与视觉模型互斥(warn)/ R-prof profile 推荐块(warn)。误杀缓解:启发式归 warn,硬规则才 error。
+- **SE-A36 纯静态接 CI lint job**:`tools/harness/check_harness_compliance.py`(stdlib+pydantic+pyyaml),扫 `manifests/**` 的 `kind: Agent`。R2 需 orchestrator 取 `KNOWN_BUILTINS`,不可导入时**打印 notice 跳过**(不静默放过;CI 必装全量 workspace 故必跑)。不接 mypy/pytest scope。
+- **SE-A37 profile 复用思想不照搬工具**:`tools/harness/helix_profile.yaml`(对标外部 hermes/codex/openclaw profile 的「不同形态不同必填」思想);外部 `validate_harness.py`(文件树审计器)与 manifest 形态不符,**不进 CI**。
+
+验证:`tools/harness/test_harness_compliance.py`(15 测,各规则正/反例 + canonical manifest 合规自检,CI 自检证非误杀)。
+
+---
+
+## 11. Mini-ADR 索引
 
 | ID | 决策 | 章节 |
 |---|---|---|
 | SE-A0 | 验证门单一收口:自动 active 必须有 pass 证据 | § 2 |
-| SE-A15 | SE-10 进化对象扩展=泛化 SkillVersion + `component_type`,不新建表(复用单一重放门) | § 9bis |
-| SE-A16 | 三类文本组件渲染为 advisory 系统提示块(behavior-patch/tool-note/long-term-memory),不改 ToolSpec;replay 维度不变 | § 9bis |
-| SE-A17 | C1 治理无需改 decide_promotion:跨租户人审已由现有 promote_request 流满足;auto-active 仅限 agent_private | § 9bis |
+| SE-A15 | SE-10 进化对象扩展=泛化 SkillVersion + `component_type`,不新建表(复用单一重放门) | §10 SE-10 |
+| SE-A16 | 三类文本组件渲染为 advisory 系统提示块(behavior-patch/tool-note/long-term-memory),不改 ToolSpec;replay 维度不变 | §10 SE-10 |
+| SE-A17 | C1 治理无需改 decide_promotion:跨租户人审已由现有 promote_request 流满足;auto-active 仅限 agent_private | §10 SE-10 |
 | SE-A1 | 数据模型纯增量 + NULL-tenant RLS | § 4 |
 | SE-A2 | `skill_eval_result` 作 grounding 可溯账 | § 4.3 |
 | SE-A3 | SkillStore 演化 API + visibility 过滤 + §15.7 权限矩阵 | SE-2 |
@@ -471,6 +494,10 @@ SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(L
 | SE-A13c | 持久 kill-switch 专表 `skill_evolution_kill_switch`(scope global/tenant;补 in-process breaker 持久化缺口;喂 `decide_promotion` 作 halt 输入);与 archive(停单 skill)正交 | SE-8 |
 | SE-A13d | 前端不新建页/不加导航:丰富 Skills 列表(live vs latest + 可见性/来源/verdict/待审,筛"仅待审"=队列)+ SkillDetail 展开全貌 + 列表头 kill-switch 开关 | SE-8 |
 | SE-A14 | self-evolution 基准 + SLO 合并门 | SE-9 |
+| SE-A34 | harness 规范 = AgentSpec 的 7 组件映射,不照搬外部文件树目录 | SE-15 |
+| SE-A35 | linter 只补 model_validator 覆盖不到的跨组件/命名/合规规则(R1-R6+R-prof) | SE-15 |
+| SE-A36 | 纯静态脚本接 CI lint job;R2 缺 orchestrator 时打印 notice 跳过不静默 | SE-15 |
+| SE-A37 | profile 复用「不同形态不同必填」思想;外部 validate_harness.py 不进 CI | SE-15 |
 
 ---
 
