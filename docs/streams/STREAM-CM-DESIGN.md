@@ -8,7 +8,7 @@
 >
 > **零债收尾规则**（[memory:zero-tech-debt]）：每条交付收尾 6 条全过 —— 无 TODO / 测试达标 / 文档同步 / 可观测齐全 / CI 全绿 / bug 不遗留。
 >
-> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）详设已锁定；CM-4…CM-9 / CM-N 列入范围表，待各自 PR 时在本文件细化。
+> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）+ CM-4（reranker 接通，§6）详设已锁定；CM-5…CM-9 / CM-N 列入范围表，待各自 PR 时在本文件细化。
 
 ---
 
@@ -22,7 +22,7 @@
 | CM-1 | A1 | 运行时主循环工具失败无 grounded 恢复建议（SE-12 是离线 skill 进化，L-4 只覆盖文件 mutation） | 通用工具失败→结构化恢复 advisory 注入主循环 | P0 | CM-B1…B6（§3 详设） |
 | CM-2 | A2 | 无"保留最近 N 轮"廉价前置闸，轻溢出每次走 LLM 摘要 | `agent_node` compressor 前加滑窗截断（保 ToolCall↔ToolResult 配对） | P0 | CM-C1…C6（§4 详设） |
 | CM-3 | A3 | compressor 丢弃中段前无 flush，`memory_writeback` 只在 run 末 | 压缩前回调 → 复用 writeback 通道中途落盘 | P1 | CM-D1…D6（§5 详设） |
-| CM-4 | B5 | rerank_provider/model 配置预留但检索路径无 rerank 调用 | memory recall Hybrid 召回后接 cross-encoder rerank | P1 | 待细化 |
+| CM-4 | B5 | rerank_provider/model 配置预留但检索路径无 rerank 调用 | memory recall Hybrid 召回后接 cross-encoder rerank | P1 | CM-E1…E6（§6 详设） |
 | CM-5 | B6 | 超大工具结果 char-cap 截断丢弃，不可找回 | 超限结果存 artifact + 虚拟引用 + read 类豁免（"可恢复压缩"通用原则） | P1 | 待细化 |
 | CM-6 | B4 | 对称 RRF，无 MMR 去冗余、无时间衰减 | `memory/sql.py:retrieve()` RRF 后加 MMR + 时间衰减 | P1 | 待细化 |
 | CM-7 | B7 | `<context-summary>` 缺"背景非指令"强语义、无增量更新 | 结构化摘要条目 + 显式更新操作（A-MEM/Mem0 范式） | P2 | 待细化 |
@@ -576,7 +576,89 @@ graph_builder/builder.py  agent_node：调 compress 时若 pre_compaction_flush 
 
 ---
 
-## 6. 与既有 Stream 的衔接
+## 6. CM-4 详细设计 —— Reranker 接通长期记忆召回（"配置都摆好就差接线"）
+
+> **目标**：把已有的 cross-encoder reranker 接进长期记忆召回（J.3）——Hybrid（向量+全文+RRF）召回**更宽的候选**后，用 reranker 重排到 top-k，再注入上下文。映射框架报告修订③ B5（cross-encoder rerank 是 RAG 末段公认最高 ROI 一环，+33~40% 准确率 / 仅 +120ms；多跳查询 ROI 最强）。优先级由 P2 **提到 P1**。
+>
+> **核心事实（已源码核准）**：reranker 基建**已完整存在且已接入知识检索（J.5）**——`Reranker` Protocol + `LLMReranker` + `ResolvingReranker`/`DynamicResolvingReranker` + `resolve_reranker`（control-plane），`KnowledgeRetriever` 已"宽召回→rerank→top-k"。**唯一缺口**：J.3 长期记忆召回 `memory_recall_node` 直接返回 RRF top-k、未接 rerank。CM-4 = **复用同一 reranker 抽象与实例**接进记忆召回，**不新造任何 reranker**。
+
+### 6.1 关键约束（接缝核准结论，已源码核准）
+
+| 约束 | 事实 | file:line |
+|---|---|---|
+| **reranker 抽象已存在** | `Reranker` Protocol（`rerank(query, documents, top_k, tenant_id) -> list[int]`）+ `LLMReranker`（LLM 排序、解析失败回落输入序、绝不破检索） | `tools/knowledge.py:54-119` |
+| **知识检索已用 reranker（待镜像的范式）** | `KnowledgeRetriever`：宽召回 `recall_limit=20` → RRF fuse → `_rerank`（无 reranker 直接 fused[:limit]；有则 rerank 候选 content → 重排 top-k） | `tools/knowledge.py:122-187` |
+| **control-plane 已构造一个 reranker** | `reranker = DynamicResolvingReranker(...)` 已建并传给知识 retriever；读 live 平台 rerank 配置、无凭证降级到 fused 序 | `control-plane/app.py:834-840`；`runtime.py:541-573`（`resolve_reranker`/`DynamicResolvingReranker`） |
+| **记忆召回是唯一未接 rerank 的检索路径** | `memory_recall_node`：embed→`memory_store.retrieve(query_embedding, query_text, limit=top_k)`（内部 Hybrid+RRF）→ redact → 直接返回，**无 rerank** | `graph_builder/memory.py:187-219` |
+| **reranker 经 Env 注入（embedder 同款范式）** | `MemoryEnv{store, embedder, dlq, tenant_config_store}` 由 control-plane 构造注入 factory；embedder 即 `DynamicResolvingEmbedder`——reranker 应循同一注入路径加 `MemoryEnv.reranker` | `agent_factory.py:163-187`（MemoryEnv）、`app.py:862-869`（构造） |
+| **召回 best-effort、per-user gate** | recall 失败 log+继续（无记忆）；无 user_id no-op；rerank 接入须保持此契约（rerank 失败降级到 RRF 序，不丢全部记忆） | `graph_builder/memory.py:193-216` |
+| **rerank 抽象在 tools 层（可被 graph_builder 下依赖）** | `Reranker` 在 `tools/knowledge.py`，control-plane runtime 已从此处导入 → `graph_builder/memory.py` 导入 `Reranker` 是向下依赖、无环 | `tools/knowledge.py` 仅依赖 `tools/registry`+`llm`，不依赖 graph_builder |
+
+> **结论**：CM-4 = `make_memory_recall_node` 加可选 `reranker` 注入；召回**更宽候选**（`max(top_k, _MEMORY_RERANK_RECALL_LIMIT)`，仅当 reranker 存在）→ rerank 重排到 top_k → redact。`MemoryEnv.reranker` 字段 + factory 透传 + control-plane 把**已建的** `DynamicResolvingReranker` 一并传给 `MemoryEnv`（一行激活）。复用知识检索同一 reranker 抽象与实例，零新造。
+
+### 6.2 设计：宽召回 → rerank → top-k（镜像知识检索）
+
+```
+memory_recall_node（reranker 注入，可选）
+  embed(task) → memory_store.retrieve(limit = max(top_k, 20) if reranker else top_k)  ← 宽召回
+  └─ reranker 存在：reranker.rerank(query=task, documents=[m.content], top_k, tenant_id)
+       → 按返回 index 重排 → 取 top_k
+       （rerank 内部已 best-effort：LLMReranker 解析失败回落输入序；
+         ResolvingReranker 无凭证降级 fused 序；外再裹一层 → 失败回落 candidates[:top_k]）
+  └─ reranker 为 None：candidates[:top_k]（= 现状，零行为变更）
+  → redact 最终 top_k → recalled_memories
+```
+
+不变量：① reranker 为 None ⇒ **零行为变更**（仍 retrieve(top_k) 直接返回，不宽召回）；② rerank 在 **redact 前**（对原始 content 判相关性，redact 最终 top_k）；③ rerank **best-effort 降级到 RRF 序**（绝不因 rerank 失败丢全部记忆）；④ per-user gate / 召回 best-effort 契约不变；⑤ **复用知识检索同一 reranker 实例**（control-plane 一个 `DynamicResolvingReranker` 喂知识 + 记忆两路）。
+
+### 6.3 数据/协议变更
+
+1. **`graph_builder/memory.py`**：`make_memory_recall_node` 加可选 `reranker: Reranker | None = None`（从 `orchestrator.tools.knowledge` 导入 `Reranker`，向下依赖无环）；召回宽度 `recall_limit = max(top_k, _MEMORY_RERANK_RECALL_LIMIT)` 当 reranker 存在；新增 `_rerank_memories` 私有助手（镜像 `KnowledgeRetriever._rerank`，含 best-effort 回落 `candidates[:top_k]`）。`_MEMORY_RERANK_RECALL_LIMIT = 20`（对齐知识检索）。
+2. **`MemoryEnv`**（`agent_factory.py`）加 `reranker: Reranker | None = None` 字段（embedder 同款注入语义）。
+3. **factory `_build_memory_nodes`**：`make_memory_recall_node(..., reranker=env.reranker)` 透传。
+4. **control-plane `app.py`**：`MemoryEnv(..., reranker=reranker)`——`reranker`（`DynamicResolvingReranker`）已在 `:834` 为知识检索构造，CM-4 仅多传一处（一行激活，无新建 reranker）。
+5. **不改 `MemoryStore.retrieve` 契约**——宽召回只是传更大的 `limit`；不改 `Reranker` Protocol；不改 `MemoryItem`。
+6. **可观测**：`uplift_metrics` 加 `record_memory_rerank(*, outcome)`（`reranked`/`skipped`/`degraded`），与现有 `record_memory_retrieval` 并列。
+
+### 6.4 边界情况
+
+| 场景 | 处理 |
+|---|---|
+| reranker 为 None（未配置/无凭证降级 None） | 不宽召回、retrieve(top_k) 直接返回 → 现状，零行为变更 |
+| 候选数 ≤ top_k | rerank 仍可调（重排顺序），或直接返回——top_k 截断即全集，rerank 仅改序，调用无害 |
+| rerank 抛异常 | 外层 best-effort 捕获 → 回落 `candidates[:top_k]`（RRF 序），记 `degraded`；绝不丢全部记忆 |
+| reranker 内部无凭证（ResolvingReranker） | reranker 自身降级返回 fused 序 index → 等价不重排 |
+| 召回为空 | rerank 不调，返回空（现状） |
+| 取消（RunCancelledError） | rerank 在召回 try 内，cancel 照常 re-raise（不吞） |
+
+### 6.5 测试 & 验收（CM-4 Exit）
+
+- **unit（≥85%）**：`make_memory_recall_node` 注入 fake reranker（返回逆序 index）→ 召回结果按 rerank 序、截到 top_k；宽召回 limit 正确（reranker 存在取 `max(top_k,20)`、不存在取 top_k）；rerank 抛异常 → 回落 RRF 序不丢记忆；reranker=None → 与现状字节一致；rerank 在 redact 前。
+- **integration（真 graph）**：scripted reranker + InMemoryMemoryStore 多条记忆 → recall 注入的 `recalled_memories` 顺序由 reranker 决定；control-plane MemoryEnv 携带 reranker（PR2 验证传入）。
+- **零债 6 条**：无 TODO；§6 与实现一致；metric（`record_memory_rerank`）齐全；CI 8/8 + CodeQL 无新增 high；reranker=None 路径不回归（现有 memory recall 测试不改即过）。
+- **效益数字（诚实标注）**：+33~40% 是厂商级数字；helix 叠加增益（pgvector+RRF+rerank）业界无统一 benchmark，**自测留给 CM-N5（LongMemEval/LoCoMo）**，不在 CM-4 内声称具体百分比。
+
+### 6.6 Mini-ADR（CM-4 锁定）
+
+| ID | 决策 |
+|---|---|
+| **CM-E1** | **复用既有 `Reranker` 抽象（`tools/knowledge.py`），零新造**；control-plane 一个 `DynamicResolvingReranker` 实例同时喂知识检索（J.5）与记忆召回（J.3） |
+| **CM-E2** | **宽召回→rerank→top-k**，镜像 `KnowledgeRetriever`；仅当 reranker 存在才宽召回（`max(top_k,20)`），否则 retrieve(top_k) 直返（零行为变更） |
+| **CM-E3** | rerank **best-effort 降级到 RRF 序**：reranker 内部已回落（LLM 解析失败 / 无凭证），外再裹一层 → 失败回落 `candidates[:top_k]`，绝不因 rerank 丢全部记忆 |
+| **CM-E4** | reranker 经 **`MemoryEnv.reranker` 注入**（embedder 同款），factory 不构造、只透传；`None` → 无 rerank（现状） |
+| **CM-E5** | rerank 在 **redact 前**（对原始 content 判相关性，redact 最终 top_k）；per-user gate / 召回 best-effort 契约不变 |
+| **CM-E6** | 效益自测留给 **CM-N5**（LongMemEval/LoCoMo）；CM-4 不在文档声称具体增益百分比（厂商数字不横比，[memory:N5 纪律]） |
+
+### 6.7 PR 切分（CM-4）
+
+1. **CM-4 PR1 — 记忆召回接 rerank（orchestrator，CI 全测）**：`make_memory_recall_node` 加可选 `reranker` + 宽召回 + `_rerank_memories`（best-effort 回落）；`MemoryEnv.reranker` 字段；factory 透传；`record_memory_rerank` metric + unit/integration（fake reranker 重排 / 宽召回 limit / 降级不丢记忆 / None 零变更）。orchestrator 自洽可测。
+2. **CM-4 PR2 — control-plane 激活（last mile）**：`app.py` `MemoryEnv(..., reranker=reranker)`（复用 `:834` 已建的 `DynamicResolvingReranker`）+ 测试断言 MemoryEnv 携带 reranker + 文档标 done + ITERATION-PLAN 回填。
+
+> 每个 PR 在本 §6 基础上局部细化；ITERATION-PLAN 增 CM-4 backlog，ship 后回填 `[x]`+PR 号（[memory:iteration-plan-sync]）。
+
+---
+
+## 7. 与既有 Stream 的衔接
 
 - **Stream J**：复用 `user_workspace`（J.15 卷）、`memory_item`（J.3）、approval（J.8 pause→ingest 时机）、`update_plan`（K.8）。
 - **Stream L**：投影钩子在 agent_node/tools_node，与 L-1 cache prefix（system 冻结）、L-2 compressor（CM-2/3 在此之上）共存；recitation 放非 system 区不破 L-1。**L-4 mutation advisory 被 CM-1 收敛**（`failed_mutations`→`tool_failures`、`<mutation-advisory>`→`<recovery-advisory>`，mutation 校验作为 `mutation_not_landed` 一类保留），非并行；L-5 退款语义不动（失败工具调用照常计步）。
