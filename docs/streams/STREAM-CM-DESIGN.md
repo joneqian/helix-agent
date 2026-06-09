@@ -651,8 +651,8 @@ memory_recall_node（reranker 注入，可选）
 
 ### 6.7 PR 切分（CM-4）
 
-1. **CM-4 PR1 — 记忆召回接 rerank（orchestrator，CI 全测）**：`make_memory_recall_node` 加可选 `reranker` + 宽召回 + `_rerank_memories`（best-effort 回落）；`MemoryEnv.reranker` 字段；factory 透传；`record_memory_rerank` metric + unit/integration（fake reranker 重排 / 宽召回 limit / 降级不丢记忆 / None 零变更）。orchestrator 自洽可测。
-2. **CM-4 PR2 — control-plane 激活（last mile）**：`app.py` `MemoryEnv(..., reranker=reranker)`（复用 `:834` 已建的 `DynamicResolvingReranker`）+ 测试断言 MemoryEnv 携带 reranker + 文档标 done + ITERATION-PLAN 回填。
+1. **CM-4 PR1 — 记忆召回接 rerank（orchestrator，CI 全测）**（已实现）：`make_memory_recall_node` 加可选 `reranker` + 宽召回 `max(top_k,20)` + `_rerank_memories`（best-effort 回落 `candidates[:top_k]`）；`MemoryEnv.reranker` 字段；factory 透传 `env.reranker`；`record_memory_rerank{outcome=reranked/degraded}` + 5 unit（重排+截 top_k / 宽召回 limit / None 零变更 / 失败降级不丢记忆 / 空召回跳过）。1005 orchestrator + 302 common 回归绿。
+2. **CM-4 PR2 — control-plane 激活（last mile）**（已实现）：`app.py` `MemoryEnv(..., reranker=reranker)`（复用 `:834` 已建的 `DynamicResolvingReranker`，喂知识检索与记忆召回两路）+ orchestrator factory 透传测（`_build_memory_nodes` 把 `MemoryEnv.reranker` 传到 recall 节点、spy reranker 被调）+ 文档标 done + ITERATION-PLAN 回填。**→ CM-4 完成**。
 
 > 每个 PR 在本 §6 基础上局部细化；ITERATION-PLAN 增 CM-4 backlog，ship 后回填 `[x]`+PR 号（[memory:iteration-plan-sync]）。
 

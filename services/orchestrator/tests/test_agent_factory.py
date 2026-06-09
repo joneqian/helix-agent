@@ -637,6 +637,67 @@ async def test_build_agent_long_term_memory_without_env_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_memory_nodes_passes_reranker_to_recall() -> None:
+    """Stream CM-4 — ``MemoryEnv.reranker`` reaches the recall node, so a
+    wired reranker actually reorders long-term memory recall."""
+    from collections.abc import Sequence
+    from uuid import UUID, uuid4
+
+    from langchain_core.messages import HumanMessage
+
+    from helix_agent.protocol import MemoryItem
+    from orchestrator.agent_factory import _build_memory_nodes
+
+    tenant, user = uuid4(), uuid4()
+    store = InMemoryMemoryStore()
+    embedder = FakeEmbedder(dim=16)
+    [vec] = await embedder.embed(["seed"], tenant_id=tenant)
+    await store.write(
+        [
+            MemoryItem(
+                id=uuid4(),
+                tenant_id=tenant,
+                user_id=user,
+                kind="fact",
+                content="seeded",
+                embedding=vec,
+            )
+        ]
+    )
+
+    class _SpyReranker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def rerank(
+            self, *, query: str, documents: Sequence[str], top_k: int, tenant_id: UUID
+        ) -> list[int]:
+            del query, tenant_id
+            self.calls += 1
+            return list(range(len(documents)))[:top_k]
+
+    async def _dummy_llm(*, messages: object, tools: object) -> object:  # never called by recall
+        raise AssertionError("recall must not call the LLM")
+
+    spy = _SpyReranker()
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["memory"] = {"long_term": {}}
+    spec = AgentSpec.model_validate(doc)
+
+    recall, _writeback, _flush = _build_memory_nodes(
+        spec,
+        memory_env=MemoryEnv(store=store, embedder=embedder, reranker=spy),  # type: ignore[arg-type]
+        llm_caller=_dummy_llm,  # type: ignore[arg-type]
+    )
+    assert recall is not None
+    await recall(
+        {"messages": [HumanMessage(content="q")], "step_count": 0, "max_steps": 5},  # type: ignore[arg-type]
+        {"configurable": {"tenant_id": str(tenant), "user_id": str(user)}},
+    )
+    assert spy.calls == 1  # the reranker was invoked → passthrough wired
+
+
+@pytest.mark.asyncio
 async def test_build_agent_missing_key_raises() -> None:
     """Stream Y-2 — agent builds require a platform credential. With no
     ``provider_key_resolver`` (and the manifest ref ignored), the build fails."""
