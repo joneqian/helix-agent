@@ -1075,6 +1075,14 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 > **Stream SE 整体收官** — SE-0 设计 / SE-1~7 自著+蒸馏+重放验证+归因+co-evolve+全自动护栏 / SE-8 admin API+UI / SE-9 基准+SLO 合并门。自进化 skill 从"人写静态启用"升级为"agent 自生成、被重放证据验证、有界自动演化、可治理可回滚可熔断"的一等能力。
 
+> **SE-10 ~ SE-15 借鉴增强（2026-06-08 起，源自 agentic-harness-engineering 对照）** — 设计见 [STREAM-SE-DESIGN](./streams/STREAM-SE-DESIGN.md)。三原则：泛化复用现有验证门 / 不新建并行子系统 / 守代码进化红线。
+- [x] **SE-14 Best-of-N 候选多样性 substrate**（本次，SE-A31~A33）：`skill_best_of_n.py`（`DistillHint` prompt/tools/anchored + `BestOfNConfig` 默认 OFF + 纯逻辑 `pick_winner` 只选 pass、确定排序键 auto_eligible/tier/delta/-p/n + name 兜底、无 orchestrator 依赖）+ distiller `hint_text` 参（仅引导侧重不放宽 guard）。10 单测。**SE-14b 跟进 = processor fan-out 编排**（N 独立 DRAFT→各 replay→pick_winner→落选 archive→winner 进 evolve；需扩 ReplayOutcome + 重构 __call__，独立 PR 以免动现有 co-evolve 流）。
+- [x] **SE-11 进化变更预测—自动证伪纪律**（独立分支，SE-A18/A19）
+- [x] **SE-10 文本类 harness 组件进化扩展**（独立分支，SE-A15~A17）
+- [x] **SE-15 harness 规范 + linter + profile 对账**（独立分支，SE-A34~A37）
+- [ ] **SE-12 分层带源失败报告**（SE-A20~A23）
+- [ ] **SE-13 进化前领域预研**（SE-A24~A28）
+
 ---
 
 ## Phase M1 — 生产化（6-8 个月）

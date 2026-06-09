@@ -433,10 +433,22 @@ SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(L
 
 ---
 
+## 9quater. SE-14 — Best-of-N 候选多样性（借鉴 agentic-harness-engineering Best-of-N）
+
+co-evolve 从「单 draft 顺序精修」拓宽为「N 个不同切入角度并行草案 → 同一重放门选 winner → winner 再走有界 revise」。Best-of-N 拓宽 × co-evolve 加深,正交叠加,不新造判据。
+
+- **生成多样性(SE-A31)**:`DistillHint`(prompt_focus / tools_focus / anchored_examples)经 `distill(..., hint_text=)` 注入 `_build_prompt`,**仅引导侧重**,不放宽 `allowed_tools` 上限与 `_looks_too_specific` 两道硬 guard。
+- **winner 选择(SE-A32)**:纯逻辑 `skill_best_of_n.pick_winner(candidates)`,只在 `verdict=='pass'` 选,无 pass→None(回退单链,不造 winner);排序键 `(auto_promote_eligible, signal_tier rank, delta, -p_value, n_cases)`,末位 `name` 字典序兜底——完全确定可 CI 断言。无 orchestrator 依赖(守 control-plane↔orchestrator 边界),signal_tier/delta 缺失时降级 rank 0 仍稳健。
+- **关闭即默认(SE-A33)**:`BestOfNConfig.hints=()` = Best-of-N OFF,processor 走原单链不变(opt-in)。
+- **scope 边界(诚实)**:本 PR 交付 **substrate**——`skill_best_of_n.py`(DistillHint/BestOfNConfig/pick_winner,10 单测)+ distiller `hint_text` 参(diverse 生成)。**SE-14b 跟进 = processor fan-out 编排**:`EvolutionProcessor.__call__` 在 `evolve()` 前按 `hints` 生成 N 个独立 DRAFT skill(独立 lineage)→ 各 replay → `pick_winner` → 落选 `set_status(ARCHIVED)` → winner 种入 state 进 evolve;并发用 `asyncio.gather`+`Semaphore`,成本受 `RateLimiter`/`CircuitBreaker` 前置(breaker open→N 退化为 1)。**未在本 PR 接 fan-out 的原因(诚实)**:需扩 `ReplayOutcome` 暴露 GroundingDecision 数值 + 重构已被重测覆盖的 `__call__`,留独立 PR 以免动现有 co-evolve 流;substrate 本身完整可测。
+
 ## 10. Mini-ADR 索引
 
 | ID | 决策 | 章节 |
 |---|---|---|
+| SE-A31 | Best-of-N hint(prompt/tools/anchored)仅引导侧重,不放宽 distiller 两道 guard | § 9quater |
+| SE-A32 | winner 纯逻辑 pick_winner:只选 pass,确定排序键+name 兜底,无 orchestrator 依赖 | § 9quater |
+| SE-A33 | BestOfNConfig.hints=() 默认 OFF(opt-in);fan-out 编排=SE-14b | § 9quater |
 | SE-A0 | 验证门单一收口:自动 active 必须有 pass 证据 | § 2 |
 | SE-A1 | 数据模型纯增量 + NULL-tenant RLS | § 4 |
 | SE-A2 | `skill_eval_result` 作 grounding 可溯账 | § 4.3 |
