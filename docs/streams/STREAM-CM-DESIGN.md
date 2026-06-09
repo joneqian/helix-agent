@@ -153,9 +153,15 @@ run 结束（memory_writeback 后）
 - **漂移裁决**：ingest 时文件 vs DB 漂移 —— **DB 权威**，仅当文件存在合法显式编辑（diff vs `last_projection_hash` 且通过校验）才以 DB 事务回灌；解析失败/校验不过 ⇒ 丢弃文件改动 + 记 audit + 保留原文供人审查（不静默覆盖人的编辑：记 warn）。
 - **无锁**：per-(tenant,user) 单 warm session 已串行化；DB 写用事务兜底。
 
-### 2.7 N1 Recitation（并入 CM-0）
+### 2.7 N1 Recitation（已实现，CM-0 PR3）
 
-每 turn 在 `agent_node` 把当前 PLAN/TODO 的**紧凑摘要**（goal + 未完成 steps）注入上下文**尾部**（非 system，保 L-1 cache prefix 稳定），对抗 long-context lost-in-the-middle。纯 in-context，不触发文件 IO。与现有 `_inject_plan` 区别：recitation 放尾部且只放未完成项摘要，`_inject_plan` 是完整 plan。二者去重，避免重复占 token（CM-A7）。
+**关键现状**：尾部复述机制**已存在** —— `_inject_plan`（builder.py）每 turn 用 `render_plan(plan)` 把 plan append 到上下文**尾部**（非 system，保 L-1 cache prefix），这正是 Manus/Claude Code 的 recitation 范式。所以 N1 不是新加一个注入（会与 `_inject_plan` 重复，违反 CM-A7），而是**让这个已有的尾部复述带上进度**，使注意力聚焦在未完成步骤：
+
+- **`render_plan` 改 status-aware**：每步渲染 `- [ ]/[~]/[x] N. desc`（用 PR1 的 `PlanStep.status`），复述即进度。仅被 `_inject_plan` 消费，与 `planner.parse_plan` 独立，改格式安全。
+- **`update_plan` 支持每步 status**：steps 接受 string（→pending）或 `{description, status}` 对象，让 **agent 能标记进度**（否则 status 只有人改 PLAN.md 才变 → recitation 进度空转，是弱版）。这闭合"agent 标记进度 → recitation 显进度 → 注意力聚焦"的环。
+- **token gauge**：`helix_cm_recitation_chars`（gauge）观测每次复述字符数，盯 plan 膨胀。
+
+> 设计修正：原 §2.7 设想"新加一个未完成项摘要注入并与 _inject_plan 去重"。落地发现 `_inject_plan` 已做尾部复述，去重的正解 = 不新增注入、直接增强 `render_plan` 进度可见性（CM-A7 本意）。
 
 ### 2.8 边界情况
 
@@ -202,7 +208,7 @@ run 结束（memory_writeback 后）
 2. **CM-0 PR2a — 投影接线**（已实现）：真 `SandboxWorkspaceWriter`（在 `tools/file_ops.py`，包 `build_write_wrapper`/`run_in_sandbox`，结构化满足 `WorkspaceFileWriter`）+ `build_react_graph` 新增可选 `workspace_writer_factory`（per-turn 绑 ctx）+ `tools_node` return 前 best-effort 投影钩子（`_project_workspace_state`）+ `AgentState.last_projection_hash`（投影游标）+ `AuditAction.STATE_PROJECTED` 发射（`_emit_state_projected_audit`，resource_type=`user_workspace`）+ `helix_cm_projection_total{outcome}` + agent_factory gate（persistent_workspace ∧ supervisor_client）。**MEMORY.md 无需单独 run 末投影**——`recalled_memories` 在 state、tools_node 每 turn 投影、only-if-changed 保证只写一次。单测：SandboxWorkspaceWriter（RecordingSupervisorClient 真 snippet 往返）+ graph wiring（fake writer 驱动 build_react_graph）。
 3. **CM-0 PR2b-i — ingest 纯核心（CI 全测）**（已实现）：`render_plan_md` 改带 status checkbox 使 PLAN.md round-trippable + `parse_plan_md`（render 的精确逆）+ `WorkspaceFileReader` Protocol seam + `WorkspaceIngester.ingest_plan`（读 PLAN.md→parse→仅当 ≠ current 才返回候选；read 失败/parse 失败/无变更均 no-op，永不 raise）+ TODO.md/MEMORY.md 转只读（CM-A5b）+ unit（round-trip / 勾选编辑 / 无 goal 或无 step→None / 无变更 no-op）。**不接图**。
 4. **CM-0 PR2b-ii — ingest 接线**（已实现）：`SandboxWorkspaceReader`（`tools/file_ops.py`，包 `build_read_wrapper`/`run_in_sandbox`，not_found→None）+ `graph_builder/workspace_ingest.py:make_workspace_ingest_node`（entry-chain，planner 后 agent 前，每 ainvoke 一次=run 始/resume）+ `build_react_graph` 可选 `workspace_ingest_node` 参 + 注入扫描校验（`scan_for_threats(scope="strict")` 扫 goal+步骤描述，命中即拒、DB 权威）+ `AuditAction.STATE_INGESTED` 发射 + `helix_cm_ingest_total{outcome}` + agent_factory gate（同投影）。6 unit（SandboxWorkspaceReader 真 snippet 往返/not_found/io_error + graph wiring：人改回灌 / 无变更 no-op / 注入拒绝）。真 live-sandbox e2e 归 integration/手动（CI 无沙盒凭证，同 PR2a 边界）。
-5. **CM-0 PR3 — N1 recitation**：`agent_node` 尾部摘要注入 + 去重 + token gauge + unit。
+5. **CM-0 PR3 — N1 recitation**（已实现）：尾部复述机制已由 `_inject_plan` 提供 → PR3 让其**进度可见**：`render_plan` 改 status checkbox + `update_plan` 支持每步 status（agent 标记进度，闭合进度环）+ `helix_cm_recitation_chars` gauge + unit（render status / update_plan string|object status / 无效 status→pending）。**→ CM-0 全部完成**。
 
 > 每个 PR 在本 §2 基础上局部细化；ITERATION-PLAN 增 Stream CM backlog，ship 后回填 `[x]`+PR 号（[memory:iteration-plan-sync]）。
 

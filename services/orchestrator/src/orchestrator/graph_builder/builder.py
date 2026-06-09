@@ -63,7 +63,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
-from helix_agent.common.observability import helix_counter, helix_histogram
+from helix_agent.common.observability import helix_counter, helix_gauge, helix_histogram
 from helix_agent.common.uplift_metrics import record_memory_inject_mode
 from helix_agent.protocol import AuditAction, AuditEntry, AuditResult, MemoryItem, Plan
 from helix_agent.runtime.audit.logger import AuditLogger
@@ -147,6 +147,12 @@ _cm_projection_total = helix_counter(
     "helix_cm_projection_total",
     "Workspace state projections at the turn boundary (Stream CM-0).",
     ("outcome",),
+)
+#: Stream CM-0 (N1) — size (chars) of the most recent plan recitation injected
+#: into the prompt tail. Watches for plan-recitation bloat in long runs.
+_cm_recitation_chars = helix_gauge(
+    "helix_cm_recitation_chars",
+    "Characters of the plan recitation injected into the prompt tail (Stream CM-0 N1).",
 )
 
 #: Truncate raw exception strings before they go to the LLM. Avoids
@@ -611,7 +617,10 @@ def _inject_plan(messages: list[BaseMessage], plan: Plan) -> list[BaseMessage]:
     out of system into a tail HumanMessage so ``system`` stays
     build-once / replay-verbatim.
     """
-    return _append_tail_human_message(messages, render_plan(plan))
+    rendered = render_plan(plan)
+    # Stream CM-0 (N1) — gauge the recitation size to watch for plan bloat.
+    _cm_recitation_chars.set(len(rendered))
+    return _append_tail_human_message(messages, rendered)
 
 
 def _inject_memories(

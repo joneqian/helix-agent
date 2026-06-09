@@ -27,12 +27,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from helix_agent.protocol import Plan, PlanStep
+from helix_agent.protocol.plan import PlanStepStatus
 from orchestrator.tools.registry import ToolContext, ToolResult, ToolSpec
 
 logger = logging.getLogger(__name__)
+
+#: Stream CM-0 (N1) — valid per-step statuses the agent may set so the plan
+#: recitation reflects progress.
+_VALID_STATUSES: frozenset[str] = frozenset({"pending", "in_progress", "completed"})
+_STATUS_BOX = {"pending": " ", "in_progress": "~", "completed": "x"}
 
 #: Caps on plan size to keep the rendered system context bounded. The
 #: J.1 planner uses the same shape — keep these in step with
@@ -67,13 +73,27 @@ class UpdatePlanTool:
                 "properties": {
                     "steps": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": {
+                            "anyOf": [
+                                {"type": "string"},
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "description": {"type": "string"},
+                                        "status": {"enum": ["pending", "in_progress", "completed"]},
+                                    },
+                                    "required": ["description"],
+                                },
+                            ]
+                        },
                         "minItems": 1,
                         "maxItems": _MAX_STEPS,
                         "description": (
-                            "Ordered list of step descriptions for the "
-                            "revised plan. Each entry is a short imperative "
-                            "phrase the agent will execute in order."
+                            "Ordered list of steps for the revised plan. Each "
+                            "entry is either a short imperative description "
+                            "string, or an object {description, status} where "
+                            "status is pending / in_progress / completed — use "
+                            "the object form to mark progress as you go."
                         ),
                     },
                     "reason": {
@@ -114,12 +134,22 @@ class UpdatePlanTool:
         # blank plan.
         cleaned: list[PlanStep] = []
         for index, raw_step in enumerate(steps_raw, start=1):
-            description = str(raw_step).strip()
+            # Stream CM-0 (N1) — a step is either a bare description string
+            # (status defaults to pending) or a {description, status} object so
+            # the agent can mark progress; an invalid status falls back to
+            # pending rather than rejecting the whole replan.
+            status: PlanStepStatus = "pending"
+            if isinstance(raw_step, Mapping):
+                description = str(raw_step.get("description", "")).strip()
+                if raw_step.get("status") in _VALID_STATUSES:
+                    status = cast(PlanStepStatus, raw_step["status"])
+            else:
+                description = str(raw_step).strip()
             if not description:
                 continue
             if len(description) > _MAX_STEP_DESCRIPTION_CHARS:
                 description = description[:_MAX_STEP_DESCRIPTION_CHARS] + "…"
-            cleaned.append(PlanStep(id=str(index), description=description))
+            cleaned.append(PlanStep(id=str(index), description=description, status=status))
 
         if not cleaned:
             msg = "update_plan requires at least one non-empty step description"
@@ -130,7 +160,10 @@ class UpdatePlanTool:
         new_plan = Plan(goal=ctx.plan.goal, steps=tuple(cleaned))
         logger.info("update_plan.applied n_steps=%d reason=%r", len(cleaned), reason)
 
-        rendered = "\n".join(f"{step.id}. {step.description}" for step in cleaned)
+        rendered = "\n".join(
+            f"- [{_STATUS_BOX.get(step.status, ' ')}] {step.id}. {step.description}"
+            for step in cleaned
+        )
         # Stream L.L5 — internal-chain housekeeping. update_plan is a
         # tool the agent calls *between* real progress steps; charging
         # it against the user-visible iteration budget makes

@@ -113,14 +113,26 @@ def parse_plan(text: str, *, fallback_goal: str) -> Plan:
     )
 
 
+#: Stream CM-0 (N1) — step status → checkbox, so the per-turn recitation
+#: shows progress and the model's attention focuses on what is still pending.
+_STATUS_BOX = {"pending": " ", "in_progress": "~", "completed": "x"}
+
+
 def render_plan(plan: Plan) -> str:
-    """Render a :class:`Plan` as the system-context block the agent reads."""
+    """Render a :class:`Plan` as the tail-recitation block the agent reads each
+    turn (Stream J.1 + CM-0 N1). The status checkbox (``[ ]`` / ``[~]`` /
+    ``[x]``) keeps progress in recent attention so a long run does not lose
+    track of what is already done vs. still pending."""
     lines = ["## Execution plan", f"Goal: {plan.goal}", ""]
-    lines.extend(f"{index}. {step.description}" for index, step in enumerate(plan.steps, start=1))
+    lines.extend(
+        f"- [{_STATUS_BOX.get(step.status, ' ')}] {index}. {step.description}"
+        for index, step in enumerate(plan.steps, start=1)
+    )
     lines.append("")
     lines.append(
-        "Work through this plan step by step; adapt it if you discover "
-        "something that requires a different approach."
+        "Work through this plan step by step, marking steps done as you "
+        "complete them; adapt it if you discover something that requires a "
+        "different approach."
     )
     return "\n".join(lines)
 

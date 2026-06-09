@@ -104,6 +104,26 @@ def test_render_plan_lists_goal_and_numbered_steps() -> None:
     assert "1. do a" in rendered
 
 
+def test_render_plan_shows_status_checkboxes() -> None:
+    # Stream CM-0 (N1) — recitation reflects progress so attention focuses on
+    # what is still pending.
+    plan = Plan.model_validate(
+        {
+            "goal": "win",
+            "steps": [
+                {"id": "1", "description": "done step", "status": "completed"},
+                {"id": "2", "description": "active step", "status": "in_progress"},
+                {"id": "3", "description": "todo step"},  # pending
+            ],
+        }
+    )
+    rendered = render_plan(plan)
+    lines = rendered.splitlines()
+    assert any("[x] 1. done step" in line for line in lines)
+    assert any("[~] 2. active step" in line for line in lines)
+    assert any("[ ] 3. todo step" in line for line in lines)
+
+
 # ---------------------------------------------------------------------------
 # planner node
 # ---------------------------------------------------------------------------
