@@ -433,10 +433,26 @@ SE-0(本设计) ─► SE-1(数据模型) ─► SE-2(store) ─┬─► SE-3(L
 
 ---
 
+## 9quinquies. SE-13 — 进化前领域预研（借鉴 agentic-harness-engineering explore-agent）
+
+agent 进化前先研究领域(本租户知识库 + 可选公网),蒸馏成 DRAFT 先验喂生成器,补"直接从空白轨迹起步"缺口。
+
+- **触发(SE-A24)**:冷启动 + TTL——某 `(tenant, agent)` 首次进化时研究一次,缓存 `ttl_days`(默认 30;领域知识变化慢,每轮研究白烧 web 配额)。纯逻辑 `needs_research(existing, now, ttl)`。
+- **产物(SE-A25)**:DRAFT agent_private skill(`evolution_origin='distilled'`),**绝不自动 active**(守 SE-A0);是生成器先验,非运行期 active skill。每 agent 一个稳定名 `research_skill_name`(单先验,TTL 过期刷新版本)。
+- **输入(SE-A26)**:本租户 KB(SOP 即文档,无独立 SOP 服务)+ 可选 web(默认 off)。
+- **隔离(SE-A27)**:KB/web 都只读本租户;不跨租户、不用平台 key 代查;缺 web key → 仅 KB 降级 no-op。
+- **成本(SE-A28)**:冷启动+TTL(最大杠杆);web 默认 off + 结果上限;aux 综述一次;abstraction guard 拒含 UUID/长数字的过具体先验。
+- **实现**:`domain_research.py` `DomainResearcher`(KB/web/summary 三 Protocol 注入,CI fake)+ `DomainResearchConfig` + settings `enable_domain_research`/`..._web_search_enabled`/`..._ttl_days`(默认 off)。9 单测。
+- **scope 边界(诚实)**:DomainResearcher 产 DRAFT 先验 + gate + 持久化完整可测;**SE-13 wiring 跟进**=worker lifespan 注入真 `KnowledgeRetriever`/`WebSearchTool`/aux 适配器 + 把先验 summary 拼进 distill evidence(消费侧),归 integration(CI 无 model key),与 SE-6d「真接线 integration-gated、CI 用 fake」同模式。
+
 ## 10. Mini-ADR 索引
 
 | ID | 决策 | 章节 |
 |---|---|---|
+| SE-A24 | 领域预研触发=冷启动+TTL(非每轮);纯逻辑 needs_research | § 9quinquies |
+| SE-A25 | 预研产物=DRAFT agent_private 先验,绝不自动 active(守 SE-A0) | § 9quinquies |
+| SE-A26/27 | 输入=本租户 KB(+可选 web,默认 off);只读本租户不跨租户不用平台 key | § 9quinquies |
+| SE-A28 | 成本:冷启动+TTL+web 默认 off+结果上限+abstraction guard | § 9quinquies |
 | SE-A0 | 验证门单一收口:自动 active 必须有 pass 证据 | § 2 |
 | SE-A1 | 数据模型纯增量 + NULL-tenant RLS | § 4 |
 | SE-A2 | `skill_eval_result` 作 grounding 可溯账 | § 4.3 |
