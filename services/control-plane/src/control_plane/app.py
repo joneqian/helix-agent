@@ -866,6 +866,11 @@ def create_app(
                     # Capability Uplift Sprint #6 (Mini-ADR U-5) — recall
                     # node reads tenant_config.memory_recall_mode.
                     tenant_config_store=resolved_tenant_config_repo,
+                    # Stream CM-4 — the same DynamicResolvingReranker that backs
+                    # knowledge_search reorders long-term memory recall too. It
+                    # reads the live rerank config per call and degrades to the
+                    # RRF order when rerank is unconfigured.
+                    reranker=reranker,
                 )
                 # Stream J.4 — the ChildAgentBuilder lets a SubAgentTool
                 # resolve an agent_ref and recursively build the sub-agent;
