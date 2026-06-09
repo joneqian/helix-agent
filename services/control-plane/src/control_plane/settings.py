@@ -358,6 +358,14 @@ class Settings(BaseSettings):
     #: Rolling outcome window (days) per version for the regression test.
     skill_rollback_window_days: int = Field(default=7, gt=0)
 
+    #: SE-13 pre-evolution domain research (gated OFF by default). On cold start
+    #: of an agent's evolution, research the tenant KB (+ optionally public web)
+    #: and persist a DRAFT prior for the skill generator. ``web_search`` is a
+    #: separate, also-off toggle (cost + egress); priors are cached ``ttl_days``.
+    enable_domain_research: bool = Field(default=False)
+    domain_research_web_search_enabled: bool = Field(default=False)
+    domain_research_ttl_days: int = Field(default=30, gt=0)
+
     #: Max trajectories examined per curation sweep — caps a cycle's work.
     curation_worker_batch_size: int = Field(default=200, gt=0)
 
