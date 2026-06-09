@@ -91,7 +91,8 @@ class WorkspaceFileWriter(Protocol):
     """Writes one workspace file. The real implementation rides the warm
     sandbox ``write_file`` snippet (CM-A1); tests inject a fake."""
 
-    async def write(self, *, rel: str, content: str) -> None: ...
+    async def write(self, *, rel: str, content: str) -> None:
+        """Create/overwrite workspace-relative ``rel`` with ``content``."""
 
 
 @dataclass(frozen=True)
