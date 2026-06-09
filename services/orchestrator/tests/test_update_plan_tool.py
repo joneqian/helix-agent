@@ -122,3 +122,47 @@ async def test_update_plan_trims_step_descriptions() -> None:
     )
     plan = result.state_updates["plan"]
     assert plan.steps[0].description == "do thing"
+
+
+# ---------------------------------------------------------------------------
+# Stream CM-0 (N1) — per-step status so the agent can mark progress
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_plan_accepts_object_steps_with_status() -> None:
+    """Object-form steps let the agent set status; the recitation reflects it."""
+    tool = UpdatePlanTool()
+    result = await tool.call(
+        {
+            "steps": [
+                {"description": "read the spec", "status": "completed"},
+                {"description": "implement", "status": "in_progress"},
+                {"description": "review"},  # no status → pending
+            ],
+            "reason": "mark progress",
+        },
+        ctx=_ctx_with_plan(),
+    )
+    new_plan = result.state_updates["plan"]
+    assert [s.status for s in new_plan.steps] == ["completed", "in_progress", "pending"]
+
+
+@pytest.mark.asyncio
+async def test_update_plan_string_steps_default_to_pending() -> None:
+    """Backward compatible: bare string steps stay pending."""
+    tool = UpdatePlanTool()
+    result = await tool.call({"steps": ["one", "two"], "reason": "plain"}, ctx=_ctx_with_plan())
+    new_plan = result.state_updates["plan"]
+    assert all(s.status == "pending" for s in new_plan.steps)
+
+
+@pytest.mark.asyncio
+async def test_update_plan_invalid_status_falls_back_to_pending() -> None:
+    """A bogus status does not reject the replan — it degrades to pending."""
+    tool = UpdatePlanTool()
+    result = await tool.call(
+        {"steps": [{"description": "x", "status": "bogus"}], "reason": "r"},
+        ctx=_ctx_with_plan(),
+    )
+    assert result.state_updates["plan"].steps[0].status == "pending"
