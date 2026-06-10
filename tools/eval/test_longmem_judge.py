@@ -90,6 +90,8 @@ def test_locomo_verdict_substring_fallback() -> None:
     # The prompt forbids emitting both; ambiguity grades conservative.
     assert parse_locomo_verdict("CORRECT or WRONG") is False
     assert parse_locomo_verdict("") is False
+    # Malformed JSON falls back to the label word.
+    assert parse_locomo_verdict('{"label": broken} CORRECT') is True
 
 
 # ---------------------------------------------------------------------------

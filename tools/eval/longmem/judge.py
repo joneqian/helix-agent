@@ -166,10 +166,10 @@ def parse_locomo_verdict(reply: str) -> bool:
     if match is not None:
         try:
             label = json.loads(match.group(0)).get("label")
-            if isinstance(label, str):
-                return label.strip().upper() == "CORRECT"
         except json.JSONDecodeError:
-            pass
+            label = None  # malformed JSON — grade by the label word below
+        if isinstance(label, str):
+            return label.strip().upper() == "CORRECT"
     has_correct = "CORRECT" in reply.upper()
     has_wrong = "WRONG" in reply.upper()
     return has_correct and not has_wrong
