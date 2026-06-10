@@ -22,7 +22,6 @@ from helix_agent.runtime.cancellation import CancellationToken
 from orchestrator.graph_builder.memory import flush_messages_to_memory
 from orchestrator.tools.registry import ToolSpec
 
-_DIM = 4
 _EAST = (1.0, 0.0, 0.0, 0.0)
 _NEAR_EAST = (0.9, 0.43589, 0.0, 0.0)  # cosine vs _EAST = 0.9 ≥ 0.80
 _NORTH = (0.0, 1.0, 0.0, 0.0)  # cosine vs _EAST = 0.0 < 0.80
