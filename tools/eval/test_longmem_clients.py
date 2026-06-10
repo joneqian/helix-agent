@@ -234,7 +234,10 @@ async def test_cache_retries_throttle_shaped_400(
     cached = CachedEmbedder(_FlakyBackend(), model_key="m1", db_path=tmp_path / "emb.sqlite")
     vectors = await cached.embed(["hello"], tenant_id=uuid4())
     assert len(vectors) == 1
-    assert sleeps == [2.0, 4.0]
+    # Exponential backoff with +-25% jitter.
+    assert len(sleeps) == 2
+    assert 1.5 <= sleeps[0] <= 2.5
+    assert 3.0 <= sleeps[1] <= 5.0
 
 
 @pytest.mark.asyncio

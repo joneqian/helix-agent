@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import random
 import sqlite3
 import struct
 from collections.abc import Sequence
@@ -29,9 +30,13 @@ from uuid import UUID
 
 import httpx
 
-#: Throttle-shaped failures retry with exponential backoff (2s..60s);
-#: anything else re-raises immediately.
-_THROTTLE_MAX_RETRIES = 6
+#: Throttle-shaped failures retry with exponential backoff; anything else
+#: re-raises immediately. DashScope capacity throttling lasts MINUTES (a
+#: 6-retry/~2min window was exhausted in a real run, 2026-06-10 round 3,
+#: while the same batch succeeded once the window passed) — the total
+#: window must out-wait it: 10 retries capped at 120s ≈ 11 minutes.
+_THROTTLE_MAX_RETRIES = 10
+_THROTTLE_SLEEP_CAP_S = 120.0
 _THROTTLE_MARKERS = ("ServiceUnavailable", "Too many requests", "throttl", "rate limit")
 
 
@@ -132,9 +137,14 @@ class CachedEmbedder:
                             # in the body — caught in a real baseline run,
                             # 2026-06-10), not 429. Retry only throttle-shaped
                             # errors; genuine content 400s re-raise at once.
+                            # Jitter desynchronises concurrent fetchers so
+                            # they don't all retry into the same window.
                             if not _is_throttle(exc) or attempt == _THROTTLE_MAX_RETRIES:
                                 raise
-                            await asyncio.sleep(min(2.0 * 2**attempt, 60.0))
+                            delay = min(2.0 * 2**attempt, _THROTTLE_SLEEP_CAP_S)
+                            # Retry jitter, not crypto.
+                            jitter = random.uniform(0.75, 1.25)  # noqa: S311
+                            await asyncio.sleep(delay * jitter)
                     raise AssertionError("unreachable")  # pragma: no cover
 
             fetched = await asyncio.gather(*[_fetch(b) for b in batches])
