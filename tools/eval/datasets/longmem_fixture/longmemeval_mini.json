@@ -1,0 +1,57 @@
+[
+  {
+    "question_id": "fixture-city-1",
+    "question_type": "single-session-user",
+    "question": "What city did the user visit for the cherry blossom festival?",
+    "answer": "Kyoto",
+    "question_date": "2023/05/10 (Wed) 10:00",
+    "haystack_session_ids": ["sess-travel", "sess-cooking"],
+    "haystack_dates": ["2023/04/05 (Wed) 19:30", "2023/04/20 (Thu) 08:15"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I just got back from Kyoto where I saw the cherry blossom festival", "has_answer": true},
+        {"role": "assistant", "content": "That sounds like a wonderful trip."},
+        {"role": "user", "content": "The temples were crowded but worth it"}
+      ],
+      [
+        {"role": "user", "content": "I cooked pasta carbonara tonight with extra pancetta"},
+        {"role": "assistant", "content": "Carbonara is a classic Roman dish."},
+        {"role": "user", "content": "Next weekend I want to bake sourdough bread"}
+      ]
+    ],
+    "answer_session_ids": ["sess-travel"]
+  },
+  {
+    "question_id": "fixture-editor-2",
+    "question_type": "knowledge-update",
+    "question": "What is the user's favorite editor?",
+    "answer": "helix",
+    "question_date": "2023/04/20 (Thu) 12:00",
+    "haystack_session_ids": ["sess-old-editor", "sess-new-editor"],
+    "haystack_dates": ["2023/01/10 (Tue) 09:00", "2023/04/01 (Sat) 09:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "my favorite editor is vim these days"}
+      ],
+      [
+        {"role": "user", "content": "my favorite editor is helix these days", "has_answer": true}
+      ]
+    ],
+    "answer_session_ids": ["sess-new-editor"]
+  },
+  {
+    "question_id": "fixture-skip-3_abs",
+    "question_type": "multi-session",
+    "question": "What instrument does the user play?",
+    "answer": "The user never mentioned an instrument.",
+    "question_date": "2023/05/01 (Mon) 09:00",
+    "haystack_session_ids": ["sess-misc"],
+    "haystack_dates": ["2023/04/28 (Fri) 17:00"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "I watered the garden ferns this morning"}
+      ]
+    ],
+    "answer_session_ids": []
+  }
+]

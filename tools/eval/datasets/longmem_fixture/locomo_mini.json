@@ -1,0 +1,30 @@
+[
+  {
+    "sample_id": "fixture-conv-1",
+    "observation": {},
+    "session_summary": {},
+    "event_summary": {},
+    "conversation": {
+      "speaker_a": "Alice",
+      "speaker_b": "Bob",
+      "session_1_date_time": "2:00 pm on 5 January, 2023",
+      "session_1": [
+        {"speaker": "Alice", "dia_id": "D1:1", "text": "I adopted a golden retriever puppy named Biscuit last week"},
+        {"speaker": "Bob", "dia_id": "D1:2", "text": "Congratulations! Puppies are a lot of work"},
+        {"speaker": "Alice", "dia_id": "D1:3", "text": "", "img_url": "http://example.invalid/p.jpg", "blip_caption": "a small golden puppy on a sofa"}
+      ],
+      "session_2_date_time": "10:30 am on 18 March, 2023",
+      "session_2": [
+        {"speaker": "Alice", "dia_id": "D2:1", "text": "Biscuit finished obedience school yesterday and got a certificate"},
+        {"speaker": "Bob", "dia_id": "D2:2", "text": "I started a pottery class downtown on Tuesdays"}
+      ]
+    },
+    "qa": [
+      {"question": "What kind of dog did Alice adopt?", "answer": "a golden retriever", "category": 4, "evidence": ["D1:1"]},
+      {"question": "How long after adopting Biscuit did Alice finish obedience school with him?", "answer": "about ten weeks", "category": 2, "evidence": ["D1:1", "D2:1"]},
+      {"question": "Why might Bob enjoy the pottery class?", "answer": "creative hobby; pottery offers hands-on relaxation", "category": 3, "evidence": ["D2:2"]},
+      {"question": "What did Alice name her puppy and what milestone did it reach?", "answer": "Biscuit, finished obedience school", "category": 1, "evidence": ["D1:1", "D2:1"]},
+      {"question": "What car does Alice drive?", "adversarial_answer": "Not mentioned in the conversation", "category": 5}
+    ]
+  }
+]

@@ -31,3 +31,6 @@ apps/admin-ui/test-results/
 # Local docker-compose overrides (per-machine port remaps etc.)
 docker-compose.override.yml
 infra/docker-compose.override.yml
+
+# Stream CM-N5 — benchmark dataset cache (not vendored: license + size)
+tools/eval/datasets/.longmem_cache/

@@ -131,6 +131,15 @@ class SqlMemoryStore(MemoryStore):
                 # is evaluated server-side so the value lands as a real
                 # tsvector, not a string cast.
                 "content_tsv": func.to_tsvector(_TS_CONFIG, tokenize_for_search(item.content)),
+                # Stream CM-N5 (Mini-ADR CM-K7) — honour caller-supplied
+                # timestamps so ``write(items)`` matches its documented
+                # "each item carries its own fields" semantics. ``None``
+                # (every production path) falls back to ``now()`` exactly
+                # like the server default; the eval harness sets both to
+                # benchmark session dates so temporal decay (CM-6) is
+                # exercised against real ages.
+                "created_at": item.created_at if item.created_at is not None else func.now(),
+                "last_used_at": item.last_used_at if item.last_used_at is not None else func.now(),
             }
             for item in items
         ]
