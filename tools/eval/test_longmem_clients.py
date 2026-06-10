@@ -168,3 +168,28 @@ async def test_endtoend_concurrency_matches_sequential() -> None:
     assert concurrent.results == sequential.results
     assert concurrent.accuracy == sequential.accuracy == 1.0
     assert concurrent.memories_written == sequential.memories_written
+
+
+@pytest.mark.asyncio
+async def test_cache_truncates_oversized_inputs(tmp_path: Path) -> None:
+    """DashScope caps one embedding input at 8192 tokens — LongMemEval_S
+    turns above the cap 400'd a real baseline run (2026-06-10)."""
+    backend = _CountingBackend()
+    seen: list[int] = []
+
+    class _LenSpy(_CountingBackend):
+        async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+            seen.extend(len(t) for t in texts)
+            return await super().embed(texts, tenant_id=tenant_id)
+
+    cached = CachedEmbedder(
+        _LenSpy(), model_key="m1", db_path=tmp_path / "emb.sqlite", max_text_chars=100
+    )
+    del backend
+    vectors = await cached.embed(["x" * 5000, "short"], tenant_id=uuid4())
+    assert len(vectors) == 2
+    assert max(seen) <= 100
+    # Same oversized text again hits the cache (key = truncated text).
+    again = await cached.embed(["x" * 5000], tenant_id=uuid4())
+    assert again[0] == vectors[0]
+    assert len(seen) == 2  # no new backend traffic

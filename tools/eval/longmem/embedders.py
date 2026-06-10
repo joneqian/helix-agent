@@ -74,10 +74,12 @@ class CachedEmbedder:
         db_path: Path,
         backend_batch: int = 10,
         concurrency: int = 4,
+        max_text_chars: int = 8000,
     ) -> None:
         self._backend = backend
         self._model = model_key
         self._batch = max(1, backend_batch)
+        self._max_text_chars = max(1, max_text_chars)
         self._sem = asyncio.Semaphore(max(1, concurrency))
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(db_path)
@@ -89,6 +91,13 @@ class CachedEmbedder:
         self._db.commit()
 
     async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
+        # DashScope text-embedding-v4 caps a single input at 8192 tokens —
+        # LongMemEval_S has individual turns above that (a 400 in the wild,
+        # 2026-06-10 baseline run). 8000 chars is safe even for pure-CJK
+        # text (1 char ≈ 1 token worst case); the head of a turn carries
+        # its retrieval semantics. The cache key hashes the truncated text
+        # so cached vectors always match what was actually embedded.
+        texts = [t[: self._max_text_chars] for t in texts]
         hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
         out: list[tuple[float, ...] | None] = [self._get(h) for h in hashes]
 
