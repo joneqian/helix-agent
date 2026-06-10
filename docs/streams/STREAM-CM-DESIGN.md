@@ -8,7 +8,7 @@
 >
 > **零债收尾规则**（[memory:zero-tech-debt]）：每条交付收尾 6 条全过 —— 无 TODO / 测试达标 / 文档同步 / 可观测齐全 / CI 全绿 / bug 不遗留。
 >
-> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）+ CM-4（reranker 接通，§6）+ CM-5（可恢复压缩，§7）详设已锁定；CM-6…CM-9 / CM-N 列入范围表，待各自 PR 时在本文件细化。
+> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）+ CM-4（reranker 接通，§6）+ CM-5（可恢复压缩，§7）+ CM-6（时间衰减+MMR，§8）详设已锁定；CM-7…CM-9 / CM-N 列入范围表，待各自 PR 时在本文件细化。
 
 ---
 
@@ -24,7 +24,7 @@
 | CM-3 | A3 | compressor 丢弃中段前无 flush，`memory_writeback` 只在 run 末 | 压缩前回调 → 复用 writeback 通道中途落盘 | P1 | CM-D1…D6（§5 详设） |
 | CM-4 | B5 | rerank_provider/model 配置预留但检索路径无 rerank 调用 | memory recall Hybrid 召回后接 cross-encoder rerank | P1 | CM-E1…E6（§6 详设） |
 | CM-5 | B6 | 超大工具结果 char-cap 截断丢弃，不可找回 | 超限结果外部化 workspace 文件 + 虚拟引用 footer + read 类豁免（"可恢复压缩"通用原则） | P1 | CM-F1…F6（§7 详设） |
-| CM-6 | B4 | 对称 RRF，无 MMR 去冗余、无时间衰减 | `memory/sql.py:retrieve()` RRF 后加 MMR + 时间衰减 | P1 | 待细化 |
+| CM-6 | B4 | 对称 RRF，无 MMR 去冗余、无时间衰减 | 时间衰减进 retrieve()（两 store）+ MMR 在 orchestrator rerank 后殿后（管线顺序修正见 §8） | P1 | CM-G1…G6（§8 详设） |
 | CM-7 | B7 | `<context-summary>` 缺"背景非指令"强语义、无增量更新 | 结构化摘要条目 + 显式更新操作（A-MEM/Mem0 范式） | P2 | 待细化 |
 | CM-8 | C8 | approval `decision='modify'` 无法编辑 `proposed_args` 再提交 | 文件投影（CM-0）+ admin UI plan/todo 可视化可编辑双通道 | P2 | 待细化 |
 | CM-9 | C9 + N4 | 无 plan mode 开关、无 effort 控制、iteration budget 仅概念、无 loop 去重 | plan mode 开关 + adaptive thinking `effort` 档位 + iteration budget 真实现 + 调用指纹去重 | P2 | 待细化 |
@@ -762,7 +762,103 @@ tools_node（中央，best-effort，复用 CM-0 writer）
 
 ---
 
-## 8. 与既有 Stream 的衔接
+## 8. CM-6 详细设计 —— 检索质量：时间衰减 + MMR 去冗余
+
+> **目标**：长期记忆召回从"纯相关性对称 RRF"升级为"新近度加权 + 结果多样性"——时间衰减让久未使用的记忆让位于新近记忆（OpenClaw temporalDecay 半衰期 30 天范式），MMR 去掉高度同质的候选（λ=0.7）。映射框架报告 B4（组件级有据：MMR/衰减各自经典；**叠加增益业界无统一 benchmark，自测留 CM-N5**，本设计不声称数字）。
+>
+> **管线顺序修正（2026-06-10 用户拍板，偏离范围表原句）**：范围表原句"`memory/sql.py:retrieve()` RRF 后加 MMR + 时间衰减"写于 CM-4 之前；CM-4 已把 cross-encoder rerank 放在 retrieve **之后**（orchestrator 侧）——若 MMR 在 retrieve 内做，rerank 按纯相关性重排会打散 MMR 的多样性选择，白做。修正为：**时间衰减进 retrieve()**（所有召回部署受益，含无 reranker），**MMR 放 orchestrator 召回管线末段**（rerank 之后）。最终管线：宽召回（RRF+衰减）→ rerank（相关性）→ MMR（去冗余）→ top_k → redact，每段职责单一。
+
+### 8.1 关键约束（接缝核准结论，已源码核准）
+
+| 约束 | 事实 | file:line |
+|---|---|---|
+| **RRF 融合在 Python 侧、两 store 镜像实现** | sql：两条独立 SELECT（HNSW 向量 + GIN 全文各取 `_HYBRID_RECALL_LIMIT=20`）→ `rrf_fuse` 融合 row id → `[:limit]`；in-memory 同构（jieba 关键词 + cosine） | `persistence/memory/sql.py:27,180-218`、`memory/memory.py:20,98-134` |
+| **`rrf_fuse` 只返回排序项、不带分数** | `rrf_fuse(rankings, k=60) -> list[T]`——衰减加权需要分数 ⇒ 需并列新增带分版本，**不破现有调用方**（knowledge J.5 也用它） | `helix-common/search/rrf.py:29-55` |
+| **两 store 各有 hybrid + 纯向量两条路径** | `query_text` 为 None/空 ⇒ 纯向量路径（cosine 距离序），无 RRF——衰减须两路都覆盖才一致 | `sql.py:115-186`、`memory.py:122-135` |
+| **候选 embedding 随行返回（MMR 无阻碍）** | `_row_to_item` 转 `embedding=tuple(float,...)`；`MemoryItem.embedding` 必有 | `sql.py:30-52`、`protocol/memory_item.py:28-96` |
+| **时间戳字段齐全** | `created_at` / `last_used_at`（初值=created_at，retrieve 访问刷新）/ `last_reviewed_at`；衰减用 `last_used_at`（被用即保鲜） | `models/memory_item.py:48-57`、migration 0017:53-57 |
+| **CM-4 管线已定召回结构** | recall node：embed → `retrieve(limit=宽召回)` → `_rerank_memories`（best-effort）→ top_k → redact；`_MEMORY_RERANK_RECALL_LIMIT=20`；query embedding（`vectors[0]`）在手——MMR 可直接复用 | `graph_builder/memory.py:59,216-286` |
+| **retrieve() 唯一在线调用方是 recall 路径** | consolidator 走 `list_purge_candidates` 非 retrieve；knowledge J.5 是独立 retriever——衰减只影响记忆召回，无旁路风险 | `sql.py:481-506` |
+| **协议签名 sweep 范围** | retrieve 签名**不变**（衰减是内部重排）⇒ tools/eval doubles 无需同步改（[memory:protocol-sweep]） | `persistence/memory/base.py:53-72` |
+
+> **结论**：CM-6 = helix-common 新增带分 RRF + 衰减 + MMR 纯函数；两 store retrieve() 内部接衰减（hybrid+纯向量两路）；orchestrator recall 节点 rerank 后接 MMR。签名零变更、协议零变更、schema 零变更。
+
+### 8.2 设计：衰减进 retrieve，MMR 殿后（管线四段）
+
+```
+retrieve()（两 store 镜像）
+  hybrid： vector top20 + keyword top20 → rrf_fuse_scored → score *= decay_factor(now - last_used_at)
+  纯向量： similarity = 1 - cosine_distance/2 → score *= decay_factor(...)
+  → 按衰减后分数排序 → [:limit]
+
+decay_factor(age) = 0.5 + 0.5 * 2^(-age_days / 30)        # ∈ (0.5, 1]
+  半衰期 30 天（OpenClaw 范式）；带 0.5 floor——老记忆最多减半、
+  绝不被埋死（canonical 事实如用户偏好可能数月前写入，纯指数衰减
+  180 天即衰到 1.6%，会制造"平台失忆"）
+
+memory_recall_node（orchestrator，CM-4 结构上加一段）
+  retrieve(limit=宽召回 20) → rerank（可选，CM-4 不动）
+  → mmr_select(query_embedding, candidates, k=top_k, λ=0.7)   ← 新增，殿后
+  → redact → recalled_memories
+```
+
+不变量：① retrieve 签名不变、返回仍是排序后 `list[MemoryItem]`；② 衰减只重排**候选窗口内**的相对顺序（宽召回 20 内），不改召回集合本身；③ MMR best-effort——异常回落输入序 `[:top_k]`（与 rerank 降级同款契约，绝不丢全部记忆）；④ MMR 在 redact 前（用原始 embedding）；⑤ `last_used_at` 刷新语义不动（自增强回路被"衰减只作用于排序、相关性仍是主因子"抑制，且 floor 限幅）。
+
+### 8.3 数据/协议变更
+
+1. **`helix-common/search/rrf.py`**：并列新增 `rrf_fuse_scored(rankings, k=60) -> list[tuple[T, float]]`（`rrf_fuse` 改为其薄包装，行为字节不变；knowledge J.5 调用方零感知）。
+2. **`helix-common/search/decay.py`（新）**：`temporal_decay_factor(*, age: timedelta, half_life: timedelta = 30d, floor: float = 0.5) -> float`。
+3. **`helix-common/search/mmr.py`（新）**：`mmr_select(*, query_embedding, candidates: Sequence[tuple[T, Sequence[float]]], k, lambda_=0.7) -> list[T]`——贪心 MMR：`λ*sim(q,c) - (1-λ)*max sim(c, selected)`，cosine；候选 embedding 维度不一致/为空时跳过该候选。
+4. **`persistence/memory/sql.py` + `memory/memory.py`**：retrieve() 两路接衰减（`datetime.now(UTC)` 取齐一次；`last_used_at` 为 naive 的兼容按现有行为处理）；`_HYBRID_RECALL_LIMIT` 不变。
+5. **`graph_builder/memory.py`**：`_mmr_memories` 私有助手（best-effort，镜像 `_rerank_memories` 契约）；插在 rerank 后、redact 前；**宽召回条件从 `reranker is not None` 扩为恒宽**（MMR 默认开 ⇒ `recall_limit = max(top_k, 20)` 恒成立——SQL 本就各取 20 候选融合，增量成本为零，只是融合后截断更晚）。
+6. **可观测**：`record_memory_mmr(*, outcome)`（`applied`/`degraded`，`helix_cm_memory_mmr_total`，uplift_metrics 与 `record_memory_rerank` 并列）；persistence 衰减为确定性纯变换，不加 metric（debug 日志足够）。
+7. **无 policy / tenant_config / schema / 协议变更**：λ、半衰期、floor 为模块常数（同 rerank 先例——质量增强不开 knob，调参等 CM-N5 评测基线就位后再议）。
+
+### 8.4 边界情况
+
+| 场景 | 处理 |
+|---|---|
+| 纯向量路径（query_text 空 / 全文无命中场景） | similarity = `1 - cosine_distance/2` 后同样衰减——两路语义一致 |
+| `last_used_at` 缺失/异常（理论不可能，NOT NULL） | `max(age, 0)`——未来时间戳按 0 龄处理（时钟偏移防御） |
+| 候选 embedding 全相同（极端同质） | MMR 第二项恒高 → 自动只选 top1 后按 λ 权衡，仍返回 k 个（贪心不死锁） |
+| 候选数 ≤ top_k | MMR 仍跑（只改序不减量）；零候选直接返回 |
+| MMR 计算异常（维度不齐等） | best-effort 回落输入序 `[:top_k]`，记 `degraded`，绝不丢记忆 |
+| reranker 与 MMR 同时存在 | 顺序 rerank→MMR：先按语义相关性重排，再在高相关集合内去冗余（设计本意） |
+| 老部署回归担忧 | 衰减 floor 0.5 + 只作用候选窗口内排序 ⇒ 高相关老记忆仍可召回，只在同分竞争时让位新记忆 |
+
+### 8.5 可观测（零债"可观测齐全"）
+
+- `helix_cm_memory_mmr_total{outcome=applied/degraded}`（uplift_metrics）。
+- persistence retrieve debug 日志保持现状（衰减为确定性变换，不另设 metric）。
+
+### 8.6 测试 & 验收（CM-6 Exit）
+
+- **helix-common unit**：`rrf_fuse_scored` 分数正确 + `rrf_fuse` 包装后行为字节不变（现有 rrf 测试不改即过）；`temporal_decay_factor`（0 龄=1 / 30 天=0.75 / ∞→floor 0.5 / 负龄钳 0）；`mmr_select`（同质候选被去冗、λ=1 退化为纯相关序、空候选/维度不齐跳过、k≥候选数全返）。
+- **persistence unit（in-memory）+ integration（SQL）**：同相关性老/新两条记忆 → 新者排前；高相关老记忆仍胜低相关新记忆（floor 保护）；纯向量路径同样衰减；retrieve 签名/返回类型不变（现有 store 测试不改即过）。
+- **orchestrator unit**：recall 节点冗余候选（近重复 embedding）被 MMR 去冗；MMR 异常 → 回落输入序不丢记忆；rerank→MMR 顺序（scripted reranker + spy）；恒宽召回 limit=20。
+- **零债 6 条**：无 TODO；本 §8 与实现一致；metric 齐全；CI 8/8；叠加增益自测留 CM-N5（诚实标注，不声称数字）。
+
+### 8.7 Mini-ADR（CM-6 锁定）
+
+| ID | 决策 |
+|---|---|
+| **CM-G1** | **管线顺序：宽召回（RRF+衰减）→ rerank → MMR → top_k → redact**；MMR 必须在 rerank 后（否则被纯相关性重排打散，白做）——修正范围表"都在 retrieve()"原句（2026-06-10 用户拍板） |
+| **CM-G2** | **时间衰减进 retrieve()**（两 store 镜像、hybrid+纯向量两路一致），所有召回部署受益（含无 reranker）；基于 `last_used_at`（被用即保鲜，频率×新近度复合信号） |
+| **CM-G3** | **衰减带 floor**：`0.5 + 0.5 * 2^(-age_days/30)`——半衰期 30 天（OpenClaw 范式），老记忆最多减半绝不埋死（canonical 事实保护，防"平台失忆"） |
+| **CM-G4** | **MMR λ=0.7（OpenClaw 范式）、cosine、greedy**；纯函数进 helix-common search 包与 rrf 并列；无 policy knob（同 rerank 先例，调参等 CM-N5 基线） |
+| **CM-G5** | **召回恒宽 `max(top_k, 20)`**（MMR 默认开）；SQL 本就各取 20 候选融合，增量成本零；`rrf_fuse_scored` 并列新增、`rrf_fuse` 薄包装零破坏（knowledge J.5 零感知） |
+| **CM-G6** | MMR **best-effort 降级输入序**（与 rerank 同契约）；衰减为确定性纯变换不设 metric；**叠加增益不声称数字，自测留 CM-N5** |
+
+### 8.8 PR 切分（CM-6）
+
+1. **CM-6 PR1 — 纯核心（helix-common，不接任何调用方）**：`rrf_fuse_scored`（`rrf_fuse` 薄包装化）+ `search/decay.py` + `search/mmr.py` + unit tests。
+2. **CM-6 PR2 — 接线（收尾 CM-6）**：两 store retrieve() 接衰减（hybrid+纯向量）+ orchestrator recall 节点 `_mmr_memories`（rerank 后、redact 前）+ 恒宽召回 + `record_memory_mmr` + persistence/orchestrator tests + ITERATION-PLAN 回填。
+
+> 每个 PR 在本 §8 基础上局部细化；ITERATION-PLAN 增 CM-6 backlog，ship 后回填 `[x]`+PR 号。
+
+---
+
+## 9. 与既有 Stream 的衔接
 
 - **Stream J**：复用 `user_workspace`（J.15 卷）、`memory_item`（J.3）、approval（J.8 pause→ingest 时机）、`update_plan`（K.8）。
 - **Stream L**：投影钩子在 agent_node/tools_node，与 L-1 cache prefix（system 冻结）、L-2 compressor（CM-2/3 在此之上）共存；recitation 放非 system 区不破 L-1。**L-4 mutation advisory 被 CM-1 收敛**（`failed_mutations`→`tool_failures`、`<mutation-advisory>`→`<recovery-advisory>`，mutation 校验作为 `mutation_not_landed` 一类保留），非并行；L-5 退款语义不动（失败工具调用照常计步）。

@@ -1421,7 +1421,10 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - **CM-5（B6）可恢复压缩** P1：超大工具结果外部化 workspace 文件 + 虚拟引用 + read 类豁免
   - [ ] **CM-5 PR1 纯核心**：`ToolResult.full_content` + 4 工具（bash/exec_python/http/mcp）截断时带出全文 + `tools/overflow.py` 纯函数（rel path/footer/2M 上限）+ unit；不接图
   - [ ] **CM-5 PR2 接线**：builder tools_node `_externalize_tool_overflow` best-effort 钩子（复用 workspace_writer_factory）+ `helix_cm_tool_overflow_total{outcome,tool}`/`helix_cm_tool_overflow_chars` + 集成测 + 回填
-- **CM-6（B4）MMR + 时间衰减** P1：`memory/sql.py:retrieve()` RRF 后加 MMR + 时间衰减（叠加增益自测）
+- [x] **CM-6 设计先行**（本次）：STREAM-CM-DESIGN §8 详设——管线顺序修正（范围表原句"都在 retrieve()"写于 CM-4 前；MMR 在 retrieve 内做会被 rerank 纯相关性重排打散 ⇒ 衰减进 retrieve()、MMR 放 orchestrator rerank 后殿后，2026-06-10 用户拍板）+ 接缝核准 file:line（RRF Python 侧两 store 镜像/`rrf_fuse` 不带分需并列新增 scored 版/两 store 各有 hybrid+纯向量两路/embedding 随行返回 MMR 无阻碍/retrieve 唯一在线调用方是召回路径）+ 衰减公式 `0.5+0.5*2^(-age_days/30)` 带 floor 防老记忆埋死（基于 last_used_at 被用即保鲜）+ MMR λ=0.7 greedy cosine + 召回恒宽 max(top_k,20) + 数据/协议变更（helix-common decay/mmr 纯函数，签名/协议/schema 零变更）+ 边界 + 可观测 + 测试 + 6 条 Mini-ADR（CM-G1~G6）+ 2-PR 切分
+- **CM-6（B4）MMR + 时间衰减** P1：时间衰减进 retrieve() + MMR 在 rerank 后（叠加增益自测留 CM-N5）
+  - [ ] **CM-6 PR1 纯核心**：helix-common `rrf_fuse_scored`（`rrf_fuse` 薄包装化零破坏）+ `search/decay.py` + `search/mmr.py` + unit；不接调用方
+  - [ ] **CM-6 PR2 接线**：两 store retrieve() 接衰减（hybrid+纯向量两路）+ orchestrator `_mmr_memories`（rerank 后 redact 前，best-effort 降级输入序）+ 恒宽召回 + `record_memory_mmr{outcome}` + tests + 回填
 - **CM-7（B7）结构化 note** P2：摘要"背景非指令"语义 + 显式更新操作（A-MEM/Mem0）
 - **CM-8（C8）文件投影 + UI 双通道** P2：依赖 CM-0 ingest + admin UI plan/todo 可编辑（补 J.8 modify UX）
 - **CM-9（C9 + N4）plan mode + effort + loop 去重** P2：plan mode 开关 + adaptive thinking `effort` 档位 + iteration budget 真实现 + 调用指纹去重
