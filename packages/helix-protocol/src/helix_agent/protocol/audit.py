@@ -110,6 +110,10 @@ class AuditAction(StrEnum):
     # workspace state ingest (Stream CM-0 PR2b — Mini-ADR CM-A6); file→DB:
     # a human-edited PLAN.md applied back to AgentState.plan at run start.
     STATE_INGESTED = "state:ingested"
+    # plan edited via the admin UI channel (Stream CM-8 — Mini-ADR CM-I2/I6);
+    # PUT /v1/sessions/{thread_id}/plan wrote AgentState.plan through
+    # ``aupdate_state``. resource_type reuses ``session``.
+    PLAN_EDITED = "plan:edited"
     # image upload (Stream J.6.补强-2 — Mini-ADR J-31)
     IMAGE_UPLOAD = "image:upload"
     # skill (Stream J.7a — Mini-ADR J-23)

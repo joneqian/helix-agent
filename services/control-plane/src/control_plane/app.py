@@ -53,6 +53,7 @@ from control_plane.api import (
     build_memory_router,
     build_metrics_router,
     build_model_catalog_router,
+    build_plan_router,
     build_platform_config_router,
     build_platform_embedding_config_router,
     build_platform_skills_router,
@@ -1273,6 +1274,7 @@ def create_app(
     app.include_router(build_agents_router())
     app.include_router(build_sessions_router())
     app.include_router(build_runs_router())
+    app.include_router(build_plan_router())
     app.include_router(build_runs_list_router())
     app.include_router(build_feedback_router())
     app.include_router(build_artifacts_router())
