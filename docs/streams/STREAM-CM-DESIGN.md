@@ -755,8 +755,8 @@ tools_node（中央，best-effort，复用 CM-0 writer）
 
 ### 7.9 PR 切分（CM-5）
 
-1. **CM-5 PR1 — 纯核心（不接图）**：`ToolResult.full_content` 字段 + 4 工具截断时带出全文（bash/exec_python 经 `format_sandbox_outcome`、http、mcp）+ `tools/overflow.py` 纯函数（rel path / footer / 2M 上限）+ unit tests。
-2. **CM-5 PR2 — 接线（收尾 CM-5）**：builder tools_node `_externalize_tool_overflow` best-effort 钩子（复用 `workspace_writer_factory`）+ metrics/日志 + 集成测（真 graph + fake writer / 无 writer 字节一致）+ ITERATION-PLAN 回填。
+1. **CM-5 PR1 — 纯核心（不接图）**（已实现，PR #508）：`ToolResult.full_content` 字段 + 4 工具截断时带出全文（bash/exec_python 经 `format_sandbox_outcome`、http、mcp）+ `tools/overflow.py` 纯函数（rel path / footer / 2M 上限）+ unit tests。
+2. **CM-5 PR2 — 接线（收尾 CM-5）**（已实现）：`_invoke_tool` 成功路径接 `_externalize_tool_overflow` best-effort 钩子（复用 `workspace_writer_factory`，与 stage 内其他工具并行）+ metrics/日志 + 集成测（真 graph + fake writer / 无 writer 字节一致 / 写失败降级 / read_only 双保险）+ ITERATION-PLAN 回填。**→ CM-5 完成**。
 
 > 每个 PR 在本 §7 基础上局部细化；ITERATION-PLAN 增 CM-5 backlog，ship 后回填 `[x]`+PR 号。
 
