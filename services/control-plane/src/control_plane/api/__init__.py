@@ -18,6 +18,7 @@ from control_plane.api.members import build_members_router
 from control_plane.api.memory import build_memory_router
 from control_plane.api.metrics import build_metrics_router
 from control_plane.api.model_catalog import build_model_catalog_router
+from control_plane.api.plan import build_plan_router
 from control_plane.api.platform_config import build_platform_config_router
 from control_plane.api.platform_embedding_config import (
     build_platform_embedding_config_router,
@@ -59,6 +60,7 @@ __all__ = [
     "build_memory_router",
     "build_metrics_router",
     "build_model_catalog_router",
+    "build_plan_router",
     "build_platform_config_router",
     "build_platform_embedding_config_router",
     "build_platform_skills_router",
