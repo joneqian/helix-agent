@@ -1452,6 +1452,39 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 
 ---
 
+## Stream HX — Harness 强化（2026-06-10 起）— 依据 [十维能力评估](./research/2026-06-10-helix-harness-capability-assessment.md)
+
+> **立项（2026-06-10 用户拍板）**：把评估报告的全部非强项做强。按 Wave 严格顺序推进（Wave 1 零债收完再进 Wave 2）；每条设计先行 + 零债收尾（CM 同节奏）。
+> **拍板边界**：浏览器执行面**不纳入**（产品决策，真实租户任务撞到交互式网页需求再立项）；agent 间通信 / 事务性工具**维持不做**（报告 §12 论证：单链委托是业界可靠性共识 / 行业未解题，irreversible 门控 + approval 是诚实替代——需求出现随时重议）。
+
+### Wave 1 — 高 ROI 小改动（1 sprint，全部立项）
+
+- [ ] **HX-1 真 tokenizer + 长上下文阈值参数化**（评估 ③，2 PR）：`len//4`（±15% 漂移）→ 真分词计数（estimator 注入点：`dynamic_context.py`/`compressor.py`/`working_window.py`）；压缩/滑窗阈值按 `ModelSpec.context_window` 参数化（1M 模型不再用 200K 同套参数）
+- [ ] **HX-2 用户反馈→学习闭环**（评估 ⑦ 断链，2-3 PR）：feedback consumer worker（复用 DLQ worker 骨架）——👎 关联该 run 绑定的 skill 版本（SE-8 归因通道已在）进 SE 修订队列；关联记忆条目打 review 标记进 consolidator 队列
+- [ ] **HX-3 run 级瞬态故障自动重试**（评估 ⑧，1-2 PR）：错误分类为瞬态（LLM 5xx 耗尽 fallback / 沙盒 acquire 失败）∧ run 零 irreversible 工具调用（`side_effect` 元数据已在）→ 自动重试 1 次
+- [ ] **HX-4 可观测补强**（评估 ⑨，1-2 PR）：工具延迟直方图 + run 成功率 counter + approval 队列 gauge + checkpoint 持久化延迟；结构化日志统一 `run_id`/`trace_id` 字段贯穿
+
+### Wave 2 — 中体量（2 sprint，Wave 1 收完启动）
+
+- [ ] **HX-5 prompt 版本管理 + 离线 A/B**（评估 ①，3-4 PR）：`prompt_version` 表（diff/回滚/audit）+ 离线 variant 对比（复用 CM-N5 评测基建出数字）；online A/B 留 Wave 3
+- [ ] **HX-6 sandbox 热池 + 资源限额粒度**（评估 ⑤，2-3 PR）：预热池替代每 acquire 冷启动（M1 既定项提前）；per-call CPU/mem cgroup 限额
+- [ ] **HX-7 trace 生产接线 + approval 队列页**（评估 ⑨，2-3 PR）：Langfuse Recording stub → SDK adapter（ADR-0005）；admin UI 独立待批列表页（跨 run 聚合 + 批量操作）
+- [ ] **HX-8 多租户薄点**（评估 ⑩，2 PR）：平台 provider/tool 凭证按租户隔离（与 Stream Y 计量路线衔接）+ 跨租户查询可配 block（现仅 audit）
+
+### Wave 3 — 架构级（设计先行重点评审）
+
+- [ ] **HX-9 租户级 hook 扩展点**（评估 ④ 架构级缺口，4+ PR）：manifest 声明式 hook（webhook 回调式起步，非任意代码）——设计 PR 与中心化治理路线统一评审后再实现
+- [ ] **HX-10 sandbox 安全纵深**（评估 ⑤，2-3 PR）：seccomp profile 叠加 gVisor + 镜像 CVE 扫描进 CI——**对外开放租户自定义代码执行前的硬前提**
+- [ ] **HX-11 online A/B + 自动 prompt 优化**（评估 ⑦ 远期，依赖 HX-5）：流量分桶 + 评测数字回流
+
+### 显式不做（理由在册，需求出现随时重议）
+
+- 浏览器执行面 / 多语言运行时 / GPU（产品决策，非工程债）
+- agent 间通信、专门化 agent 类型注册表（单链委托可靠性共识）
+- 事务性工具 / 部分回滚（行业未解题）
+
+---
+
 ## 计划使用建议
 
 1. **作为活文档维护**：每完成一个 Stream，在对应 checklist 打勾；遇到偏差修订估时与依赖
