@@ -246,10 +246,7 @@ def test_stratified_sample_deterministic_and_covers_types() -> None:
     (2026-06-10) — type coverage and reproducibility are the contract."""
     from longmem.runner import stratified_sample
 
-    instances = [
-        _qa(f"q{i}", correct=True) for i in range(100)
-    ]  # QAResult reuse: has question_type "t"
-    # Build a mixed-type population instead.
+    # QAResult doubles as a cheap carrier with a question_type field.
     population = []
     for i in range(60):
         population.append(
@@ -291,4 +288,3 @@ def test_stratified_sample_deterministic_and_covers_types() -> None:
     assert [r.question_id for r in again] == [r.question_id for r in sample]
     # n >= len passes through untouched.
     assert stratified_sample(population, 200) is population
-    del instances
