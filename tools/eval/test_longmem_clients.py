@@ -211,14 +211,16 @@ async def test_cache_retries_throttle_shaped_400(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """DashScope reports capacity throttling as HTTP 400 — must self-heal."""
-    import longmem.embedders as embedders_mod
+    import asyncio
 
     sleeps: list[float] = []
 
     async def _fast_sleep(seconds: float) -> None:
         sleeps.append(seconds)
 
-    monkeypatch.setattr(embedders_mod.asyncio, "sleep", _fast_sleep)
+    # asyncio is a singleton module — patching it here patches the
+    # CachedEmbedder retry loop's view of it too.
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
 
     class _FlakyBackend(_CountingBackend):
         failures = 2
