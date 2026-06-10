@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# CM-N5 一键基线跑 — LongMemEval + LoCoMo 全量（层 1 检索 + 层 2 端到端）。
+#
+# 用法（repo 根目录执行）：
+#   tools/eval/run_baseline_full.sh smoke       # 连通性冒烟（fixture，几分钱，~1 分钟）
+#   tools/eval/run_baseline_full.sh retrieval   # 层 1 检索基线（3 数据集 x 4 消融臂）
+#   tools/eval/run_baseline_full.sh endtoend    # 层 2 端到端 QA（locomo + longmemeval_s，断点续跑）
+#   tools/eval/run_baseline_full.sh full        # 全部（默认）：smoke -> retrieval -> endtoend
+#
+# 凭证：~/.helix-eval.env（HELIX_EVAL_ENV 可覆盖路径），四行：
+#   HELIX_EVAL_EMBED_API_KEY / HELIX_EVAL_EMBED_MODEL /
+#   HELIX_EVAL_LLM_API_KEY   / HELIX_EVAL_LLM_MODEL
+#
+# 可调：HELIX_EVAL_CONCURRENCY（默认 8，DashScope 限流报 429 就调小）。
+# 反复跑安全：embedding 有 sqlite 缓存（不重复计费）；端到端按题断点续跑
+# （eval-out/*.jsonl，已答题不重跑）；数字幂等合并进
+# tools/eval/baselines/longmem_baseline.yaml。
+set -euo pipefail
+
+cd "$(dirname "$0")/../.."
+
+ENV_FILE="${HELIX_EVAL_ENV:-$HOME/.helix-eval.env}"
+CONCURRENCY="${HELIX_EVAL_CONCURRENCY:-8}"
+MODE="${1:-full}"
+RUN="uv run python tools/eval/run_longmem.py"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "ERROR: env file not found: $ENV_FILE" >&2
+    exit 1
+fi
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+for var in HELIX_EVAL_EMBED_API_KEY HELIX_EVAL_EMBED_MODEL HELIX_EVAL_LLM_API_KEY HELIX_EVAL_LLM_MODEL; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "ERROR: $var missing in $ENV_FILE" >&2
+        exit 1
+    fi
+done
+
+log() { printf '\n[%s] === %s ===\n' "$(date '+%H:%M:%S')" "$*"; }
+
+run_smoke() {
+    log "smoke: fixture retrieval (fake embedder, free)"
+    $RUN --benchmark fixture_longmemeval --tier retrieval --arms default,no_decay
+    log "smoke: fixture endtoend (real Qwen, a few cents — validates both keys)"
+    $RUN --benchmark fixture_locomo --tier endtoend --embedder real \
+        --results eval-out/smoke_locomo.jsonl --concurrency 2
+    log "smoke OK — keys and endpoints are live"
+}
+
+run_retrieval() {
+    for benchmark in locomo longmemeval_oracle longmemeval_s; do
+        log "retrieval: $benchmark (4 arms, cached embeddings)"
+        $RUN --benchmark "$benchmark" --tier retrieval \
+            --arms default,vector,no_decay,no_mmr \
+            --embedder real --concurrency "$CONCURRENCY" --update-baseline
+    done
+}
+
+run_endtoend() {
+    for benchmark in locomo longmemeval_s; do
+        log "endtoend: $benchmark (resumable — rerun this script to continue)"
+        $RUN --benchmark "$benchmark" --tier endtoend \
+            --embedder real --concurrency "$CONCURRENCY" \
+            --results "eval-out/${benchmark}_endtoend.jsonl" --update-baseline
+    done
+}
+
+case "$MODE" in
+    smoke) run_smoke ;;
+    retrieval) run_retrieval ;;
+    endtoend) run_endtoend ;;
+    full) run_smoke && run_retrieval && run_endtoend ;;
+    *)
+        echo "usage: $0 [smoke|retrieval|endtoend|full]" >&2
+        exit 1
+        ;;
+esac
+log "done — baselines: tools/eval/baselines/longmem_baseline.yaml"
