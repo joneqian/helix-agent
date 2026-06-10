@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -378,5 +379,53 @@ async def test_decay_prefers_recently_used_on_same_relevance(sql_store: SqlStore
             tenant_id=tenant, user_id=user, query_embedding=_vec(1.0, 0.0), limit=2
         )
         assert [h.content for h in hits] == ["fresh", "stale"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_write_honours_caller_supplied_timestamps(sql_store: SqlStoreFixture) -> None:
+    """Stream CM-N5 (Mini-ADR CM-K7) — ``write`` keeps caller timestamps.
+
+    Items carrying explicit ``created_at`` / ``last_used_at`` land with
+    those values (the eval harness writes benchmark session dates so
+    CM-6 decay sees real ages); ``None`` still falls back to ``now()``
+    like the server default, so every production path is unchanged.
+    """
+    store, engine = sql_store
+    try:
+        tenant, user = uuid4(), uuid4()
+        backdated = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+        aged = MemoryItem(
+            id=uuid4(),
+            tenant_id=tenant,
+            user_id=user,
+            kind="episodic",
+            content="aged row",
+            embedding=_vec(1.0),
+            created_at=backdated,
+            last_used_at=backdated,
+        )
+        fresh = _item(tenant=tenant, user=user, embedding=_vec(0.0, 1.0), content="fresh row")
+        await store.write([aged, fresh])
+
+        rows = {
+            r.content: r
+            for r in await store.list_for_user(tenant_id=tenant, user_id=user, limit=10)
+        }
+        assert rows["aged row"].created_at == backdated
+        assert rows["aged row"].last_used_at == backdated
+        # ``None`` timestamps still default to "now" (server-equivalent).
+        assert rows["fresh row"].created_at is not None
+        assert rows["fresh row"].created_at > backdated
+
+        # The backdated row decays: identical relevance, fresh wins.
+        hits = await store.retrieve(
+            tenant_id=tenant,
+            user_id=user,
+            query_embedding=_vec(0.7, 0.7),
+            limit=2,
+        )
+        assert [h.content for h in hits] == ["fresh row", "aged row"]
     finally:
         await engine.dispose()
