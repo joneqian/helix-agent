@@ -67,6 +67,7 @@ from helix_agent.common.observability import helix_counter, helix_gauge, helix_h
 from helix_agent.common.uplift_metrics import record_memory_inject_mode
 from helix_agent.protocol import AuditAction, AuditEntry, AuditResult, MemoryItem, Plan
 from helix_agent.runtime.audit.logger import AuditLogger
+from helix_agent.runtime.cancellation import RunCancelledError
 from helix_agent.runtime.middleware import (
     MiddlewareChain,
     MiddlewareContext,
@@ -98,12 +99,14 @@ from orchestrator.tools.error_classifier import (
     render_recovery_advisory,
 )
 from orchestrator.tools.mutation_classifier import classify as classify_mutation
+from orchestrator.tools.overflow import clamp_overflow, overflow_rel_path, render_overflow_footer
 from orchestrator.tools.registry import (
     TOOL_ALLOWED_STATE_KEYS,
     Tool,
     ToolContext,
     ToolNotFoundError,
     ToolRegistry,
+    ToolResult,
 )
 from orchestrator.tools.scheduling import MAX_TOOL_WORKERS, plan_stages
 
@@ -201,6 +204,19 @@ _cm_precompaction_flush_total = helix_counter(
 _cm_precompaction_flush_memories = helix_gauge(
     "helix_cm_precompaction_flush_memories",
     "Memories written by the most recent pre-compaction flush (Stream CM-3).",
+)
+#: Stream CM-5 — oversized tool results externalized to the workspace
+#: (externalized = full output saved + reference footer appended /
+#: degraded = write failed, the truncated content stands alone).
+_cm_tool_overflow_total = helix_counter(
+    "helix_cm_tool_overflow_total",
+    "Tool-result overflow externalizations (Stream CM-5).",
+    ("outcome", "tool"),
+)
+#: Stream CM-5 — size (chars) of the most recent externalized overflow.
+_cm_tool_overflow_chars = helix_gauge(
+    "helix_cm_tool_overflow_chars",
+    "Characters of the most recent externalized tool-result overflow (Stream CM-5).",
 )
 
 #: Truncate raw exception strings before they go to the LLM. Avoids
@@ -503,6 +519,11 @@ def build_react_graph(
         # Stream TE-2 — per-tool-call audit sink (may be None on the dev /
         # unit-test path; ``_dispatch_tool`` treats the emit as best-effort).
         audit_logger = audit_logger_from_config(config)
+        # Stream CM-5 — one per-turn writer for overflow externalization,
+        # from the same factory (and gate) as the CM-0 projection.
+        overflow_writer = (
+            workspace_writer_factory(ctx_obj) if workspace_writer_factory is not None else None
+        )
         # Stream L.L6 — group tool_calls into stages of mutually-non-
         # conflicting calls. Within a stage we ``asyncio.gather`` (capped
         # at MAX_TOOL_WORKERS); stages execute sequentially so any
@@ -543,6 +564,7 @@ def build_react_graph(
                     ctx_obj,
                     before_tool_dispatch_chain=before_tool_dispatch_chain,
                     audit_logger=audit_logger,
+                    overflow_writer=overflow_writer,
                 )
             )
 
@@ -884,6 +906,7 @@ async def _dispatch_tool(
     *,
     before_tool_dispatch_chain: MiddlewareChain | None,
     audit_logger: AuditLogger | None = None,
+    overflow_writer: WorkspaceFileWriter | None = None,
 ) -> tuple[ToolMessage, Mapping[str, Any], int, ClassifiedToolError | None]:
     """Dispatch one tool call.
 
@@ -919,7 +942,7 @@ async def _dispatch_tool(
             args = mw_ctx.payload.get("tool_args", args) or {}
 
         tool = registry.get_required(name)
-        outcome = await _invoke_tool(tool, args, call_id, ctx)
+        outcome = await _invoke_tool(tool, args, call_id, ctx, overflow_writer=overflow_writer)
         ok = outcome[0].status != "error"
         _record_tool_metrics(name, started, "ok" if ok else "error")
         await _emit_tool_audit(
@@ -1205,6 +1228,8 @@ async def _invoke_tool(
     args: dict[str, Any],
     call_id: str,
     ctx: ToolContext,
+    *,
+    overflow_writer: WorkspaceFileWriter | None = None,
 ) -> tuple[ToolMessage, Mapping[str, Any], int, ClassifiedToolError | None]:
     try:
         result = await tool.call(args, ctx=ctx)
@@ -1229,12 +1254,58 @@ async def _invoke_tool(
             0,
             classified,
         )
+    # Stream CM-5 — recoverable compression: when the tool truncated its
+    # output and carried the full rendering, save it to the workspace and
+    # let the LLM see a recoverable reference instead of a dead end.
+    footer = await _externalize_tool_overflow(result, tool, call_id, ctx, overflow_writer)
+    content = result.content + footer if footer is not None else result.content
     return (
-        ToolMessage(content=result.content, tool_call_id=call_id),
+        ToolMessage(content=content, tool_call_id=call_id),
         result.state_updates,
         result.refund_iterations,
         None,
     )
+
+
+async def _externalize_tool_overflow(
+    result: ToolResult,
+    tool: Tool,
+    call_id: str,
+    ctx: ToolContext,
+    writer: WorkspaceFileWriter | None,
+) -> str | None:
+    """Write a truncated tool result's full rendering to the workspace.
+
+    Best-effort (Mini-ADR CM-F5): a write failure leaves the truncated
+    content standing alone (the inline ``...[truncated]`` marker is still
+    there) and never affects the run. Returns the reference footer only
+    after the write landed — the footer must never point at a file that
+    does not exist. Read-only tools are skipped even if they ever set
+    ``full_content`` (CM-F3 — the persist→read→persist loop guard).
+    """
+    if result.full_content is None or writer is None:
+        return None
+    if tool.spec.resolved_side_effect == "read_only":
+        return None
+    rel = overflow_rel_path(run_id=ctx.run_id, call_id=call_id, tool_name=tool.spec.name)
+    try:
+        await writer.write(rel=rel, content=clamp_overflow(result.full_content))
+    except (asyncio.CancelledError, RunCancelledError):
+        raise
+    except Exception as exc:
+        logger.warning(
+            "tool.overflow_failed tool=%s rel=%s err=%s",
+            tool.spec.name,
+            rel,
+            type(exc).__name__,
+        )
+        _cm_tool_overflow_total.labels(outcome="degraded", tool=tool.spec.name).inc()
+        return None
+    total_chars = len(result.full_content)
+    _cm_tool_overflow_total.labels(outcome="externalized", tool=tool.spec.name).inc()
+    _cm_tool_overflow_chars.set(total_chars)
+    logger.info("tool.overflow tool=%s rel=%s chars=%d", tool.spec.name, rel, total_chars)
+    return render_overflow_footer(rel=rel, total_chars=total_chars)
 
 
 def _format_error(exc: BaseException) -> str:
