@@ -33,6 +33,7 @@ earliest retained event. There is no cancel-on-full in M0.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -375,12 +376,11 @@ async def run_agent(
                     data=retry_payload,
                 )
                 event_seq += 1
-                try:
-                    # Abort-aware backoff: a cancel during the wait exits
-                    # immediately and takes the INTERRUPTED path below.
+                # Abort-aware backoff: a timeout means the backoff simply
+                # elapsed; a cancel during the wait exits immediately and
+                # takes the INTERRUPTED path below.
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(record.abort_event.wait(), timeout=backoff_s)
-                except TimeoutError:
-                    pass
                 if record.abort_event.is_set():
                     break
                 graph_input = None
