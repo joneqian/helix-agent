@@ -25,6 +25,8 @@ from typing import Any
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
+from longmem.transient import with_retries
+
 DASHSCOPE_COMPAT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 
@@ -65,6 +67,12 @@ class _ChatTransport:
         self._http = http_client
 
     async def post(self, payload: dict[str, Any]) -> str:
+        # Hours-long runs hit transport drops and throttle-shaped 400s
+        # (2026-06-10/11 rounds 2-4) — one unretried ReadTimeout on an
+        # answer call killed a full end-to-end pass.
+        return await with_retries(lambda: self._post_once(payload))
+
+    async def _post_once(self, payload: dict[str, Any]) -> str:
         client = self._http or httpx.AsyncClient(timeout=120.0)
         try:
             response = await client.post(

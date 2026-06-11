@@ -257,3 +257,99 @@ async def test_cache_does_not_retry_genuine_400(tmp_path: Path) -> None:
     with pytest.raises(httpx.HTTPStatusError):
         await cached.embed(["hello"], tenant_id=uuid4())
     assert _BadInputBackend.attempts == 1  # no retry on genuine 400
+
+
+# ---------------------------------------------------------------------------
+# Shared transient retry — transport drops must self-heal (round 4:
+# one unretried ReadTimeout killed a full end-to-end pass, 2026-06-11)
+# ---------------------------------------------------------------------------
+
+
+def _patch_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    import asyncio
+
+    sleeps: list[float] = []
+
+    async def _fast_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fast_sleep)
+    return sleeps
+
+
+@pytest.mark.asyncio
+async def test_with_retries_recovers_transport_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    from longmem.transient import with_retries
+
+    sleeps = _patch_sleep(monkeypatch)
+    attempts = 0
+
+    async def _flaky() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("slow read")
+        if attempts == 2:
+            raise httpx.ConnectError("proxy gone")
+        return "ok"
+
+    assert await with_retries(_flaky) == "ok"
+    assert attempts == 3
+    assert len(sleeps) == 2
+
+
+@pytest.mark.asyncio
+async def test_with_retries_gives_up_after_max(monkeypatch: pytest.MonkeyPatch) -> None:
+    from longmem.transient import MAX_RETRIES, with_retries
+
+    sleeps = _patch_sleep(monkeypatch)
+    attempts = 0
+
+    async def _always_down() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("still down")
+
+    with pytest.raises(httpx.ReadTimeout):
+        await with_retries(_always_down)
+    assert attempts == MAX_RETRIES + 1
+    assert len(sleeps) == MAX_RETRIES
+
+
+def test_is_retryable_statuses() -> None:
+    from longmem.transient import is_retryable
+
+    request = httpx.Request("POST", "http://example.invalid/v1/chat/completions")
+
+    def _status_error(status: int, text: str) -> httpx.HTTPStatusError:
+        response = httpx.Response(status, text=text, request=request)
+        return httpx.HTTPStatusError(str(status), request=request, response=response)
+
+    assert is_retryable(httpx.RemoteProtocolError("server disconnected"))
+    assert is_retryable(_status_error(429, ""))
+    assert is_retryable(_status_error(503, "upstream busy"))
+    assert is_retryable(_throttle_error())  # DashScope throttle-shaped 400
+    assert not is_retryable(_status_error(400, '{"error":{"message":"invalid input"}}'))
+    assert not is_retryable(_status_error(401, "bad key"))
+
+
+@pytest.mark.asyncio
+async def test_chat_transport_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end through OpenAICompatCaller: first call drops, second lands."""
+    from longmem.openai_client import OpenAICompatCaller
+
+    _patch_sleep(monkeypatch)
+    calls = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ReadTimeout("slow read")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "answer"}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
+        caller = OpenAICompatCaller(api_key="k", model="qwen-plus", http_client=client)
+        reply = await caller(messages=[HumanMessage(content="q")], tools=[])
+    assert reply.content == "answer"
+    assert calls == 2

@@ -27,6 +27,7 @@ import httpx
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from helix_agent.protocol import catalog_entry
+from longmem.transient import with_retries
 
 _ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -77,6 +78,11 @@ class _Transport:
         self._http = http_client
 
     async def post(self, payload: dict[str, Any]) -> str:
+        # Same transient policy as the OpenAI-compat transport — an
+        # hours-long run must out-wait transport drops and throttling.
+        return await with_retries(lambda: self._post_once(payload))
+
+    async def _post_once(self, payload: dict[str, Any]) -> str:
         client = self._http or httpx.AsyncClient(timeout=120.0)
         try:
             response = await client.post(

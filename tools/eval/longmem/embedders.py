@@ -21,30 +21,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import random
 import sqlite3
 import struct
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID
 
-import httpx
-
-#: Throttle-shaped failures retry with exponential backoff; anything else
-#: re-raises immediately. DashScope capacity throttling lasts MINUTES (a
-#: 6-retry/~2min window was exhausted in a real run, 2026-06-10 round 3,
-#: while the same batch succeeded once the window passed) — the total
-#: window must out-wait it: 10 retries capped at 120s ≈ 11 minutes.
-_THROTTLE_MAX_RETRIES = 10
-_THROTTLE_SLEEP_CAP_S = 120.0
-_THROTTLE_MARKERS = ("ServiceUnavailable", "Too many requests", "throttl", "rate limit")
-
-
-def _is_throttle(exc: httpx.HTTPStatusError) -> bool:
-    if exc.response.status_code == 429:
-        return True
-    body = exc.response.text
-    return any(marker in body for marker in _THROTTLE_MARKERS)
+from longmem.transient import with_retries
 
 
 class KeywordEmbedder:
@@ -125,27 +108,15 @@ class CachedEmbedder:
             batches = [missing[s : s + self._batch] for s in range(0, len(missing), self._batch)]
 
             async def _fetch(batch: list[int]) -> list[tuple[float, ...]]:
+                # Throttle-shaped 400s (DashScope quirk, round 2-3) and
+                # transport drops (round 4 ReadTimeout) self-heal on the
+                # shared policy; genuine content 400s re-raise at once.
                 async with self._sem:
-                    for attempt in range(_THROTTLE_MAX_RETRIES + 1):
-                        try:
-                            return await self._backend.embed(  # type: ignore[attr-defined]
-                                [texts[i] for i in batch], tenant_id=tenant_id
-                            )
-                        except httpx.HTTPStatusError as exc:
-                            # DashScope reports capacity throttling as HTTP
-                            # 400 ("ServiceUnavailable ... Too many requests"
-                            # in the body — caught in a real baseline run,
-                            # 2026-06-10), not 429. Retry only throttle-shaped
-                            # errors; genuine content 400s re-raise at once.
-                            # Jitter desynchronises concurrent fetchers so
-                            # they don't all retry into the same window.
-                            if not _is_throttle(exc) or attempt == _THROTTLE_MAX_RETRIES:
-                                raise
-                            delay = min(2.0 * 2**attempt, _THROTTLE_SLEEP_CAP_S)
-                            # Retry jitter, not crypto.
-                            jitter = random.uniform(0.75, 1.25)  # noqa: S311
-                            await asyncio.sleep(delay * jitter)
-                    raise AssertionError("unreachable")  # pragma: no cover
+                    return await with_retries(
+                        lambda: self._backend.embed(  # type: ignore[attr-defined]
+                            [texts[i] for i in batch], tenant_id=tenant_id
+                        )
+                    )
 
             fetched = await asyncio.gather(*[_fetch(b) for b in batches])
             for batch, vectors in zip(batches, fetched, strict=True):
