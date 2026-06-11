@@ -98,7 +98,7 @@ async def test_update_spec_round_trip(store: InMemoryAgentSpecStore) -> None:
     new_doc = deepcopy(_BASE_SPEC)
     new_doc["spec"]["system_prompt"]["template"] = "updated prompt"
     new_spec = AgentSpec.model_validate(new_doc)
-    record = await store.update_spec(
+    result = await store.update_spec(
         tenant_id=_TENANT_A,
         name="code-reviewer",
         version="1.0.0",
@@ -106,9 +106,12 @@ async def test_update_spec_round_trip(store: InMemoryAgentSpecStore) -> None:
         spec_sha256="b" * 64,
         updated_by="alice",
     )
-    assert record is not None
-    assert record.spec.spec.system_prompt.template == "updated prompt"
-    assert record.spec_sha256 == "b" * 64
+    assert result is not None
+    assert result.record.spec.spec.system_prompt.template == "updated prompt"
+    assert result.record.spec_sha256 == "b" * 64
+    # Stream HX-5 -- the update appended revision 2 with the actor.
+    assert result.revision == 2
+    assert result.prev_sha256 == _sha()
 
 
 @pytest.mark.asyncio
@@ -167,3 +170,71 @@ async def test_record_ids_are_unique() -> None:
     )
     assert isinstance(a.id, UUID) and isinstance(b.id, UUID)
     assert a.id != b.id and a.id != uuid4()
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-5 -- revision history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_writes_revision_one(store: InMemoryAgentSpecStore) -> None:
+    await store.create(tenant_id=_TENANT_A, spec=_spec(), spec_sha256=_sha(), created_by="a")
+    history = await store.list_revisions(tenant_id=_TENANT_A, name="code-reviewer", version="1.0.0")
+    assert [r.revision for r in history] == [1]
+    assert history[0].actor_id == "a"
+    assert history[0].spec_sha256 == _sha()
+
+
+@pytest.mark.asyncio
+async def test_updates_append_revisions_newest_first(store: InMemoryAgentSpecStore) -> None:
+    await store.create(tenant_id=_TENANT_A, spec=_spec(), spec_sha256=_sha(), created_by="a")
+    for i, sha_char in enumerate("bc"):
+        doc = deepcopy(_BASE_SPEC)
+        doc["spec"]["system_prompt"]["template"] = f"prompt v{i}"
+        await store.update_spec(
+            tenant_id=_TENANT_A,
+            name="code-reviewer",
+            version="1.0.0",
+            spec=AgentSpec.model_validate(doc),
+            spec_sha256=sha_char * 64,
+            updated_by="alice",
+        )
+    history = await store.list_revisions(tenant_id=_TENANT_A, name="code-reviewer", version="1.0.0")
+    assert [r.revision for r in history] == [3, 2, 1]
+    assert history[0].actor_id == "alice"
+    one = await store.get_revision(
+        tenant_id=_TENANT_A, name="code-reviewer", version="1.0.0", revision=2
+    )
+    assert one is not None and one.spec_sha256 == "b" * 64
+    assert (
+        await store.get_revision(
+            tenant_id=_TENANT_A, name="code-reviewer", version="1.0.0", revision=9
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_sha_update_is_noop_without_revision(store: InMemoryAgentSpecStore) -> None:
+    await store.create(tenant_id=_TENANT_A, spec=_spec(), spec_sha256=_sha(), created_by="a")
+    result = await store.update_spec(
+        tenant_id=_TENANT_A,
+        name="code-reviewer",
+        version="1.0.0",
+        spec=_spec(),
+        spec_sha256=_sha(),
+        updated_by="alice",
+    )
+    assert result is not None
+    assert result.revision is None
+    history = await store.list_revisions(tenant_id=_TENANT_A, name="code-reviewer", version="1.0.0")
+    assert [r.revision for r in history] == [1]
+
+
+@pytest.mark.asyncio
+async def test_revisions_do_not_leak_cross_tenant(store: InMemoryAgentSpecStore) -> None:
+    await store.create(tenant_id=_TENANT_A, spec=_spec(), spec_sha256=_sha(), created_by="a")
+    assert (
+        await store.list_revisions(tenant_id=_TENANT_B, name="code-reviewer", version="1.0.0") == []
+    )

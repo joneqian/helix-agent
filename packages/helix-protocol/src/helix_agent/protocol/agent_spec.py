@@ -949,3 +949,25 @@ class AgentSpecRecord(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+
+
+class AgentSpecRevisionRecord(BaseModel):
+    """One immutable row of the ``agent_spec_revision`` history table.
+
+    Stream HX-5 (Mini-ADR HX-E1/E2) — every create / content-changing
+    update of a manifest appends one revision snapshot. Rows are never
+    updated or deleted; a rollback *appends* a new revision carrying an
+    older snapshot's content.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    tenant_id: UUID
+    agent_name: str
+    agent_version: str
+    revision: int = Field(ge=1)
+    spec: AgentSpec
+    spec_sha256: str = Field(min_length=64, max_length=64)
+    actor_id: str
+    created_at: datetime
