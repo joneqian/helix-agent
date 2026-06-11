@@ -20,7 +20,7 @@ from helix_agent.runtime.checkpointer.timing import (
 
 def _op_count(op: str) -> float:
     child = _checkpoint_op_seconds.labels(op=op)
-    return child._sum.get()  # type: ignore[attr-defined,no-any-return]
+    return float(child._sum.get())
 
 
 def _config(thread_id: str = "t-1") -> Any:
