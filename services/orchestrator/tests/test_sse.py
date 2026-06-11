@@ -817,3 +817,219 @@ async def test_run_agent_session_duration_error_outcome() -> None:
     )
     after = _session_duration_sum("error")
     assert after > before
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-3 — run-level transient retry (STREAM-HX-DESIGN § 4.5)
+# ---------------------------------------------------------------------------
+
+
+def _retry_count(outcome: str) -> float:
+    from orchestrator.run_retry import run_retry_total
+
+    child = run_retry_total.labels(outcome=outcome)
+    return child._value.get()  # type: ignore[attr-defined,no-any-return]
+
+
+@dataclass
+class _FlakyGraph:
+    """``astream`` raises ``exc`` for the first ``fail_times`` attempts,
+    then streams ``chunks``. Records each attempt's ``input`` so a test
+    can assert the retry re-invoked with ``None`` (checkpoint
+    continuation, J-24)."""
+
+    exc: BaseException
+    chunks: list[Any] = field(default_factory=lambda: [{"agent": {"step_count": 1}}])
+    fail_times: int = 1
+    inputs: list[Any] = field(default_factory=list)
+    final_state: dict[str, Any] = field(default_factory=dict)
+
+    async def astream(
+        self, input: Any, config: Any = None, *, stream_mode: Any = None
+    ) -> AsyncIterator[Any]:
+        del config, stream_mode
+        self.inputs.append(input)
+        if len(self.inputs) <= self.fail_times:
+            raise self.exc
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aget_state(self, config: Any) -> Any:
+        del config
+        return SimpleNamespace(values=dict(self.final_state))
+
+
+def _transient_exc() -> Exception:
+    from orchestrator.llm.router import AllProvidersExhaustedError
+
+    return AllProvidersExhaustedError(TimeoutError("529 overloaded"))
+
+
+@pytest.fixture
+def fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("orchestrator.sse.retry_backoff_s", lambda: 0.01)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_retries_transient_failure_and_recovers(fast_backoff: None) -> None:
+    """One transient failure → retry from checkpoint → SUCCESS; the retry
+    event is published + persisted ordering-wise, and the second astream
+    call gets ``input=None``."""
+    before = _retry_count("recovered")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    graph = _FlakyGraph(exc=_transient_exc())
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.SUCCESS
+    assert graph.inputs == [{"messages": []}, None]
+    events = await _drain(bridge, record.run_id)
+    retry_events = [e for e in events if e.event == "retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0].data["attempt"] == 1
+    assert retry_events[0].data["error_class"] == "AllProvidersExhaustedError"
+    assert not [e for e in events if e.event == "error"]
+    assert _retry_count("recovered") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_second_failure_lands_error(fast_backoff: None) -> None:
+    """Both attempts die → single retry, then the unchanged ERROR path."""
+    before = _retry_count("failed_again")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    graph = _FlakyGraph(exc=_transient_exc(), fail_times=2)
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.ERROR
+    assert len(graph.inputs) == 2  # exactly one retry, never more
+    events = await _drain(bridge, record.run_id)
+    assert len([e for e in events if e.event == "retry"]) == 1
+    assert len([e for e in events if e.event == "error"]) == 1
+    assert _retry_count("failed_again") == before + 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_permanent_error_is_not_retried(fast_backoff: None) -> None:
+    from helix_agent.runtime.middleware import LLMClientError
+
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    graph = _FlakyGraph(exc=LLMClientError("400 bad request"))
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.ERROR
+    assert len(graph.inputs) == 1
+    events = await _drain(bridge, record.run_id)
+    assert not [e for e in events if e.event == "retry"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_retry_disabled_via_env(
+    fast_backoff: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HELIX_RUN_TRANSIENT_RETRY", "0")
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    graph = _FlakyGraph(exc=_transient_exc())
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.ERROR
+    assert len(graph.inputs) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_guard_rejects_unsafe_dangling_batch(fast_backoff: None) -> None:
+    """A trailing dangling tool-call batch that fails the capability check
+    blocks the retry — the run takes the unchanged ERROR path."""
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    dangling = AIMessage(
+        content="",
+        tool_calls=[{"name": "bash", "args": {}, "id": "call-0"}],
+    )
+    graph = _FlakyGraph(
+        exc=_transient_exc(),
+        final_state={"messages": [dangling]},
+    )
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+        tool_replay_safe=lambda name: False,
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.ERROR
+    assert len(graph.inputs) == 1
+    events = await _drain(bridge, record.run_id)
+    assert not [e for e in events if e.event == "retry"]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_guard_allows_safe_dangling_batch(fast_backoff: None) -> None:
+    """A dangling batch whose every call is capability-safe retries fine."""
+    bridge = InMemoryStreamBridge()
+    rm = RunManager()
+    record = await _new_record(rm)
+    dangling = AIMessage(
+        content="",
+        tool_calls=[{"name": "read_file", "args": {}, "id": "call-0"}],
+    )
+    graph = _FlakyGraph(
+        exc=_transient_exc(),
+        final_state={"messages": [dangling]},
+    )
+
+    await run_agent(
+        bridge=bridge,
+        run_manager=rm,
+        record=record,
+        graph=graph,
+        graph_input={"messages": []},
+        config={},
+        tool_replay_safe=lambda name: name == "read_file",
+    )
+
+    assert rm.get(record.run_id).status is RunStatus.SUCCESS
+    assert graph.inputs == [{"messages": []}, None]
