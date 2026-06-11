@@ -363,13 +363,16 @@ async def test_feedback_worker_scan_and_stamp_lifecycle(
         )
 
         # Cross-tenant enumeration under a bypass scope (no tenant GUC).
+        # The session-scoped container carries unprocessed 👎 rows from
+        # earlier tests — filter to this test's tenants before asserting.
         current_tenant_id_var.set(None)
         bypass_token = bypass_rls_var.set(True)
         try:
-            rows = await store.list_unprocessed_down_all_tenants(limit=10)
+            rows = await store.list_unprocessed_down_all_tenants(limit=50)
         finally:
             bypass_rls_var.reset(bypass_token)
-        assert {r.tenant_id for r in rows} == {tenant_a, tenant_b}
+        ours = [r for r in rows if r.tenant_id in {tenant_a, tenant_b}]
+        assert {r.tenant_id for r in ours} == {tenant_a, tenant_b}
         assert all(r.rating == "down" for r in rows)
 
         # Stamp tenant A's row under its own scope; next scan excludes it.
@@ -380,10 +383,11 @@ async def test_feedback_worker_scan_and_stamp_lifecycle(
         current_tenant_id_var.set(None)
         bypass_token = bypass_rls_var.set(True)
         try:
-            remaining = await store.list_unprocessed_down_all_tenants(limit=10)
+            remaining = await store.list_unprocessed_down_all_tenants(limit=50)
         finally:
             bypass_rls_var.reset(bypass_token)
-        assert {r.tenant_id for r in remaining} == {tenant_b}
+        ours = [r for r in remaining if r.tenant_id in {tenant_a, tenant_b}]
+        assert {r.tenant_id for r in ours} == {tenant_b}
     finally:
         await engine.dispose()
 
