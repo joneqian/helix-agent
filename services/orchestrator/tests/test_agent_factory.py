@@ -985,3 +985,37 @@ async def test_build_agent_resolves_shared_token_estimator(
         built = await _build(_spec(), secret_store=_secret_store(), checkpointer=cp)
     assert isinstance(built, BuiltAgent)
     assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-1 PR2 — context_window catalog resolution (Mini-ADR HX-A4)
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_context_window_explicit_value_wins() -> None:
+    from orchestrator.agent_factory import _resolved_context_window
+
+    model = ModelSpec(provider="qwen", name="qwen3.7-max", context_window=42_000)
+    assert _resolved_context_window(model) == 42_000
+
+
+def test_resolved_context_window_from_catalog() -> None:
+    from orchestrator.agent_factory import _resolved_context_window
+
+    model = ModelSpec(provider="qwen", name="qwen3.7-max")
+    assert _resolved_context_window(model) == 1_000_000
+
+
+def test_resolved_context_window_catalog_entry_without_window() -> None:
+    from orchestrator.agent_factory import _resolved_context_window
+
+    # qwen3-vl-plus is in the catalog but publishes no context_window.
+    model = ModelSpec(provider="qwen", name="qwen3-vl-plus")
+    assert _resolved_context_window(model) == 200_000
+
+
+def test_resolved_context_window_off_catalog_fallback() -> None:
+    from orchestrator.agent_factory import _resolved_context_window
+
+    model = ModelSpec(provider="self-hosted", name="my-private-model")
+    assert _resolved_context_window(model) == 200_000

@@ -18,6 +18,7 @@ STREAM-E-DESIGN Mini-ADR E-15: middleware splits into two groups.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from langchain_core.messages import BaseMessage
 
@@ -41,12 +42,6 @@ from helix_agent.runtime.middleware import (
     TokenUsageMiddleware,
 )
 from helix_agent.runtime.tokens import TokenEstimator, flatten_message
-
-#: Mirror of :class:`DynamicContextMiddleware`'s constructor defaults —
-#: used when the manifest's ``policies.context_compression`` block omits
-#: a key.
-_DEFAULT_MAX_TURNS = 20
-_DEFAULT_MAX_TOKENS = 8000
 
 
 @dataclass(frozen=True)
@@ -98,11 +93,15 @@ def build_middleware_chains(
     env = env or MiddlewareEnv()
     model = spec.spec.model
     middlewares: list[Middleware] = [
-        _dynamic_context(spec, estimator=estimator),
         LLMErrorHandlingMiddleware(breaker_registry=env.breaker_registry or BreakerRegistry()),
         LoopDetectionMiddleware(),
         SandboxAuditMiddleware(),
     ]
+    # Stream HX-1 (Mini-ADR HX-A5) — the E.3 view trim is opt-in: it is
+    # only built when the manifest sets an explicit cap.
+    dynamic_context = _dynamic_context(spec, estimator=estimator)
+    if dynamic_context is not None:
+        middlewares.insert(0, dynamic_context)
 
     if env.redact_text is not None:
         middlewares.append(PIIRedactorMiddleware(redact_text=env.redact_text))
@@ -154,35 +153,38 @@ def _dynamic_context(
     spec: AgentSpec,
     *,
     estimator: TokenEstimator | None = None,
-) -> DynamicContextMiddleware:
-    """Build the context middleware, reading ``max_turns`` / ``max_tokens``
-    from the manifest's ``policies.context_compression`` block.
+) -> DynamicContextMiddleware | None:
+    """Build the E.3 view-trim middleware — or ``None`` when the manifest
+    doesn't opt in.
 
-    Stream L.L2 — ``context_compression`` is now the
-    :class:`ContextCompressionPolicy` model, not a permissive dict; the
-    legacy ``max_turns`` / ``max_tokens`` keys preserved as typed
-    fields so existing manifests keep loading.
+    Stream HX-1 (Mini-ADR HX-A5) — ``policies.context_compression.max_turns``
+    / ``max_tokens`` both default ``None``, which skips the middleware
+    entirely: the M0 naïve trim's legacy defaults (20 messages / 8000
+    tokens) silently capped every LLM call far below the
+    ``context_window``-proportional thresholds the CM-2 window + L2
+    compressor manage. Setting either field opts the trim back in; an
+    unset axis falls to the middleware's own constructor default.
 
-    Stream HX-1 — ``estimator`` (when injected) replaces the middleware's
-    default ``chars // 4`` per-message heuristic through its existing
-    ``token_estimator`` seam, so all three context gates share one
-    estimation basis."""
+    ``estimator`` (when injected) replaces the middleware's default
+    ``chars // 4`` per-message heuristic through its existing
+    ``token_estimator`` seam, so all context gates share one estimation
+    basis."""
     cc = spec.spec.policies.context_compression
-    if estimator is None:
-        return DynamicContextMiddleware(
-            max_turns=cc.max_turns,
-            max_tokens=cc.max_tokens,
-        )
-    shared = estimator
+    if cc.max_turns is None and cc.max_tokens is None:
+        return None
+    kwargs: dict[str, Any] = {}
+    if cc.max_turns is not None:
+        kwargs["max_turns"] = cc.max_turns
+    if cc.max_tokens is not None:
+        kwargs["max_tokens"] = cc.max_tokens
+    if estimator is not None:
+        shared = estimator
 
-    def _per_message(msg: BaseMessage) -> int:
-        return shared.count(flatten_message(msg))
+        def _per_message(msg: BaseMessage) -> int:
+            return shared.count(flatten_message(msg))
 
-    return DynamicContextMiddleware(
-        max_turns=cc.max_turns,
-        max_tokens=cc.max_tokens,
-        token_estimator=_per_message,
-    )
+        kwargs["token_estimator"] = _per_message
+    return DynamicContextMiddleware(**kwargs)
 
 
 def _chain(anchor: str, middlewares: list[Middleware]) -> MiddlewareChain | None:

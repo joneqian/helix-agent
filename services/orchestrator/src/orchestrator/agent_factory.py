@@ -512,7 +512,7 @@ async def build_agent(
     if cc_policy.enabled:
         context_compressor = ContextCompressor(
             llm_caller=routers.default,
-            context_window=spec.spec.model.context_window,
+            context_window=_resolved_context_window(spec.spec.model),
             threshold_pct=cc_policy.threshold_pct,
             head_keep=cc_policy.head_keep,
             tail_keep=cc_policy.tail_keep,
@@ -527,7 +527,7 @@ async def build_agent(
     working_window: WorkingWindow | None = None
     if wm_policy.enabled:
         working_window = WorkingWindow(
-            context_window=spec.spec.model.context_window,
+            context_window=_resolved_context_window(spec.spec.model),
             threshold_pct=wm_policy.threshold_pct,
             max_recent_turns=wm_policy.max_recent_turns,
             keep_first_turn=wm_policy.keep_first_turn,
@@ -1075,6 +1075,30 @@ _THINKING_BUDGET_MAX = 81_920
 def _thinking_budget(effort: str, max_tokens: int) -> int:
     ratio = _THINKING_BUDGET_RATIO[effort]
     return max(_THINKING_BUDGET_MIN, min(int(max_tokens * ratio), _THINKING_BUDGET_MAX))
+
+
+#: Stream HX-1 (Mini-ADR HX-A4) — fallback window when neither the
+#: manifest nor the catalog declares one (off-catalog models, entries
+#: without a published window). Matches the long-standing ModelSpec
+#: default so off-catalog behaviour is unchanged.
+_FALLBACK_CONTEXT_WINDOW = 200_000
+
+
+def _resolved_context_window(model: ModelSpec) -> int:
+    """The effective context window for the context-management gates.
+
+    Resolution order (Mini-ADR HX-A4): an explicit manifest value always
+    wins; otherwise the model-catalog entry's published window; otherwise
+    the 200K fallback. Keeps the manifest free of hand-copied catalog
+    numbers — a qwen3.7-max agent automatically gets 1M-proportional
+    compression thresholds.
+    """
+    if model.context_window is not None:
+        return model.context_window
+    entry = catalog_entry(model.provider, model.name)
+    if entry is not None and entry.context_window is not None:
+        return entry.context_window
+    return _FALLBACK_CONTEXT_WINDOW
 
 
 def _thinking_payload(model: ModelSpec) -> dict[str, Any] | None:

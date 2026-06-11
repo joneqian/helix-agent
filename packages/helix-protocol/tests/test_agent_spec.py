@@ -719,3 +719,38 @@ def test_model_effort_rejects_unknown_level() -> None:
     doc["spec"]["model"]["effort"] = "xtreme"
     with pytest.raises(ValidationError):
         AgentSpec.model_validate(doc)
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-1 PR2 — context_window catalog resolution + E.3 trim opt-in
+# ---------------------------------------------------------------------------
+
+
+def test_model_context_window_defaults_none_for_catalog_resolution() -> None:
+    """Mini-ADR HX-A4 — ``None`` means the factory resolves the window
+    from the model catalog at build time; an explicit value always wins."""
+    spec = AgentSpec.model_validate(_MINIMAL)
+    assert spec.spec.model.context_window is None
+
+
+def test_model_context_window_explicit_value_validated() -> None:
+    doc = deepcopy(_MINIMAL)
+    doc["spec"]["model"]["context_window"] = 1_000_000
+    assert AgentSpec.model_validate(doc).spec.model.context_window == 1_000_000
+    doc["spec"]["model"]["context_window"] = 0
+    with pytest.raises(ValidationError):
+        AgentSpec.model_validate(doc)
+
+
+def test_context_compression_trim_caps_default_none() -> None:
+    """Mini-ADR HX-A5 — the E.3 view trim is opt-in: both caps default
+    ``None`` (middleware not built); setting either opts back in."""
+    cc = AgentSpec.model_validate(_MINIMAL).spec.policies.context_compression
+    assert cc.max_turns is None
+    assert cc.max_tokens is None
+
+    doc = deepcopy(_MINIMAL)
+    doc["spec"]["policies"] = {"context_compression": {"max_tokens": 9000}}
+    cc = AgentSpec.model_validate(doc).spec.policies.context_compression
+    assert cc.max_tokens == 9000
+    assert cc.max_turns is None
