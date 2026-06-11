@@ -23,15 +23,12 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
 
 import httpx
 
 MAX_RETRIES = 10
 SLEEP_CAP_S = 120.0
 _THROTTLE_MARKERS = ("ServiceUnavailable", "Too many requests", "throttl", "rate limit")
-
-T = TypeVar("T")
 
 
 def is_retryable(exc: httpx.HTTPError) -> bool:
@@ -46,7 +43,7 @@ def is_retryable(exc: httpx.HTTPError) -> bool:
     return False
 
 
-async def with_retries(fn: Callable[[], Awaitable[T]]) -> T:
+async def with_retries[T](fn: Callable[[], Awaitable[T]]) -> T:
     """Run ``fn``, retrying transient failures with exponential backoff."""
     for attempt in range(MAX_RETRIES + 1):
         try:
