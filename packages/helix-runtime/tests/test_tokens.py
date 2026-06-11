@@ -9,13 +9,11 @@ fetched (offline CI must never fail on the fail-open path).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from tiktoken import Encoding
+from tiktoken import Encoding
 
 from helix_agent.runtime.tokens import (
     CHARS_PER_TOKEN,
@@ -48,7 +46,7 @@ def test_char_estimator_matches_legacy_heuristic() -> None:
 def test_tiktoken_estimator_uses_loaded_encoding() -> None:
     est = TiktokenEstimator()
     fake = _FakeEncoding()
-    est._encoding = cast("Encoding", fake)
+    est._encoding = cast(Encoding, fake)
     assert est.count("一二三四五六七八") == 8  # 1 token/char, not 8 // 4
     assert fake.calls == 1
 
@@ -56,14 +54,14 @@ def test_tiktoken_estimator_uses_loaded_encoding() -> None:
 def test_tiktoken_estimator_memoises_repeat_texts() -> None:
     est = TiktokenEstimator()
     fake = _FakeEncoding()
-    est._encoding = cast("Encoding", fake)
+    est._encoding = cast(Encoding, fake)
     assert est.count("repeated text") == est.count("repeated text")
     assert fake.calls == 1  # second count served from the memo
 
 
 def test_tiktoken_estimator_memo_is_bounded() -> None:
     est = TiktokenEstimator(memo_max_entries=2)
-    est._encoding = cast("Encoding", _FakeEncoding())
+    est._encoding = cast(Encoding, _FakeEncoding())
     for text in ("a", "bb", "ccc"):
         est.count(text)
     assert len(est._memo) == 2  # oldest entry evicted
@@ -88,7 +86,7 @@ def test_tiktoken_estimator_encode_failure_falls_back() -> None:
             raise RuntimeError("boom")
 
     est = TiktokenEstimator()
-    est._encoding = cast("Encoding", _Exploding())
+    est._encoding = cast(Encoding, _Exploding())
     assert est.count("abcdefgh") == 8 // CHARS_PER_TOKEN
     assert est._failed is True
 
