@@ -91,3 +91,68 @@ export async function createAgent(
 ): Promise<AgentDetailResponse> {
   return postJson<AgentDetailResponse>("/v1/agents", payload);
 }
+
+/** Stream HX-5 — one revision-history entry (summary; no spec payload).
+ *  The diff view fetches the two full snapshots it compares. */
+export interface RevisionSummary {
+  revision: number;
+  spec_sha256: string;
+  actor_id: string;
+  created_at: string;
+}
+
+export interface RevisionList {
+  items: RevisionSummary[];
+}
+
+export interface RevisionDetail {
+  record: {
+    revision: number;
+    spec_sha256: string;
+    actor_id: string;
+    created_at: string;
+    /** Full manifest snapshot at this revision. */
+    spec: Record<string, unknown>;
+  };
+}
+
+export interface RollbackResult {
+  record: AgentDetailResponse["record"];
+  /** History row the rollback appended; null = current content already
+   *  matched the target snapshot (recorded no-op). */
+  revision: number | null;
+  rolled_back_to: number;
+}
+
+export async function listRevisions(
+  name: string,
+  version: string,
+): Promise<RevisionList> {
+  return getJson<RevisionList>(
+    `/v1/agents/${encodeURIComponent(name)}/${encodeURIComponent(version)}/revisions`,
+  );
+}
+
+export async function getRevision(
+  name: string,
+  version: string,
+  revision: number,
+): Promise<RevisionDetail> {
+  return getJson<RevisionDetail>(
+    `/v1/agents/${encodeURIComponent(name)}/${encodeURIComponent(version)}/revisions/${revision}`,
+  );
+}
+
+/** POST .../revisions/{n}/rollback — rolls *forward* to the old
+ *  snapshot's content by appending a new revision (history is never
+ *  rewritten). */
+export async function rollbackToRevision(
+  name: string,
+  version: string,
+  revision: number,
+): Promise<RollbackResult> {
+  return postJson<RollbackResult>(
+    `/v1/agents/${encodeURIComponent(name)}/${encodeURIComponent(version)}/revisions/${revision}/rollback`,
+    {},
+  );
+}

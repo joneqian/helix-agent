@@ -41,6 +41,7 @@ from helix_agent.persistence.agent_spec import AgentSpecStore, DuplicateAgentSpe
 from helix_agent.protocol import (
     AgentSpec,
     AgentSpecRecord,
+    AgentSpecRevisionRecord,
     AgentSpecStatus,
     AuditAction,
     AuditResult,
@@ -70,6 +71,33 @@ class AgentList(BaseModel):
     items: list[AgentSpecRecord]
     total: int
     cross_tenant: bool = False  # Stream N — true ⇔ ?tenant_id=* response
+
+
+class RevisionSummary(BaseModel):
+    """One history entry, without the full spec payload (Stream HX-5).
+
+    The list view needs actor / time / sha; the diff view fetches the
+    two full snapshots it compares via ``GET .../revisions/{n}``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    revision: int
+    spec_sha256: str
+    actor_id: str
+    created_at: str
+
+
+class RevisionList(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    items: list[RevisionSummary]
+
+
+class RevisionDetail(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    record: AgentSpecRevisionRecord
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +471,119 @@ def build_agents_router() -> APIRouter:
         )
         return JSONResponse(
             {"success": True, "data": AgentDetail(record=result.record).model_dump(mode="json")}
+        )
+
+    @router.get("/{name}/{version}/revisions")
+    async def list_revisions(
+        name: str,
+        version: str,
+        request: Request,
+        repo: Annotated[AgentSpecStore, Depends(_get_repo)],
+        limit: int = 50,
+        offset: int = 0,
+    ) -> JSONResponse:
+        """Stream HX-5 — revision history, newest first (summaries only)."""
+        tenant_id = request.state.tenant_id
+        # 404 for an unknown manifest, [] for a known one with a short
+        # history window — the UI distinguishes the two.
+        record = await repo.get(tenant_id=tenant_id, name=name, version=version)
+        if record is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        revisions = await repo.list_revisions(
+            tenant_id=tenant_id, name=name, version=version, limit=limit, offset=offset
+        )
+        items = [
+            RevisionSummary(
+                revision=r.revision,
+                spec_sha256=r.spec_sha256,
+                actor_id=r.actor_id,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in revisions
+        ]
+        return JSONResponse(
+            {"success": True, "data": RevisionList(items=items).model_dump(mode="json")}
+        )
+
+    @router.get("/{name}/{version}/revisions/{revision}")
+    async def get_revision(
+        name: str,
+        version: str,
+        revision: int,
+        request: Request,
+        repo: Annotated[AgentSpecStore, Depends(_get_repo)],
+    ) -> JSONResponse:
+        """Stream HX-5 — one full revision snapshot (the diff view's input)."""
+        tenant_id = request.state.tenant_id
+        snapshot = await repo.get_revision(
+            tenant_id=tenant_id, name=name, version=version, revision=revision
+        )
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="revision not found")
+        return JSONResponse(
+            {"success": True, "data": RevisionDetail(record=snapshot).model_dump(mode="json")}
+        )
+
+    @router.post("/{name}/{version}/revisions/{revision}/rollback")
+    async def rollback_to_revision(
+        name: str,
+        version: str,
+        revision: int,
+        request: Request,
+        repo: Annotated[AgentSpecStore, Depends(_get_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> JSONResponse:
+        """Stream HX-5 (Mini-ADR HX-E2) — roll the manifest back to an
+        older snapshot by *appending* a new revision with its content.
+
+        Same write path as PUT (``update_spec``): the snapshot was
+        schema-validated at write time and re-validates on read; a
+        rollback to the current content is a recorded no-op.
+        """
+        tenant_id = request.state.tenant_id
+        actor_id = request.state.actor_id
+        trace_id = current_trace_id_hex()
+        snapshot = await repo.get_revision(
+            tenant_id=tenant_id, name=name, version=version, revision=revision
+        )
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="revision not found")
+        result = await repo.update_spec(
+            tenant_id=tenant_id,
+            name=name,
+            version=version,
+            spec=snapshot.spec,
+            spec_sha256=snapshot.spec_sha256,
+            updated_by=actor_id,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        await emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=AuditAction.MANIFEST_WRITE,
+            resource_type="manifest",
+            resource_id=f"{name}/{version}",
+            trace_id=trace_id,
+            details={
+                "spec_sha256": snapshot.spec_sha256,
+                "prev_sha256": result.prev_sha256,
+                "revision": result.revision,
+                "rolled_back_to": revision,
+            },
+        )
+        return JSONResponse(
+            {
+                "success": True,
+                "data": {
+                    "record": AgentDetail(record=result.record).model_dump(mode="json")["record"],
+                    "revision": result.revision,
+                    "rolled_back_to": revision,
+                },
+            }
         )
 
     @router.delete("/{name}/{version}", status_code=204)
