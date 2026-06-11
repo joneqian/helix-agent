@@ -105,9 +105,7 @@ class _StateGraph:
 def _ai_with_calls(*names: str) -> AIMessage:
     return AIMessage(
         content="",
-        tool_calls=[
-            {"name": name, "args": {}, "id": f"call-{i}"} for i, name in enumerate(names)
-        ],
+        tool_calls=[{"name": name, "args": {}, "id": f"call-{i}"} for i, name in enumerate(names)],
     )
 
 
@@ -137,9 +135,7 @@ async def test_dangling_safe_batch_is_safe() -> None:
 @pytest.mark.asyncio
 async def test_dangling_unsafe_batch_is_rejected() -> None:
     messages = [HumanMessage(content="hi"), _ai_with_calls("read_file", "bash")]
-    assert not await replay_is_safe(
-        _StateGraph(messages), {}, lambda name: name == "read_file"
-    )
+    assert not await replay_is_safe(_StateGraph(messages), {}, lambda name: name == "read_file")
 
 
 @pytest.mark.asyncio
