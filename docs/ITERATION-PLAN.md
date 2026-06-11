@@ -1470,6 +1470,8 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [ ] **HX-6 sandbox 热池 + 资源限额粒度**（评估 ⑤，2-3 PR）：预热池替代每 acquire 冷启动（M1 既定项提前）；per-call CPU/mem cgroup 限额
 - [ ] **HX-7 trace 生产接线 + approval 队列页**（评估 ⑨，2-3 PR）：Langfuse Recording stub → SDK adapter（ADR-0005）；admin UI 独立待批列表页（跨 run 聚合 + 批量操作）
 - [ ] **HX-8 多租户薄点**（评估 ⑩，2 PR）：平台 provider/tool 凭证按租户隔离（与 Stream Y 计量路线衔接）+ 跨租户查询可配 block（现仅 audit）
+- [ ] **HX-12 工具披露 2.0·应用层**（评估 ②，源于 [Hermes Tool Search 源码分析](./research/2026-06-11-hermes-tool-search-source-analysis.md) + 业界调研，2026-06-11 拍板，3-4 PR）：① `registry.search` 自然语言 ranked 检索（BM25 + jieba + 零 IDF substring 兜底，留向量接缝）+ find_tools 防呆包（source 三池标注/描述截 400/教学式错误/docstring 过期修正）② 阈值逃生门——assembly 注册期估算 MCP schema 总量（chars/4，HX-1 落地后换真 tokenizer），< min(上下文 10%, 20k) 直接 active 注册 ③ call-through——dispatch 拦截直调 deferred 名自动 promote + 本 turn 执行，未命中附 ranked 建议 ④ promotion 退场（compressor 触发时降级 N turn 未调用项，reducer 删除语义设计期细化）+ 指标（提升率/未调用率/miss 率，并入 HX-4，miss 率喂 HX-2）。公理：不存在 drop core tool 代码路径；fail-open（故障=多花 token 绝非少能力）
+- [ ] **HX-13 工具披露 2.0·厂商原生档**（前置 HX-12，3 PR）：① `ModelEntry.tool_disclosure: Literal["native_search","allowed_tools"] | None` 能力位 + 9 provider 标注 + doubles sweep（含 tools/eval）② anthropic：`defer_loading` + beta header `tool-search-tool-2025-10-19`（cache append 语义 + server 端检索），此档停用自家 find_tools，beta 拒绝 fail-open 降 None 档 ③ openai/azure：全量 schema 冻结 + `tool_choice.allowed_tools`=核心+promoted（promotion 驱动子集而非 bind）；openrouter/compat 透传情况设计期逐家核实，不支持归 None 档（CM-L5 纪律）。None 档行为=HX-12（三档行为分裂已拍板接受，兜底档保语义底线）
 
 ### Wave 3 — 架构级（设计先行重点评审）
 

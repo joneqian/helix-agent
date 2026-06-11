@@ -196,3 +196,36 @@ Hermes 侧可直接搬运的设计资产：`should_activate` 的三态+兜底形
 1. Hermes Tool Search 是一份**工程质量很高的参考实现**：无状态 catalog（一致性优先）、双重 scope gate（纵深防御）、unwrap 透明性（transcript 与治理面各看各的真相）、处处 fail-open、39 测试随修复合入。其复杂度的一半（unwrap + scope）源于它的 describe 模型在全局 registry 上运行——这是 helix 的 promotion 模型 + per-run registry 天然不需要付的成本。
 2. helix 的 TE-6b（always-defer-MCP）方向正确但**缺两块**：低于阈值的直通逃生门（小目录付了不必要的间接层）、自然语言 ranked 检索（现有 query 语法对模型不友好）。两者都有 Hermes 验证过的成熟形态可参照，且 helix 的向量栈能做得比 BM25 更好。
 3. 建议处置：TE-6c-a/b 进 Stream HX backlog（与 HX-1 弱耦合，chars/4 版本可先行）；TE-6c-c 不做；`find_tools.py` docstring 过期问题顺手修。
+
+---
+
+# 修订：业界调研与方向拍板（2026-06-11，§7-8 的处置建议被本节取代）
+
+报告 merge 后续做了两轮深化：对 Hermes 全部优势面的借鉴对账 + 业界解法调研。结论改变了 §7 的方案形态，最终拍板为 **HX-12/HX-13**（并入 Stream HX Wave 2，不单开 TE 子项）。
+
+## 9. 业界四种解法（调研 2026-06-11）
+
+| 层级 | 解法 | 关键事实 |
+|---|---|---|
+| API 级（Anthropic） | **Tool Search Tool**（beta `tool-search-tool-2025-10-19`）：工具标 `defer_loading: true` 不进初始 prompt，server 端注入 tool search，**发现的 schema 以 append 语义注入不破 tools prefix cache**，模型直调真名 | 官方数据 85% token 削减；MCP go-sdk / LiteLLM / OpenClaw 生态跟进中 |
+| API 级（OpenAI） | **`tool_choice: allowed_tools`**：全量 schema 冻结进缓存 prefix（付一次 cache write），每 turn 用请求元数据限制可用子集——子集变化不进 prefix，缓存永不破 | OpenAI 官方 prompt-caching 指南明确推荐"freeze your tools array, per-request flexibility belongs in allowed_tools" |
+| Serving 级（Manus） | **logit 掩码**："mask, don't remove"——绝不中途增删工具（破 KV cache + 历史引用消失的工具使模型混乱），解码期把禁用工具 logits 压 -∞ | 需要解码控制权，自托管可行；API 消费者的等价物即 allowed_tools |
+| 应用级（学术） | **RAG-MCP**（2505.03275）：LLM 介入前语义检索预选工具；**MCP-Zero**（2506.01056）：模型主动声明需求；**Toolshed**（2410.14594）：查询改写+示例嵌入+rerank 三段融合 | **RAG-MCP 关键数据：工具多时选对率 13.6%，预检索拉回 43%（3 倍）——披露机制是能力问题不只是 token 问题** |
+
+来源：anthropic.com/engineering/advanced-tool-use、platform.claude.com prompt-caching docs、platform.openai.com function-calling / Prompt Caching 201、manus.im/blog Context-Engineering-for-AI-Agents、arXiv 2505.03275 / 2506.01056 / 2410.14594。
+
+## 10. 三个中间结论的修正记录（保留推理过程）
+
+1. **"cache 稳定 vs 治理干净"二选一（§6 对照表第 4 行）在 anthropic/openai 上是伪命题**——Anthropic append 语义、OpenAI allowed_tools 元数据各自同时给出两者。该 trade-off 仅在无原生支持的 provider 上存在（兜底档维持 promotion + 批量 + 压缩降级缓解）。
+2. **"薄存根全量可见"方案被否决**：曾考虑延迟工具以 ~20 token 存根常驻 bind（cache 稳 + 零跳发现）。RAG-MCP 的 13.6% 基线证明可见工具一多**选择准确率本身崩塌**——存根省 token 不省辨别负担。可见集必须小，发现靠检索。
+3. **"主力厂商是 Qwen 所以原生档可延期"被用户澄清纠正**：helix 目录 9 个 provider，平台定位不预设租户模型构成（通用平台原则）——原生档是目录级能力（CM-10 同例），不设观望条件。
+
+**为何不照搬 Hermes 桥接结构**（讨论中明确）：桥接是它"无 dispatch 自主权、无 server 端支持、单机浅治理链"三约束下的被迫解。helix 照搬要付五笔账——治理面 unwrap 安全债（helix 6+ 层治理链 vs Hermes 3 层都出过洞）、最复杂调用协议给最弱模型（嵌套 arguments 高频出错）、跳数倒退（3 跳 vs call-through 后 1 跳）、cache 优势已被 API 原生方案取代、transcript 桥接调用污染长 thread 历史。借策略件（门控/检索/公理/防呆），不借结构件（桥接/unwrap/双重 gate）。
+
+## 11. 最终拍板（2026-06-11，用户确认）
+
+- **主线 = 能力位翻译层**（CM-10 thinking 三形态同款模式），节奏 **应用层先行**：HX-12（全 9 provider 受益的唯一层）→ HX-13（anthropic/openai/azure 原生接线）
+- 三档行为分裂：接受（兜底档保语义底线）
+- 检索内核：BM25 + jieba 先行，留向量接缝（语义检索二期）
+- 归属：Stream HX Wave 2（与 HX-1 真 tokenizer / HX-2 反馈闭环 / HX-4 可观测三处协同）
+- 子项完整定义见 `docs/ITERATION-PLAN.md` Stream HX 段；开工时按设计先行出 STREAM 级详细设计（含 openrouter/compat 网关 `allowed_tools` 透传逐家核实清单）
