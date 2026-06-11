@@ -52,10 +52,11 @@ def _cache() -> LLMResponseCache:
 
 def test_always_on_middlewares_wired() -> None:
     chains = build_middleware_chains(_spec(), env=MiddlewareEnv())
-    assert chains.before_llm_call is not None
+    # Stream HX-1 (Mini-ADR HX-A5): the E.3 view trim is opt-in — with no
+    # explicit caps the before_llm_call anchor has no middleware at all.
+    assert chains.before_llm_call is None
     assert chains.around_llm_call is not None
     assert chains.after_llm_call is not None
-    assert chains.before_llm_call.ordered_names == ("dynamic_context",)
     assert chains.around_llm_call.ordered_names == ("llm_error_handling",)
     assert chains.after_llm_call.ordered_names == ("loop_detection",)
 
@@ -69,7 +70,7 @@ def test_before_tool_dispatch_wires_sandbox_audit() -> None:
 
 def test_default_env_is_empty() -> None:
     """``env`` omitted behaves like an empty MiddlewareEnv."""
-    chains = build_middleware_chains(_spec())
+    chains = build_middleware_chains(_spec(context_compression={"max_turns": 20}))
     assert chains.before_llm_call is not None
     assert chains.before_llm_call.ordered_names == ("dynamic_context",)
 
@@ -80,10 +81,20 @@ def test_default_env_is_empty() -> None:
 
 
 def test_pii_redactor_wired_when_redact_text_present() -> None:
-    chains = build_middleware_chains(_spec(), env=MiddlewareEnv(redact_text=_redact))
+    chains = build_middleware_chains(
+        _spec(context_compression={"max_tokens": 8000}),
+        env=MiddlewareEnv(redact_text=_redact),
+    )
     assert chains.before_llm_call is not None
     # dynamic_context.before=(pii_redact,) → dynamic_context sorts first.
     assert chains.before_llm_call.ordered_names == ("dynamic_context", "pii_redact")
+
+
+def test_pii_redactor_wired_without_view_trim() -> None:
+    """HX-A5 — env-gated middlewares stand alone when the trim is off."""
+    chains = build_middleware_chains(_spec(), env=MiddlewareEnv(redact_text=_redact))
+    assert chains.before_llm_call is not None
+    assert chains.before_llm_call.ordered_names == ("pii_redact",)
 
 
 def test_cache_middlewares_wired_when_cache_present() -> None:
@@ -108,9 +119,8 @@ def test_cache_middlewares_skipped_when_manifest_disables() -> None:
     spec = AgentSpec.model_validate(doc)
 
     chains = build_middleware_chains(spec, env=MiddlewareEnv(response_cache=_cache()))
-    assert chains.before_llm_call is not None
+    assert chains.before_llm_call is None  # nothing else binds the anchor
     assert chains.after_llm_call is not None
-    assert "llm_cache_lookup" not in chains.before_llm_call.ordered_names
     assert "llm_cache_store" not in chains.after_llm_call.ordered_names
 
 
@@ -135,7 +145,6 @@ def test_all_env_gated_middlewares_wired_together() -> None:
     assert chains.before_llm_call is not None
     assert chains.after_llm_call is not None
     assert set(chains.before_llm_call.ordered_names) == {
-        "dynamic_context",
         "pii_redact",
         "llm_cache_lookup",
     }
@@ -165,14 +174,21 @@ def test_token_usage_middleware_wired_when_store_present() -> None:
 def test_dynamic_context_reads_manifest_config() -> None:
     spec = _spec(context_compression={"max_turns": 3, "max_tokens": 99})
     mw = _dynamic_context(spec)
+    assert mw is not None
     assert mw.max_turns == 3
     assert mw.max_tokens == 99
 
 
-def test_dynamic_context_defaults_when_unconfigured() -> None:
-    mw = _dynamic_context(_spec())
-    assert mw.max_turns == 20
-    assert mw.max_tokens == 8000
+def test_dynamic_context_absent_when_unconfigured() -> None:
+    """HX-A5 — no explicit caps → the E.3 view trim is not built."""
+    assert _dynamic_context(_spec()) is None
+
+
+def test_dynamic_context_single_axis_uses_class_default() -> None:
+    mw = _dynamic_context(_spec(context_compression={"max_tokens": 9000}))
+    assert mw is not None
+    assert mw.max_tokens == 9000
+    assert mw.max_turns == 20  # unset axis falls to the constructor default
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +204,10 @@ class _OnePerCharEstimator:
 def test_estimator_threads_into_dynamic_context() -> None:
     from langchain_core.messages import HumanMessage
 
-    mw = _dynamic_context(_spec(), estimator=_OnePerCharEstimator())
+    mw = _dynamic_context(
+        _spec(context_compression={"max_tokens": 8000}), estimator=_OnePerCharEstimator()
+    )
+    assert mw is not None
     # 8 chars → 8 tokens through the injected estimator (default chars//4
     # heuristic would report 2).
     assert mw.token_estimator(HumanMessage(content="abcdefgh")) == 8
@@ -197,7 +216,8 @@ def test_estimator_threads_into_dynamic_context() -> None:
 def test_estimator_absent_keeps_legacy_heuristic() -> None:
     from langchain_core.messages import HumanMessage
 
-    mw = _dynamic_context(_spec())
+    mw = _dynamic_context(_spec(context_compression={"max_tokens": 8000}))
+    assert mw is not None
     assert mw.token_estimator(HumanMessage(content="abcdefgh")) == 2
 
 

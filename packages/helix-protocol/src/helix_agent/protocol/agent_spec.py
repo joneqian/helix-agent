@@ -147,9 +147,11 @@ class ModelSpec(BaseModel):
     #: agent_node preflight compares the estimated prompt size against
     #: ``context_window * policies.context_compression.threshold_pct``
     #: and triggers :class:`ContextCompressor` when exceeded (Mini-ADR
-    #: L-2). Default 200_000 matches Claude 3.5 / Sonnet 4 long-context;
-    #: agents pinned to smaller-window models should override here.
-    context_window: int = Field(default=200_000, gt=0)
+    #: L-2). Stream HX-1 (Mini-ADR HX-A4) — ``None`` (the default) means
+    #: the factory resolves the window from the model catalog entry at
+    #: build time, falling back to 200_000 for catalog-外 models or
+    #: entries without a published window. An explicit value always wins.
+    context_window: int | None = Field(default=None, gt=0)
     # Stream CM-9 (Mini-ADR CM-J2) — compute-control knobs. ``effort``
     # maps to Anthropic ``output_config.effort`` (None → omitted, API
     # default applies); ``adaptive_thinking`` sends
@@ -468,16 +470,17 @@ class ContextCompressionPolicy(BaseModel):
     #: memory-enabled agents keep key decisions across multiple compactions.
     flush_before_compaction: bool = True
     max_passes: int = Field(default=3, ge=1)
-    #: Coarse trim caps that pre-date L2's summarising compressor —
-    #: the existing :class:`DynamicContextMiddleware` (Stream E.3)
-    #: still uses these to cut tail history once L2 has folded the
-    #: middle. L2 doesn't replace E.3 because the two operate at
-    #: different layers (E.3 inside the middleware chain after L2's
-    #: preflight). Defaults match the legacy
-    #: ``policies.context_compression`` permissive shape (max_turns
-    #: 20 / max_tokens 8000) so existing manifests keep loading.
-    max_turns: int = Field(default=20, gt=0)
-    max_tokens: int = Field(default=8000, gt=0)
+    #: Coarse per-call view-trim caps for the E.3
+    #: :class:`DynamicContextMiddleware`. Stream HX-1 (Mini-ADR HX-A5) —
+    #: both default ``None``, which **disables** the middleware: the M0
+    #: naïve trim pre-dates the layered cascade (CM-2 window → L2
+    #: compressor → CM-5 externalisation) that now manages the prompt at
+    #: ``context_window``-proportional thresholds, and its old 20-message
+    #: / 8000-token defaults silently capped every call far below them.
+    #: Setting either field opts the trim layer back in (the unset axis
+    #: uses the middleware's own default).
+    max_turns: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0)
 
 
 class WorkingMemoryPolicy(BaseModel):
