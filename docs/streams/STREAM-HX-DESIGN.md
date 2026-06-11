@@ -8,7 +8,7 @@
 >
 > **横切公理**（HX-12/13 立项时锁定，对全 Stream 生效）：① 不存在 drop core tool / drop 历史真相的代码路径（视图级裁剪 ≠ 状态删除）；② fail-open——基础设施故障的代价只能是多花 token，绝不能是少能力；③ config 防御解析（clamp / safe default，不 raise）。
 >
-> **本文件状态**：HX-1（真 tokenizer + 长上下文阈值参数化，§2）详设已锁定。HX-2/3/4 与 Wave 2 各条开工时追加章节。
+> **本文件状态**：HX-1（真 tokenizer + 长上下文阈值参数化，§2）+ HX-2（用户反馈→学习闭环，§3）详设已锁定。HX-3/4 与 Wave 2 各条开工时追加章节。
 
 ---
 
@@ -17,7 +17,7 @@
 | ID | 评估维度 | Gap | 交付 | 详设 |
 |----|---------|-----|------|------|
 | **HX-1** | ③ 上下文工程 | `len//4` 估算漂移（CJK 严重低估）+ `context_window` 不随目录解析 + E.3 遗留 8K 默认裁剪 | TokenEstimator 协议 + tiktoken 默认实现 + 目录解析 + 遗留默认值退役 | §2（本文） |
-| HX-2 | ⑦ 学习闭环 | 用户反馈→学习断链 | feedback consumer worker | 开工时追加 |
+| HX-2 | ⑦ 学习闭环 | 👎 无学习消费者（断点精确化见 §3.1） | rollback gate 接 👎 + 记忆 review 标记 + feedback consumer worker | §3（本文） |
 | HX-3 | ⑧ 容错 | run 级瞬态故障无自动重试 | 瞬态分类 ∧ 零 irreversible 调用 → 重试 1 次 | 开工时追加 |
 | HX-4 | ⑨ 可观测 | 工具延迟/成功率/approval 队列指标缺 | 直方图 + counter + gauge + 日志字段统一 | 开工时追加 |
 | HX-12/13 | ② 工具面 | 工具披露 2.0（应用层 + 厂商原生档） | 见 ITERATION-PLAN Wave 2 定义 | 开工时追加 |
@@ -139,3 +139,78 @@ def default_estimator() -> TokenEstimator:   # 进程级单例（vocab 只加载
 | PR0（本设计） | 本文件 + ITERATION-PLAN tick | 纯 docs，CI |
 | PR1 | `runtime/tokens.py` + 三处注入 + tiktoken 依赖 + drift 指标 + 测试 | §2.7-PR1；全链回归 |
 | PR2（收尾） | context_window 目录解析 + 遗留默认裁剪退役 + sweep + 测试 | §2.7-PR2；全链回归；零债 6 条 |
+
+---
+
+## 3. HX-2 — 用户反馈→学习闭环
+
+### 3.1 现状取证（2026-06-11，main@6a0d488）
+
+| 事实 | 证据 | 判定 |
+|------|------|:----:|
+| G.6 feedback API/store：👍/👎+comment 入库（thread 级或 turn 级），无任何"已处理"游标 | `api/feedback.py`、`feedback_store.py`（insert/list_for_thread 仅两方法） | 在 |
+| J.12 curation_worker **已消费 feedback**：轨迹×feedback join → `curation_candidate`（signal=negative_feedback/positive_feedback/failed_outcome，含 thread/agent/version/trajectory 归因） | `curation_worker.py:1-24` | 在（评估"无消费者"判定**部分过期**） |
+| SE worker 消费 candidate，但 `EVOLVE_SIGNALS = {positive_feedback, failed_outcome}` —— **negative_feedback 显式排除**（注释：SkillGen contrastive induction 取成功型 + 失败 outcome） | `skill_evolution_worker.py:37,139` | **真断点 ①**：👎 candidate 零消费者 |
+| SE-7d-1 `skill_run_usage`：(thread_id, skill_id, skill_version, outcome) 归因在位；SE-7d-2/3 rollback gate 按 per-version 窗口做单边二项检验，cancelled 剔除 | `skill/base.py:370-394`、`skill_rollback.py`、`skill_rollback_gate.py:68-74` | 在（👎 的正确接入点） |
+| `MemoryItem.source_thread_id` 在位（👎 thread → 关联记忆可查）；consolidator SUB-PASS 2 单条复审通路在位（U-37：durable/noise 分类 + `mark_reviewed`） | `memory_item.py:43`、`memory/base.py:216-230`、`memory_consolidator.py` | 在 |
+| 记忆条目无任何"用户反馈→复审"通道；consolidator 候选仅 aged-lone-transient | `list_purge_candidates` 三过滤 | **真断点 ②**：👎 不触达记忆 |
+| `curation_candidate.status` 是**人工 review 生命周期**（PENDING=等人工，curation API promote 检查 PENDING）；J.12 对已存在 candidate 的 trajectory 直接 pre-check skip | `eval_dataset.py:52-59`、`api/curation.py:230` | 约束：HX-2 不可借用该状态机，也不可依赖 candidate 及时性 |
+
+**范围修正**：评估 ⑦"用户点了 👎 之后什么都不会发生"在 J.12 之后已不全对——👎 会物化为 curation candidate（eval 数据集人工路径）。真断链精确化为两条：**① negative_feedback candidate 没有自动学习消费者**（SE 修订侧）；**② 记忆侧零通道**。且"进 SE 修订队列"具体化：对**已晋升** skill 的修订机制本来就是 SE-7d rollback down-gate（自动归档→再蒸馏），不存在也不应新造一条"修订队列"——👎 的正确去向是 rollback 评分窗口。
+
+### 3.2 设计
+
+**① skill 侧 —— rollback gate 查询时 join 👎（拉取式，零协议变更）**
+
+- `SkillStore.skill_run_outcomes` 旁新增返回 `(thread_id, outcome)` 的方法（或扩展现签名，实施期定，含 doubles sweep）；`FeedbackStore` 新增批量查询：给定 thread 集合返回有 👎 的子集。
+- rollback gate 聚合窗口时：thread 命中 👎 → 该样本 outcome 按 `failed` 计入二项检验（机器 outcome=success 被用户否决）。`cancelled` 剔除规则不变。
+- **不改写 `skill_run_usage` 行**（归因行不可变，审计友好）；**不扩 `TrajectoryOutcome` Literal**（轨迹本身是 success，加值语义错位 + 全仓 sweep 代价）。👎 对绑定多 skill 的 run 会"连坐"全部版本——噪声由二项检验窗口（n_min=6 + 显著性 + 效应量地板）吸收，单个 👎 不会触发回滚。
+- 决策 reason 携带 disapproved 计数（可观测）。
+
+**② memory 侧 —— review 标记 + consolidator 复审**
+
+- `MemoryItem.review_flagged_at: datetime | None`（协议 + 迁移 + 双 store）。
+- consolidator SUB-PASS 2 增第二候选源：`review_flagged_at IS NOT NULL` 的 live transient（不要求 aged/未检索），走同一条 U-37 单条复审通路（durable → `mark_reviewed` 且清 flag；noise → soft-delete）。consolidated 父项不回炉（见 §3.3 边界）。
+- `mark_reviewed` 扩展清 flag 语义。
+
+**③ feedback consumer worker —— 直扫 feedback 表（非 candidate）**
+
+- 新 `control_plane/feedback_consumer.py`：单副本 lifespan worker（curation_worker 同款骨架：bypass-RLS 列举 + per-tenant scope 处理 + per-row best-effort）。
+- 消费源 = `feedback` 表直扫：`rating='down' ∧ processed_at IS NULL`（新列，行级戳，幂等 + 重放安全）。**不消费 J.12 candidate**：late-👎（轨迹先被扫描、candidate 已存在）被 J.12 的唯一性 pre-check 吞掉，且 candidate 依赖轨迹存在；feedback 表是无损全集。
+- 每行动作：按 `source_thread_id = feedback.thread_id` 查关联记忆 → 置 `review_flagged_at`（重复 👎 重置 flag，幂等）→ 戳 `processed_at` → audit + counter。skill 侧无动作（①是 gate 拉取式）。
+- 👍 零新动作（已有 golden 路径：J.12 positive candidate + SE distill）。
+
+### 3.3 边界（不做）
+
+- comment 文本不做 NLP/分类——只用 rating 信号。
+- 👎/👍 同 thread 不做相互抵消（gate join 见 👎 即 demote；记录为已知简化）。
+- consolidated 父项被 👎 关联时不回炉重审（其 transient 源已有 `consolidated_from` 反向索引，需求出现再做级联复审）。
+- turn 级 feedback（`turn_seq`）暂按 thread 级处理（记忆/skill 归因都是 thread 粒度）。
+- 不做实时推送——worker 周期消费（与 consolidator/curation 同步调）。
+
+### 3.4 可观测
+
+- `helix_control_plane_feedback_consumed_total{action=memory_flagged/noop}` counter + worker cycle error counter（既有命名纪律）。
+- rollback 决策 reason 带 `disapproved=N`。
+- audit：worker 对每行 👎 处理发一条（复用既有 audit emit 通道，固定字符串，不 log 请求派生值）。
+
+### 3.5 测试
+
+- **PR1**：store 方法 (thread_id, outcome) 双实现 + FeedbackStore 批量 👎 查询 + gate join demote 矩阵（无 👎 不变 / 👎 demote 触发 ROLLBACK / 👎 不足窗口 INSUFFICIENT / cancelled 仍剔除）+ doubles sweep。
+- **PR2**：迁移（review_flagged_at / processed_at）+ flag 置位与清除 + consolidator 第二候选源（flagged 即复审、durable 清 flag、noise 删）+ worker 幂等（重复 👎 / 无关联记忆 noop 仍戳 processed_at）+ 跨租户 RLS 形态（bypass 列举 + tenant scope 处理）。
+
+### 3.6 Mini-ADR
+
+- **HX-B1 消费源 = feedback 表直扫 + 行级 processed_at**：J.12 candidate 有 late-👎 race（唯一性 pre-check skip）且依赖轨迹存在；feedback 表是无损全集。J.12 流程零接触。
+- **HX-B2 skill 侧拉取式 join**："SE 修订队列"具体化为既有 SE-7d rollback down-gate；👎 在 gate 聚合时把该 thread 样本按 failed 计——归因行不可变、零 Literal 扩展；多 skill 连坐噪声由二项检验参数吸收。
+- **HX-B3 memory 侧 review_flagged_at**：复用 U-37 单条复审通路（durable/noise 分类），flagged 候选不要求 aged；consolidated 父项不级联。
+- **HX-B4 worker 骨架 = curation_worker 同款**：单副本 lifespan、bypass-RLS 列举 + per-tenant scope、per-row best-effort 不致命。
+- **HX-B5 👍 零新动作 / comment 不解析**：正反馈链路已在（golden curation + distill）；NLP 收益不确定先不做。
+
+### 3.7 PR 切分
+
+| PR | 内容 | 验证 |
+|----|------|------|
+| PR0（本设计） | §3 + ITERATION-PLAN tick | 纯 docs，CI |
+| PR1 | skill 侧：store (thread_id, outcome) + FeedbackStore 批量 👎 + rollback gate join demote | §3.5-PR1；全链回归 |
+| PR2（收尾） | memory 侧 + worker：两迁移 + review_flagged_at 通路 + consolidator 第二候选源 + FeedbackConsumerWorker + 接线 + 指标 | §3.5-PR2；全链回归；零债 6 条 |
