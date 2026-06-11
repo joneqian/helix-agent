@@ -251,3 +251,85 @@ async def test_other_tenant_cannot_see_agent(b5_client: AsyncClient) -> None:
         headers={"Authorization": f"Bearer {other_jwt}"},
     )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-5 — revision history / rollback
+# ---------------------------------------------------------------------------
+
+_UPDATED_YAML = _VALID_YAML.replace("you are a reviewer", "you are a strict reviewer")
+
+
+@pytest.mark.asyncio
+async def test_revisions_list_and_get_snapshot(b5_client: AsyncClient) -> None:
+    await b5_client.post("/v1/agents", json={"manifest_yaml": _VALID_YAML})
+    await b5_client.put("/v1/agents/code-reviewer/1.0.0", json={"manifest_yaml": _UPDATED_YAML})
+
+    listing = await b5_client.get("/v1/agents/code-reviewer/1.0.0/revisions")
+    assert listing.status_code == 200
+    items = listing.json()["data"]["items"]
+    assert [i["revision"] for i in items] == [2, 1]
+    assert items[0]["actor_id"]
+    assert len(items[0]["spec_sha256"]) == 64
+    assert "spec" not in items[0]  # summaries only — diff fetches snapshots
+
+    snap = await b5_client.get("/v1/agents/code-reviewer/1.0.0/revisions/1")
+    assert snap.status_code == 200
+    record = snap.json()["data"]["record"]
+    assert record["revision"] == 1
+    assert record["spec"]["spec"]["system_prompt"]["template"] == "you are a reviewer"
+
+    missing = await b5_client.get("/v1/agents/code-reviewer/1.0.0/revisions/9")
+    assert missing.status_code == 404
+    unknown_agent = await b5_client.get("/v1/agents/nope/1.0.0/revisions")
+    assert unknown_agent.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_rollback_appends_revision_with_old_content(
+    b5_client: AsyncClient, audit_store: InMemoryAuditLogStore
+) -> None:
+    await b5_client.post("/v1/agents", json={"manifest_yaml": _VALID_YAML})
+    await b5_client.put("/v1/agents/code-reviewer/1.0.0", json={"manifest_yaml": _UPDATED_YAML})
+
+    response = await b5_client.post("/v1/agents/code-reviewer/1.0.0/revisions/1/rollback")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["rolled_back_to"] == 1
+    assert data["revision"] == 3  # rollback moved *forward* to old content
+    assert data["record"]["spec"]["spec"]["system_prompt"]["template"] == "you are a reviewer"
+
+    # History now has three entries; current content equals revision 1's.
+    listing = await b5_client.get("/v1/agents/code-reviewer/1.0.0/revisions")
+    items = listing.json()["data"]["items"]
+    assert [i["revision"] for i in items] == [3, 2, 1]
+    assert items[0]["spec_sha256"] == items[2]["spec_sha256"]
+
+    # Audit row carries the rollback provenance.
+    page = await audit_store.query(AuditQuery(tenant_id=_DEFAULT_TENANT))
+    rollbacks = [
+        r
+        for r in page.entries
+        if r.action.value == "manifest:write" and (r.details or {}).get("rolled_back_to") == 1
+    ]
+    assert len(rollbacks) == 1
+    assert rollbacks[0].details["revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_rollback_to_current_content_is_recorded_noop(b5_client: AsyncClient) -> None:
+    await b5_client.post("/v1/agents", json={"manifest_yaml": _VALID_YAML})
+
+    response = await b5_client.post("/v1/agents/code-reviewer/1.0.0/revisions/1/rollback")
+    assert response.status_code == 200
+    assert response.json()["data"]["revision"] is None  # same sha — nothing recorded
+
+    listing = await b5_client.get("/v1/agents/code-reviewer/1.0.0/revisions")
+    assert [i["revision"] for i in listing.json()["data"]["items"]] == [1]
+
+
+@pytest.mark.asyncio
+async def test_rollback_unknown_revision_404(b5_client: AsyncClient) -> None:
+    await b5_client.post("/v1/agents", json={"manifest_yaml": _VALID_YAML})
+    response = await b5_client.post("/v1/agents/code-reviewer/1.0.0/revisions/7/rollback")
+    assert response.status_code == 404

@@ -77,6 +77,7 @@ export interface TranslationKeys {
     tab_skills: string;
     tab_triggers: string;
     tab_memory: string;
+    tab_history: string;
     tab_coming_soon: string;
     config_summary: string;
     field_id: string;
@@ -85,6 +86,20 @@ export interface TranslationKeys {
     field_status: string;
     field_created: string;
     field_updated: string;
+  };
+  history_tab: {
+    title: string;
+    select_hint: string;
+    current: string;
+    col_revision: string;
+    col_sha: string;
+    col_actor: string;
+    col_time: string;
+    rollback: string;
+    rollback_confirm_title: string;
+    rollback_confirm_body: string;
+    diff_label: string;
+    diff_loading: string;
   };
   manifest_tab: {
     read_only_hint: string;
@@ -1198,6 +1213,7 @@ const en: TranslationKeys = {
     tab_skills: "Skills",
     tab_triggers: "Triggers",
     tab_memory: "Memory",
+    tab_history: "History",
     tab_coming_soon: "Tab \"{{tab}}\" lands in Stream H.2.",
     config_summary: "Configuration",
     field_id: "Record ID",
@@ -1206,6 +1222,21 @@ const en: TranslationKeys = {
     field_status: "Status",
     field_created: "Created",
     field_updated: "Updated",
+  },
+  history_tab: {
+    title: "Revision history",
+    select_hint: "Select two revisions to compare",
+    current: "current",
+    col_revision: "Revision",
+    col_sha: "Spec SHA",
+    col_actor: "Actor",
+    col_time: "Time",
+    rollback: "Roll back",
+    rollback_confirm_title: "Roll back to revision #{{revision}}?",
+    rollback_confirm_body:
+      "This appends a new revision with the old content — history is never rewritten.",
+    diff_label: "Diff: #{{older}} → #{{newer}}",
+    diff_loading: "Loading diff…",
   },
   manifest_tab: {
     read_only_hint: "Read-only — click Edit to modify the spec.",

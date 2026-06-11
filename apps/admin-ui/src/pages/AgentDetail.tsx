@@ -34,6 +34,7 @@ import { useTranslation } from "react-i18next";
 import { getAgent, type AgentDetailResponse } from "../api/agents";
 import { ApiError } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
+import { HistoryTab } from "./agent_detail/HistoryTab";
 import { ManifestTab } from "./agent_detail/ManifestTab";
 import { PlaygroundTab } from "./agent_detail/PlaygroundTab";
 
@@ -142,6 +143,7 @@ export function AgentDetail() {
         items={[
           { key: "overview", label: t("agent_detail.tab_overview") },
           { key: "manifest", label: t("agent_detail.tab_manifest") },
+          { key: "history", label: t("agent_detail.tab_history") },
           { key: "playground", label: t("agent_detail.tab_playground") },
           { key: "runs", label: t("agent_detail.tab_runs") },
           { key: "skills", label: t("agent_detail.tab_skills") },
@@ -152,8 +154,9 @@ export function AgentDetail() {
 
       {activeTab === "overview" && <OverviewTab detail={detail} />}
       {activeTab === "manifest" && <ManifestTab detail={detail} onSaved={refresh} />}
+      {activeTab === "history" && <HistoryTab detail={detail} onRolledBack={refresh} />}
       {activeTab === "playground" && <PlaygroundTab detail={detail} />}
-      {!["overview", "manifest", "playground"].includes(activeTab) && (
+      {!["overview", "manifest", "history", "playground"].includes(activeTab) && (
         <Empty
           description={t("agent_detail.tab_coming_soon", { tab: activeTab })}
           style={{ marginTop: 64 }}
