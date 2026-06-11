@@ -303,7 +303,7 @@ def build_agents_router() -> APIRouter:
             resource_type="manifest",
             resource_id=f"{record.name}/{record.version}",
             trace_id=trace_id,
-            details={"spec_sha256": sha},
+            details={"spec_sha256": sha, "revision": 1},
         )
         return JSONResponse(
             status_code=201,
@@ -415,7 +415,7 @@ def build_agents_router() -> APIRouter:
                 422,
             )
 
-        record = await repo.update_spec(
+        result = await repo.update_spec(
             tenant_id=tenant_id,
             name=name,
             version=version,
@@ -423,7 +423,7 @@ def build_agents_router() -> APIRouter:
             spec_sha256=sha,
             updated_by=actor_id,
         )
-        if record is None:
+        if result is None:
             raise HTTPException(status_code=404, detail="agent not found")
         await emit(
             audit,
@@ -433,10 +433,16 @@ def build_agents_router() -> APIRouter:
             resource_type="manifest",
             resource_id=f"{name}/{version}",
             trace_id=trace_id,
-            details={"spec_sha256": sha},
+            # Stream HX-5 -- before/after pair + the history row this
+            # write appended (null = same-sha no-op, nothing recorded).
+            details={
+                "spec_sha256": sha,
+                "prev_sha256": result.prev_sha256,
+                "revision": result.revision,
+            },
         )
         return JSONResponse(
-            {"success": True, "data": AgentDetail(record=record).model_dump(mode="json")}
+            {"success": True, "data": AgentDetail(record=result.record).model_dump(mode="json")}
         )
 
     @router.delete("/{name}/{version}", status_code=204)

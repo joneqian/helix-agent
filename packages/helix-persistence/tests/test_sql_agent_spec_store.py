@@ -161,8 +161,37 @@ async def test_update_spec_replaces_payload(sql_store: SqlStoreFixture) -> None:
             updated_by="alice",
         )
         assert updated is not None
-        assert updated.spec.spec.system_prompt.template == "updated prompt"
-        assert updated.spec_sha256 == "b" * 64
+        assert updated.record.spec.spec.system_prompt.template == "updated prompt"
+        assert updated.record.spec_sha256 == "b" * 64
+        # Stream HX-5 -- create wrote revision 1, this update revision 2.
+        assert updated.revision == 2
+        assert updated.prev_sha256 == _sha()
+        history = await store.list_revisions(
+            tenant_id=tenant, name="code-reviewer", version="1.0.0"
+        )
+        assert [r.revision for r in history] == [2, 1]
+        assert history[0].actor_id == "alice"
+        assert history[1].actor_id == "a"
+
+        # Same-sha update: recorded no-op, no new revision.
+        noop = await store.update_spec(
+            tenant_id=tenant,
+            name="code-reviewer",
+            version="1.0.0",
+            spec=AgentSpec.model_validate(new_doc),
+            spec_sha256="b" * 64,
+            updated_by="alice",
+        )
+        assert noop is not None and noop.revision is None
+        assert (
+            len(await store.list_revisions(tenant_id=tenant, name="code-reviewer", version="1.0.0"))
+            == 2
+        )
+
+        one = await store.get_revision(
+            tenant_id=tenant, name="code-reviewer", version="1.0.0", revision=1
+        )
+        assert one is not None and one.spec_sha256 == _sha()
     finally:
         await engine.dispose()
 
