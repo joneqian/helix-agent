@@ -74,6 +74,14 @@ from helix_agent.runtime.stream_bridge import (
 )
 from orchestrator.errors import MaxStepsExceededError
 from orchestrator.graph_builder._config import AUDIT_LOGGER_KEY
+from orchestrator.run_retry import (
+    MAX_RUN_RETRIES,
+    is_transient_run_error,
+    replay_is_safe,
+    retry_backoff_s,
+    retry_enabled,
+    run_retry_total,
+)
 from orchestrator.trajectory import (
     TrajectoryOutcome,
     TrajectoryRecord,
@@ -230,6 +238,7 @@ async def run_agent(
     skill_run_usage_recorder: SkillRunUsageRecorder | None = None,
     approval_store: ApprovalStore | None = None,
     event_store: RunEventStore | None = None,
+    tool_replay_safe: Callable[[str], bool] | None = None,
 ) -> None:
     """Drive ``graph`` to completion, publishing events to ``bridge``.
 
@@ -277,6 +286,9 @@ async def run_agent(
     # the correct label even if a later step in that branch raises.
     session_started = time.monotonic()
     session_outcome = "error"
+    # Stream HX-3 — count of in-worker transient retries this run took.
+    # Initialised before the ``try`` so every except handler can read it.
+    retry_attempts = 0
     # Stream H.3 PR 3 — per-run sequence counter for RunEventStore mirror.
     # Starts at 0; increments before each persist call so the seq in the
     # durable row matches its insertion order. The bridge has its own
@@ -301,26 +313,79 @@ async def run_agent(
         # so we measure from this point to the first ``updates`` chunk.
         ttft_started = time.monotonic()
         first_chunk_seen = False
-        async for chunk in graph.astream(graph_input, effective_config, stream_mode=stream_mode):
-            if record.abort_event.is_set():
-                logger.info("run_agent.abort_requested run_id=%s", run_id)
+        # Stream HX-3 — run-level transient retry (Mini-ADR HX-C1..C3).
+        # At most one in-worker retry, same run_id: the SSE stream stays
+        # continuous and the trajectory stays a single record. The retry
+        # resumes from the committed checkpoint (``graph_input=None`` —
+        # the J-24 continuation semantics) after the replay-safety guard
+        # inspects the checkpoint tail.
+        while True:
+            try:
+                async for chunk in graph.astream(
+                    graph_input, effective_config, stream_mode=stream_mode
+                ):
+                    if record.abort_event.is_set():
+                        logger.info("run_agent.abort_requested run_id=%s", run_id)
+                        break
+                    if not first_chunk_seen:
+                        ttft = time.monotonic() - ttft_started
+                        _session_ttft_seconds.observe(ttft)
+                        if getattr(record, "is_resume", False):
+                            _durable_resume_seconds.observe(ttft)
+                        first_chunk_seen = True
+                    jsonable_chunk = _to_jsonable(chunk)
+                    await bridge.publish(run_id, stream_mode, jsonable_chunk)
+                    await _persist_event(
+                        event_store,
+                        run_id=run_id,
+                        seq=event_seq,
+                        event_name=stream_mode,
+                        data=jsonable_chunk,
+                    )
+                    event_seq += 1
+            except Exception as exc:
+                if (
+                    retry_attempts >= MAX_RUN_RETRIES
+                    or record.abort_event.is_set()
+                    or not retry_enabled()
+                    or not is_transient_run_error(exc)
+                    or not await replay_is_safe(graph, effective_config, tool_replay_safe)
+                ):
+                    raise
+                retry_attempts += 1
+                backoff_s = retry_backoff_s()
+                logger.warning(
+                    "run_agent.transient_retry run_id=%s attempt=%d backoff_s=%s error=%s",
+                    run_id,
+                    retry_attempts,
+                    backoff_s,
+                    exc,
+                )
+                retry_payload = {
+                    "attempt": retry_attempts,
+                    "error_class": type(exc).__name__,
+                    "backoff_s": backoff_s,
+                }
+                await bridge.publish(run_id, "retry", retry_payload)
+                await _persist_event(
+                    event_store,
+                    run_id=run_id,
+                    seq=event_seq,
+                    event_name="retry",
+                    data=retry_payload,
+                )
+                event_seq += 1
+                try:
+                    # Abort-aware backoff: a cancel during the wait exits
+                    # immediately and takes the INTERRUPTED path below.
+                    await asyncio.wait_for(record.abort_event.wait(), timeout=backoff_s)
+                except TimeoutError:
+                    pass
+                if record.abort_event.is_set():
+                    break
+                graph_input = None
+            else:
                 break
-            if not first_chunk_seen:
-                ttft = time.monotonic() - ttft_started
-                _session_ttft_seconds.observe(ttft)
-                if getattr(record, "is_resume", False):
-                    _durable_resume_seconds.observe(ttft)
-                first_chunk_seen = True
-            jsonable_chunk = _to_jsonable(chunk)
-            await bridge.publish(run_id, stream_mode, jsonable_chunk)
-            await _persist_event(
-                event_store,
-                run_id=run_id,
-                seq=event_seq,
-                event_name=stream_mode,
-                data=jsonable_chunk,
-            )
-            event_seq += 1
 
         # Stream J.8 (Mini-ADR J-24) — a run that streamed to its natural
         # end with ``pending_approval`` set did not finish: it paused at
@@ -355,6 +420,10 @@ async def run_agent(
             RunStatus.PAUSED: "paused",
             RunStatus.SUCCESS: "success",
         }[final]
+        # Stream HX-3 — a retried run that reached a healthy terminal
+        # counts as recovered. An abort after a retry counts as neither.
+        if retry_attempts and final in (RunStatus.SUCCESS, RunStatus.PAUSED):
+            run_retry_total.labels(outcome="recovered").inc()
         await run_manager.set_status(run_id, final)
         if final is RunStatus.PAUSED and pending_request is not None:
             # Register the paused run in the durable ``agent_approval``
@@ -384,6 +453,7 @@ async def run_agent(
                 effective_config,
                 record,
                 outcome="cancelled" if final is RunStatus.INTERRUPTED else "success",
+                metadata={"retried": retry_attempts} if retry_attempts else None,
             )
             _dispatch_skill_run_usage(
                 skill_run_usage_recorder,
@@ -406,7 +476,12 @@ async def run_agent(
             status="interrupted",
         )
         _dispatch_trajectory(
-            trajectory_recorder, graph, effective_config, record, outcome="cancelled"
+            trajectory_recorder,
+            graph,
+            effective_config,
+            record,
+            outcome="cancelled",
+            metadata={"retried": retry_attempts} if retry_attempts else None,
         )
         _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="cancelled")
     except asyncio.CancelledError:
@@ -426,6 +501,8 @@ async def run_agent(
         # because "budget exhausted" is a tunable trade-off, not a
         # provider / code failure.
         session_outcome = "max_steps"
+        if retry_attempts:
+            run_retry_total.labels(outcome="failed_again").inc()
         await run_manager.set_status(run_id, RunStatus.ERROR, error=str(exc))
         logger.warning(
             "run_agent.max_steps_exceeded run_id=%s step_count=%d max_steps=%d",
@@ -452,11 +529,18 @@ async def run_agent(
             status="error",
         )
         _dispatch_trajectory(
-            trajectory_recorder, graph, effective_config, record, outcome="max_steps"
+            trajectory_recorder,
+            graph,
+            effective_config,
+            record,
+            outcome="max_steps",
+            metadata={"retried": retry_attempts} if retry_attempts else None,
         )
         _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="max_steps")
     except Exception as exc:
         session_outcome = "error"
+        if retry_attempts:
+            run_retry_total.labels(outcome="failed_again").inc()
         await run_manager.set_status(run_id, RunStatus.ERROR, error=str(exc))
         logger.exception("run_agent.failed run_id=%s", run_id)
         error_payload = {"message": str(exc), "name": type(exc).__name__}
@@ -477,7 +561,14 @@ async def run_agent(
             reason=str(exc),
             status="error",
         )
-        _dispatch_trajectory(trajectory_recorder, graph, effective_config, record, outcome="failed")
+        _dispatch_trajectory(
+            trajectory_recorder,
+            graph,
+            effective_config,
+            record,
+            outcome="failed",
+            metadata={"retried": retry_attempts} if retry_attempts else None,
+        )
         _dispatch_skill_run_usage(skill_run_usage_recorder, record, outcome="failed")
     finally:
         # Stream M Gate — emit on every terminal path. Always synchronous
@@ -519,6 +610,7 @@ def _dispatch_trajectory(
     record: RunRecord,
     *,
     outcome: TrajectoryOutcome,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Stream L.L7 — schedule a fire-and-forget trajectory write.
 
@@ -532,7 +624,7 @@ def _dispatch_trajectory(
     if recorder is None:
         return
     task = asyncio.create_task(
-        _record_trajectory_safe(recorder, graph, config, record, outcome=outcome)
+        _record_trajectory_safe(recorder, graph, config, record, outcome=outcome, metadata=metadata)
     )
     _BACKGROUND_TRAJECTORY_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TRAJECTORY_TASKS.discard)
@@ -545,6 +637,7 @@ async def _record_trajectory_safe(
     record: RunRecord,
     *,
     outcome: TrajectoryOutcome,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Background body for :func:`_dispatch_trajectory`."""
     try:
@@ -561,6 +654,7 @@ async def _record_trajectory_safe(
                     user_id=user_id,
                     run_id=record.run_id,
                     finished_at=datetime.now(UTC),
+                    metadata=dict(metadata) if metadata else {},
                 )
             )
     except TimeoutError:

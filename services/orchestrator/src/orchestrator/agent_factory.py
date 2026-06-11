@@ -108,7 +108,7 @@ from orchestrator.runner import GraphRunner
 from orchestrator.tools import ToolEnv, build_tool_registry
 from orchestrator.tools.file_ops import SandboxWorkspaceWriter
 from orchestrator.tools.knowledge import Reranker
-from orchestrator.tools.registry import ToolContext
+from orchestrator.tools.registry import ToolContext, ToolRegistry
 from orchestrator.tools.sandbox import SupervisorClient
 from orchestrator.tools.skill_authoring import (
     SKILL_AUTHORING_BUILTINS,
@@ -163,6 +163,24 @@ class BuiltAgent:
     #: rollback monitor can attribute each run's outcome to the versions it used.
     #: Only distilled (auto-promotable) versions — human skills never roll back.
     bound_distilled_skills: tuple[BoundDistilledSkill, ...] = ()
+    #: Stream HX-3 (Mini-ADR HX-C2) — capability resolver for the run-retry
+    #: replay-safety guard: whether re-dispatching the named tool is safe
+    #: (CM-B5 rule: ``read_only`` or ``idempotent``). Closes over this
+    #: build's tool registry; unknown names resolve unsafe (fail-closed).
+    tool_replay_safe: Callable[[str], bool] | None = None
+
+
+def _tool_replay_safe(registry: ToolRegistry) -> Callable[[str], bool]:
+    """Build the :attr:`BuiltAgent.tool_replay_safe` resolver (Stream HX-3)."""
+
+    def _safe(name: str) -> bool:
+        tool = registry.get(name)
+        if tool is None:
+            return False
+        spec = tool.spec
+        return bool(spec.resolved_side_effect == "read_only" or spec.idempotent)
+
+    return _safe
 
 
 @dataclass(frozen=True)
@@ -661,6 +679,7 @@ async def build_agent(
         bound_distilled_skills=_bound_distilled_skills(
             loaded_skills.resolved_versions, agent_name=spec.metadata.name
         ),
+        tool_replay_safe=_tool_replay_safe(registry),
     )
 
 
