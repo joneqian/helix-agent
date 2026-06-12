@@ -100,12 +100,17 @@ def test_tool_disclosure_catalog_annotations() -> None:
     compat vendors stay None (the HX-12 application tier)."""
     from helix_agent.protocol.model_catalog import MODEL_CATALOG, catalog_entry
 
-    assert catalog_entry("anthropic", "claude-opus-4-8").tool_disclosure == "native_search"
-    assert catalog_entry("anthropic", "claude-sonnet-4-6").tool_disclosure == "native_search"
-    assert catalog_entry("anthropic", "claude-haiku-4-5").tool_disclosure is None
-    assert catalog_entry("openai", "gpt-5.5").tool_disclosure == "allowed_tools"
-    assert catalog_entry("openai", "text-embedding-3-large").tool_disclosure is None
-    assert catalog_entry("openai", "gpt-4o").tool_disclosure is None
+    def _entry(provider: str, name: str) -> ModelEntry:
+        entry = catalog_entry(provider, name)
+        assert entry is not None
+        return entry
+
+    assert _entry("anthropic", "claude-opus-4-8").tool_disclosure == "native_search"
+    assert _entry("anthropic", "claude-sonnet-4-6").tool_disclosure == "native_search"
+    assert _entry("anthropic", "claude-haiku-4-5").tool_disclosure is None
+    assert _entry("openai", "gpt-5.5").tool_disclosure == "allowed_tools"
+    assert _entry("openai", "text-embedding-3-large").tool_disclosure is None
+    assert _entry("openai", "gpt-4o").tool_disclosure is None
     # Compat vendors are unverified → None across the board (CM-L5).
     for provider in ("kimi", "glm", "deepseek", "qwen", "doubao"):
         for entry in MODEL_CATALOG[provider]:
