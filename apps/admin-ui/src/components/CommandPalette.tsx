@@ -35,6 +35,7 @@ import {
   FileText,
   Clock,
   Key,
+  ListChecks,
   Plus,
   ArrowRight,
   Cog,
@@ -161,6 +162,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
     const jumpItems = [
       { key: "go-agents", label: t("agents_page.page_title"), path: "/agents", icon: <Bot size={16} strokeWidth={1.5} />, sc: ["g", "a"] },
       { key: "go-runs", label: t("cmdk.label_runs"), path: "/runs", icon: <Activity size={16} strokeWidth={1.5} />, sc: ["g", "r"] },
+      { key: "go-approvals", label: t("cmdk.label_approvals"), path: "/approvals", icon: <ListChecks size={16} strokeWidth={1.5} />, sc: ["g", "p"] },
       { key: "go-curation", label: t("cmdk.label_curation"), path: "/curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, sc: ["g", "c"] },
       { key: "go-memory", label: t("cmdk.label_memory"), path: "/memory", icon: <Brain size={16} strokeWidth={1.5} />, sc: ["g", "m"] },
       { key: "go-skills", label: t("cmdk.label_skills"), path: "/skills", icon: <FileText size={16} strokeWidth={1.5} />, sc: ["g", "s"] },

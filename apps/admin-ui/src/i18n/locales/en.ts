@@ -32,6 +32,7 @@ export interface TranslationKeys {
     settings_group: string;
     agents: string;
     runs: string;
+    approvals: string;
     curation: string;
     memory: string;
     skills: string;
@@ -1009,6 +1010,36 @@ export interface TranslationKeys {
     embedding_required_desc: string;
     embedding_required_cta: string;
   };
+  approvals_page: {
+    page_title: string;
+    cross_tenant_banner: string;
+    filter_status: string;
+    failed_to_load: string;
+    empty: string;
+    column_reason: string;
+    column_action: string;
+    column_waiting: string;
+    column_timeout: string;
+    column_status: string;
+    column_actions: string;
+    approve: string;
+    reject: string;
+    confirm_approve: string;
+    confirm_reject: string;
+    batch_approve: string;
+    batch_reject: string;
+    confirm_batch_approve: string;
+    confirm_batch_reject: string;
+    selected_count: string;
+    decide_ok: string;
+    decide_partial: string;
+    decide_failed: string;
+    select_row: string;
+    select_all: string;
+    waiting_minutes: string;
+    waiting_hours: string;
+    modify_hint: string;
+  };
   runs_page: {
     page_title: string;
     subtitle: string;
@@ -1081,6 +1112,7 @@ export interface TranslationKeys {
     group_jump: string;
     group_action: string;
     label_runs: string;
+    label_approvals: string;
     label_curation: string;
     label_memory: string;
     label_skills: string;
@@ -1165,6 +1197,7 @@ const en: TranslationKeys = {
     settings_group: "Settings",
     agents: "Agents",
     runs: "Runs",
+    approvals: "Approvals",
     curation: "Curation+Eval",
     memory: "Memory",
     skills: "Skills",
@@ -2188,6 +2221,36 @@ const en: TranslationKeys = {
       "New agents use long-term memory, which needs a platform embedding model. No embedding is configured yet — set one in Platform Settings, then create your agent.",
     embedding_required_cta: "Go to Platform Settings",
   },
+  approvals_page: {
+    page_title: "Approvals",
+    cross_tenant_banner: "cross-tenant view (read-only)",
+    filter_status: "Filter by status",
+    failed_to_load: "Failed to load approvals",
+    empty: "No approvals in this view — nothing is waiting on you.",
+    column_reason: "Reason",
+    column_action: "Requested action",
+    column_waiting: "Waiting",
+    column_timeout: "Times out",
+    column_status: "Status",
+    column_actions: "Decision",
+    approve: "Approve",
+    reject: "Reject",
+    confirm_approve: "Approve this action?",
+    confirm_reject: "Reject this action?",
+    batch_approve: "Approve selected",
+    batch_reject: "Reject selected",
+    confirm_batch_approve: "Approve {{count}} selected actions?",
+    confirm_batch_reject: "Reject {{count}} selected actions?",
+    selected_count: "{{count}} selected",
+    decide_ok: "{{count}} decision(s) applied",
+    decide_partial: "{{ok}} applied, {{failed}} failed (already decided or gone) — list refreshed",
+    decide_failed: "Decision request failed: {{error}}",
+    select_row: "Select approval: {{summary}}",
+    select_all: "Select all approvals on this page",
+    waiting_minutes: "{{count}} min",
+    waiting_hours: "{{count}} h",
+    modify_hint: "To approve with edited arguments, open the run and use the approval card there.",
+  },
   runs_page: {
     page_title: "Runs",
     subtitle: "Cross-thread index of every agent run.",
@@ -2261,6 +2324,7 @@ const en: TranslationKeys = {
     group_jump: "Jump",
     group_action: "Actions",
     label_runs: "Runs (across agents)",
+    label_approvals: "Approvals (queue)",
     label_curation: "Curation review",
     label_memory: "Memory",
     label_skills: "Skills",

@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AgentsList } from "./pages/AgentsList";
+import { ApprovalsList } from "./pages/ApprovalsList";
 import { AgentDetail } from "./pages/AgentDetail";
 import { Curation } from "./pages/Curation";
 import { MemoryAdmin } from "./pages/MemoryAdmin";
@@ -33,6 +34,7 @@ export function AppRouter() {
       <Route path="/agents/:name/:version" element={<AgentDetail />} />
       <Route path="/agents/:name/:version/:tab" element={<AgentDetail />} />
       <Route path="/runs" element={<RunsList />} />
+      <Route path="/approvals" element={<ApprovalsList />} />
       <Route path="/runs/:threadId/:runId" element={<RunDetail />} />
       <Route path="/curation" element={<Curation />} />
       <Route path="/memory" element={<MemoryAdmin />} />

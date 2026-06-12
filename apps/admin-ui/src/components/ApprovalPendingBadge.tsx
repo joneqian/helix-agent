@@ -1,12 +1,13 @@
 /**
  * Approval pending badge — Stream H.3 PR 6 (Mini-ADR H-8).
  *
- * A red dot next to the "Runs" nav item when at least one run is
- * waiting on human approval. The data source is the same
- * ``GET /v1/runs?status=paused&limit=1`` endpoint the cross-thread
- * Runs page uses — a fresh cheap poll every 60s rather than reaching
- * for an SSE channel for what is fundamentally a "is the queue empty"
- * signal.
+ * A red dot next to the "Approvals" nav item when at least one run is
+ * waiting on human approval. Stream HX-7 PR 3 moved the data source to
+ * ``GET /v1/approvals?status=pending&limit=1`` — the queue's own
+ * endpoint (the old ``runs?status=paused`` proxy counted paused runs,
+ * which only approximated the approval queue). Still a cheap 60s poll
+ * rather than an SSE channel for what is fundamentally a "is the
+ * queue empty" signal.
  *
  * Decision (PR 6): tab-aware polling — when the operator hides the
  * tab we pause the timer to avoid burning quota on a stale signal,
@@ -17,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { Badge, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { listRuns } from "../api/runs";
+import { listApprovals } from "../api/approvals";
 
 interface ApprovalPendingBadgeProps {
   /** Label rendered inline so we can wrap "Runs" in the badge. */
@@ -43,7 +44,7 @@ export function ApprovalPendingBadge({
       }
       inFlight.current = true;
       try {
-        const result = await listRuns({ status: "paused", limit: 1 });
+        const result = await listApprovals({ status: "pending", limit: 1 });
         if (!cancelled) {
           setCount(result.total);
         }

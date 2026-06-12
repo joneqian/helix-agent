@@ -4,6 +4,7 @@ import { Menu } from "antd";
 import {
   Bot,
   Activity,
+  ListChecks,
   CheckSquare,
   Brain,
   FileText,
@@ -35,7 +36,8 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { key: "agents", labelKey: "nav.agents", icon: <Bot size={16} strokeWidth={1.5} />, path: "/agents" },
-  { key: "runs", labelKey: "nav.runs", icon: <Activity size={16} strokeWidth={1.5} />, path: "/runs", badge: true },
+  { key: "runs", labelKey: "nav.runs", icon: <Activity size={16} strokeWidth={1.5} />, path: "/runs" },
+  { key: "approvals", labelKey: "nav.approvals", icon: <ListChecks size={16} strokeWidth={1.5} />, path: "/approvals", badge: true },
   { key: "curation", labelKey: "nav.curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, path: "/curation" },
   { key: "memory", labelKey: "nav.memory", icon: <Brain size={16} strokeWidth={1.5} />, path: "/memory" },
   { key: "skills", labelKey: "nav.skills", icon: <FileText size={16} strokeWidth={1.5} />, path: "/skills" },
