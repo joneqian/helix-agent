@@ -45,6 +45,15 @@ class SandboxStore(Protocol):
     async def sandbox_limit_for_tenant(self, tenant_id: UUID) -> int | None:
         """Return the tenant's ``sandboxes`` quota, or ``None`` if unset."""
 
+    async def claim_ready(self, record: SandboxRecord) -> bool:
+        """CAS-rebind a ``READY`` pool row to a tenant (Stream HX-6).
+
+        Writes ``record``'s full rebind (tenant, thread, limits, state)
+        guarded on the row still being ``READY``; returns ``False`` when
+        the guard lost (the row was claimed / destroyed concurrently),
+        in which case the caller falls back to a cold start.
+        """
+
 
 class DbSandboxStore:
     """SQL-backed :class:`SandboxStore` over the ``sandbox_instance`` table."""
@@ -112,6 +121,34 @@ class DbSandboxStore:
                 )
             )
             return result.scalar_one_or_none()
+
+    async def claim_ready(self, record: SandboxRecord) -> bool:
+        # Stream HX-6 — the ``state == READY`` guard is the CAS: a row
+        # already claimed (IN_USE) or torn down (DESTROYED) matches zero
+        # rows and the caller falls back to a cold start. The rebind
+        # writes the columns ``update`` never touches (tenant, thread,
+        # per-acquire limits) — a claim re-homes the row to its tenant.
+        async with self._sf() as session:
+            result = await session.execute(
+                update(SandboxInstanceRow)
+                .where(
+                    SandboxInstanceRow.id == record.id,
+                    SandboxInstanceRow.state == SandboxState.READY.value,
+                )
+                .values(
+                    tenant_id=record.tenant_id,
+                    thread_id=record.thread_id,
+                    state=record.state.value,
+                    cpu_quota=record.cpu_quota,
+                    memory_mb=record.memory_mb,
+                    pids_limit=record.pids_limit,
+                    timeout_s=record.timeout_s,
+                    acquired_at=record.acquired_at,
+                    last_used_at=record.last_used_at,
+                )
+            )
+            await session.commit()
+            return int(getattr(result, "rowcount", 0) or 0) == 1
 
 
 def _session_idle(record: SandboxRecord, now: datetime, idle_ttl_s: int) -> bool:

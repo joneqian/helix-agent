@@ -80,6 +80,18 @@ class DockerClient(Protocol):
         does not raise.
         """
 
+    async def update_limits(
+        self, container_name: str, *, cpus: float, memory_mb: int, pids_limit: int
+    ) -> None:
+        """Re-pair a live container's resource limits (``docker update``).
+
+        Stream HX-6 (Mini-ADR HX-F3) — a claimed pool container was
+        launched with the default limits; this applies the acquire
+        request's values. Raises :class:`DockerError` on failure — the
+        caller destroys the container and cold-starts instead
+        (fail-closed: limits are a security surface).
+        """
+
 
 class CliDockerClient:
     """:class:`DockerClient` backed by the ``docker`` CLI via asyncio subprocess."""
@@ -281,6 +293,35 @@ class CliDockerClient:
                 volume,
                 stderr.strip(),
             )
+
+    async def update_limits(
+        self, container_name: str, *, cpus: float, memory_mb: int, pids_limit: int
+    ) -> None:
+        """Apply per-acquire limits to a claimed pool container (HX-6).
+
+        ``--memory-swap`` is set to 2x memory to mirror ``docker run``'s
+        default (swap = 2x memory when only ``--memory`` is given) —
+        ``docker update`` rejects a memory value above the container's
+        current swap ceiling, so both must move together.
+        """
+        argv = [
+            "docker",
+            "update",
+            "--cpus",
+            str(cpus),
+            "--memory",
+            f"{memory_mb}m",
+            "--memory-swap",
+            f"{memory_mb * 2}m",
+            "--pids-limit",
+            str(pids_limit),
+            container_name,
+        ]
+        _, stderr, code = await self._exec(argv)
+        if code != 0:
+            detail = stderr.strip() or "non-zero exit"
+            msg = f"docker update failed for {container_name!r}: {detail}"
+            raise DockerError(msg)
 
     @staticmethod
     async def _exec(argv: list[str]) -> tuple[str, str, int]:

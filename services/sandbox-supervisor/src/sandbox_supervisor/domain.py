@@ -14,13 +14,15 @@ from uuid import UUID
 
 
 class SandboxState(StrEnum):
-    """Lifecycle states — STREAM-F-DESIGN § 2.2 (M0 cold-start subset).
+    """Lifecycle states — STREAM-F-DESIGN § 2.2 + HX-6 warm pool.
 
-    No ``READY`` pool state: M0 has no warm pool, so a sandbox goes
-    straight from launch to ``IN_USE`` and is destroyed on release.
+    ``READY`` (Stream HX-6) is a pre-launched pool container: alive and
+    runner-ready but bound to no tenant / user; an ephemeral acquire
+    claims it (READY → IN_USE) instead of paying a cold ``docker run``.
     """
 
     CREATING = "CREATING"
+    READY = "READY"
     IN_USE = "IN_USE"
     DESTROYED = "DESTROYED"
     FAILED = "FAILED"
@@ -31,6 +33,15 @@ class SandboxState(StrEnum):
 DESTROY_REASON_RELEASE = "release"
 DESTROY_REASON_IDLE_TIMEOUT = "idle_timeout"
 DESTROY_REASON_CANCELLED = "cancelled"
+
+
+def container_name(sandbox_id: UUID) -> str:
+    """The deterministic ``--name`` for a sandbox's container.
+
+    Lives here (not ``supervisor.py``) so the HX-6 pool replenisher can
+    name its pre-launched containers without importing the supervisor.
+    """
+    return f"helix-sb-{sandbox_id}"
 
 
 @dataclass(frozen=True)

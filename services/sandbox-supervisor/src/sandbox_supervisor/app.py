@@ -44,6 +44,7 @@ from sandbox_supervisor.domain import (
     WorkspaceQuotaExceededError,
 )
 from sandbox_supervisor.lifecycle import VolumeLifecycleManager
+from sandbox_supervisor.pool import PoolReplenisher, SandboxPool
 from sandbox_supervisor.quota_enforcer import QuotaEnforcer
 from sandbox_supervisor.reaper import SandboxReaper
 from sandbox_supervisor.schemas import (
@@ -117,14 +118,22 @@ def create_app(
             measure_image=resolved_settings.sandbox_image,
             service_name=resolved_settings.service_name,
         )
+        # Stream HX-6 — the warm READY pool. Built unconditionally (the
+        # claim path no-ops while empty); the replenisher task only
+        # starts when a variant has a non-zero target. Pool containers
+        # do not survive a supervisor restart — the held pipe dies with
+        # the process and ``sweep_orphans`` above reclaims leftovers.
+        runtime_provider = make_sandbox_runtime_provider(resolved_settings.oci_runtime)
+        pool = SandboxPool()
         live = SandboxSupervisor(
             store=store,
             docker=docker,
             audit=audit,
-            runtime_provider=make_sandbox_runtime_provider(resolved_settings.oci_runtime),
+            runtime_provider=runtime_provider,
             workspace_store=workspace_store,
             settings=resolved_settings,
             quota_enforcer=quota_enforcer,
+            pool=pool,
         )
         app.state.supervisor = live
 
@@ -163,11 +172,23 @@ def create_app(
                     tasks.append(
                         asyncio.create_task(_run_daily_backup(lifecycle, resolved_settings, stop))
                     )
+            if resolved_settings.pool_size_minimal > 0 or resolved_settings.pool_size_office > 0:
+                replenisher = PoolReplenisher(
+                    pool=pool,
+                    store=store,
+                    docker=docker,
+                    runtime_provider=runtime_provider,
+                    settings=resolved_settings,
+                )
+                tasks.append(asyncio.create_task(replenisher.run_forever(stop)))
             logger.info(
-                "sandbox_supervisor.start reaper=%s lifecycle=%s backup_hour=%d",
+                "sandbox_supervisor.start reaper=%s lifecycle=%s backup_hour=%d "
+                "pool_minimal=%d pool_office=%d",
                 enable_reaper,
                 lifecycle is not None,
                 resolved_settings.workspace_backup_hour,
+                resolved_settings.pool_size_minimal,
+                resolved_settings.pool_size_office,
             )
             try:
                 yield
