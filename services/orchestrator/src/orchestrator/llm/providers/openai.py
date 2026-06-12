@@ -59,10 +59,12 @@ from helix_agent.runtime.middleware import (
     LLMServerError,
     LLMUnauthorizedError,
 )
+from orchestrator.llm.providers._metrics import disclosure_fallback_total
 from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
+
 
 _DEFAULT_BASE_URL = "https://api.openai.com"
 DEFAULT_CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
@@ -87,6 +89,7 @@ class OpenAIClient(Protocol):
         tools: list[dict[str, Any]] | None,
         temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         """POST ``/v1/chat/completions`` and return the parsed JSON body.
 
@@ -133,10 +136,14 @@ class HTTPOpenAIClient:
         tools: list[dict[str, Any]] | None,
         temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         body: dict[str, Any] = {"model": model, "messages": messages}
         if tools:
             body["tools"] = tools
+        if tool_choice is not None:
+            # Stream HX-13 — the allowed_tools subset constraint.
+            body["tool_choice"] = tool_choice
         if temperature is not None:
             body["temperature"] = temperature
         if extra_body:
@@ -198,6 +205,7 @@ class RecordingOpenAIClient:
         tools: list[dict[str, Any]] | None,
         temperature: float | None = None,
         extra_body: dict[str, Any] | None = None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         self.calls.append(
             {
@@ -206,6 +214,7 @@ class RecordingOpenAIClient:
                 "tools": tools,
                 "temperature": temperature,
                 "extra_body": extra_body,
+                "tool_choice": tool_choice,
             }
         )
         if self.raise_with is not None:
@@ -232,6 +241,10 @@ class OpenAIProvider:
     #: payload (``_thinking_payload``), merged into the request body.
     #: ``None`` (every untouched manifest) keeps the body byte-identical.
     thinking_payload: dict[str, Any] | None = None
+    #: Stream HX-13 (Mini-ADR HX-J4) — set after the allowed_tools
+    #: constraint is rejected once: this provider instance falls back to
+    #: the application tier for its remaining lifetime (restart retries).
+    _allowed_tools_disabled: bool = field(default=False, init=False, repr=False)
 
     async def complete(
         self,
@@ -240,15 +253,50 @@ class OpenAIProvider:
         tools: Sequence[ToolSpec],
     ) -> AIMessage:
         mapped = await _to_openai_messages(messages, self.image_resolver)
+        # Stream HX-13 — defer markers ride the specs (agent_node sets them
+        # on the allowed_tools tier): the FULL schema set stays on the wire
+        # (prompt-cache friendly) and the marked tools are excluded from
+        # the allowed subset until promoted.
+        use_allowed = any(spec.defer_loading for spec in tools) and not self._allowed_tools_disabled
         tool_payload = [_to_openai_tool(spec) for spec in tools] if tools else None
+        tool_choice: dict[str, Any] | None = None
+        if use_allowed:
+            tool_choice = {
+                "type": "allowed_tools",
+                "mode": "auto",
+                "tools": [
+                    {"type": "function", "function": {"name": spec.name}}
+                    for spec in tools
+                    if not spec.defer_loading
+                ],
+            }
 
-        body = await self.client.chat_completions(
-            model=self.model,
-            messages=mapped,
-            tools=tool_payload,
-            temperature=self.temperature,
-            extra_body=self.thinking_payload,
-        )
+        try:
+            body = await self.client.chat_completions(
+                model=self.model,
+                messages=mapped,
+                tools=tool_payload,
+                temperature=self.temperature,
+                extra_body=self.thinking_payload,
+                tool_choice=tool_choice,
+            )
+        except LLMClientError:
+            if not use_allowed:
+                raise
+            # Stream HX-13 (Mini-ADR HX-J4) — the allowed_tools constraint
+            # was rejected. Fail open: drop to the application tier for
+            # this provider instance and resend once without it.
+            self._allowed_tools_disabled = True
+            disclosure_fallback_total.labels(provider="openai").inc()
+            logger.warning("openai.allowed_tools_rejected — falling back to app tier")
+            body = await self.client.chat_completions(
+                model=self.model,
+                messages=mapped,
+                tools=tool_payload,
+                temperature=self.temperature,
+                extra_body=self.thinking_payload,
+                tool_choice=None,
+            )
 
         return _from_openai_response(body)
 

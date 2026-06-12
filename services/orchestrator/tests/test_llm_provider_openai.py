@@ -469,3 +469,94 @@ async def test_provider_threads_thinking_payload() -> None:
     )
     await provider.complete(messages=[HumanMessage(content="hi")], tools=[])
     assert recording.calls[0]["extra_body"] == {"thinking": {"type": "enabled"}}
+
+
+# --- Stream HX-13 — allowed_tools tier ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_defer_markers_build_allowed_tools_subset() -> None:
+    client = RecordingOpenAIClient(
+        response={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+    )
+    provider = OpenAIProvider(client=client, model="gpt-5.5")
+    await provider.complete(
+        messages=[HumanMessage(content="hi")],
+        tools=[
+            ToolSpec(name="active_tool", description="always allowed"),
+            ToolSpec(name="find_tools", description="promotion entry"),
+            ToolSpec(name="mcp:gh.issue", description="deferred", defer_loading=True),
+        ],
+    )
+    call = client.calls[0]
+    # Full schema set stays on the wire (prompt-cache friendly)…
+    assert {t["function"]["name"] for t in call["tools"]} == {
+        "active_tool",
+        "find_tools",
+        "mcp:gh.issue",
+    }
+    # …while the allowed subset excludes the marked (still-deferred) tool.
+    choice = call["tool_choice"]
+    assert choice["type"] == "allowed_tools"
+    allowed = {t["function"]["name"] for t in choice["tools"]}
+    assert allowed == {"active_tool", "find_tools"}
+
+
+@pytest.mark.asyncio
+async def test_no_markers_means_no_tool_choice() -> None:
+    client = RecordingOpenAIClient(
+        response={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+    )
+    provider = OpenAIProvider(client=client, model="gpt-5.5")
+    await provider.complete(
+        messages=[HumanMessage(content="hi")],
+        tools=[ToolSpec(name="active_tool", description="x")],
+    )
+    assert client.calls[0]["tool_choice"] is None
+
+
+@pytest.mark.asyncio
+async def test_allowed_tools_rejection_falls_back_and_sticks() -> None:
+    """HX-J4 — a 4xx with the constraint resends once without it and the
+    provider instance stays on the application tier afterwards."""
+    from collections.abc import Mapping
+    from dataclasses import dataclass, field
+    from typing import Any
+
+    @dataclass
+    class _RejectConstraintOnce:
+        calls: list[dict[str, Any]] = field(default_factory=list)
+
+        async def chat_completions(self, **kwargs: Any) -> Mapping[str, Any]:
+            self.calls.append(kwargs)
+            if kwargs.get("tool_choice") is not None:
+                raise LLMClientError("openai 400: unknown tool_choice type")
+            return {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+
+    client = _RejectConstraintOnce()
+    provider = OpenAIProvider(client=client, model="gpt-5.5")
+    deferred_tools = [ToolSpec(name="mcp:gh.issue", description="d", defer_loading=True)]
+
+    result = await provider.complete(messages=[HumanMessage(content="hi")], tools=deferred_tools)
+    assert result.content == "ok"
+    assert client.calls[0]["tool_choice"] is not None
+    assert client.calls[1]["tool_choice"] is None
+
+    # Sticky fallback: next call goes straight out unconstrained.
+    await provider.complete(messages=[HumanMessage(content="hi")], tools=deferred_tools)
+    assert client.calls[2]["tool_choice"] is None
+
+
+@pytest.mark.asyncio
+async def test_plain_client_error_propagates_without_fallback() -> None:
+    client = RecordingOpenAIClient(
+        response={"choices": []},
+        raise_with=LLMClientError("openai 400: bad request"),
+    )
+    provider = OpenAIProvider(client=client, model="gpt-5.5")
+    with pytest.raises(LLMClientError):
+        await provider.complete(
+            messages=[HumanMessage(content="hi")],
+            tools=[ToolSpec(name="active_tool", description="x")],
+        )
+    assert len(client.calls) == 1

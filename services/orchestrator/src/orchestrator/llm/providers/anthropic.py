@@ -52,7 +52,6 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from helix_agent.common.observability import helix_counter
 from helix_agent.common.uplift_metrics import record_anthropic_cache_anchor
 from helix_agent.runtime.middleware import (
     LLMClientError,
@@ -61,6 +60,7 @@ from helix_agent.runtime.middleware import (
     LLMServerError,
     LLMUnauthorizedError,
 )
+from orchestrator.llm.providers._metrics import disclosure_fallback_total
 from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
 
@@ -69,13 +69,6 @@ logger = logging.getLogger(__name__)
 #: Stream HX-13 — Anthropic server-side tool-search beta opt-in.
 _TOOL_SEARCH_BETA = "tool-search-tool-2025-10-19"
 
-#: Stream HX-13 (Mini-ADR HX-J4) — vendor-native disclosure tier rejected
-#: by the API and the provider instance fell back to the application tier.
-_disclosure_fallback_total = helix_counter(
-    "helix_llm_tool_disclosure_fallback_total",
-    "Vendor-native tool-disclosure tier rejections (fell back to the HX-12 tier).",
-    ("provider",),
-)
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com"
 _DEFAULT_TIMEOUT_S = 60.0
@@ -350,7 +343,7 @@ class AnthropicProvider:
             # application tier for this provider instance and resend once.
             # A vendor-side refusal must cost tokens, never capability.
             self._native_search_disabled = True
-            _disclosure_fallback_total.labels(provider="anthropic").inc()
+            disclosure_fallback_total.labels(provider="anthropic").inc()
             logger.warning("anthropic.tool_search_beta_rejected — falling back to app tier")
             plain_tools = [
                 replace(spec, defer_loading=False) if spec.defer_loading else spec for spec in tools
