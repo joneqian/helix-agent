@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -52,6 +52,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from helix_agent.common.observability import helix_counter
 from helix_agent.common.uplift_metrics import record_anthropic_cache_anchor
 from helix_agent.runtime.middleware import (
     LLMClientError,
@@ -64,6 +65,17 @@ from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
 
 logger = logging.getLogger(__name__)
+
+#: Stream HX-13 — Anthropic server-side tool-search beta opt-in.
+_TOOL_SEARCH_BETA = "tool-search-tool-2025-10-19"
+
+#: Stream HX-13 (Mini-ADR HX-J4) — vendor-native disclosure tier rejected
+#: by the API and the provider instance fell back to the application tier.
+_disclosure_fallback_total = helix_counter(
+    "helix_llm_tool_disclosure_fallback_total",
+    "Vendor-native tool-disclosure tier rejections (fell back to the HX-12 tier).",
+    ("provider",),
+)
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com"
 _DEFAULT_TIMEOUT_S = 60.0
@@ -107,6 +119,7 @@ class AnthropicClient(Protocol):
         temperature: float | None = None,
         thinking: dict[str, Any] | None = None,
         output_config: dict[str, Any] | None = None,
+        betas: list[str] | None = None,
     ) -> Mapping[str, Any]:
         """POST ``/v1/messages`` and return the parsed JSON body."""
 
@@ -137,6 +150,7 @@ class HTTPAnthropicClient:
         temperature: float | None = None,
         thinking: dict[str, Any] | None = None,
         output_config: dict[str, Any] | None = None,
+        betas: list[str] | None = None,
     ) -> Mapping[str, Any]:
         body: dict[str, Any] = {
             "model": model,
@@ -165,6 +179,9 @@ class HTTPAnthropicClient:
                         "x-api-key": self.api_key,
                         "anthropic-version": _ANTHROPIC_VERSION,
                         "content-type": "application/json",
+                        # Stream HX-13 — beta opt-ins (e.g. server-side tool
+                        # search) ride a comma-joined header, only when asked.
+                        **({"anthropic-beta": ",".join(betas)} if betas else {}),
                     },
                     json=body,
                 )
@@ -214,6 +231,7 @@ class RecordingAnthropicClient:
         temperature: float | None = None,
         thinking: dict[str, Any] | None = None,
         output_config: dict[str, Any] | None = None,
+        betas: list[str] | None = None,
     ) -> Mapping[str, Any]:
         self.calls.append(
             {
@@ -225,6 +243,7 @@ class RecordingAnthropicClient:
                 "temperature": temperature,
                 "thinking": thinking,
                 "output_config": output_config,
+                "betas": betas,
             }
         )
         if self.raise_with is not None:
@@ -267,6 +286,11 @@ class AnthropicProvider:
     effort: str | None = None
     #: Stream CM-9 — send ``thinking: {"type": "adaptive"}`` (4.6+).
     adaptive_thinking: bool = False
+    #: Stream HX-13 (Mini-ADR HX-J4) — set after the tool-search beta is
+    #: rejected once: this provider instance falls back to the application
+    #: tier (no defer markers, no beta header) for its remaining lifetime.
+    #: A restart retries the native tier.
+    _native_search_disabled: bool = field(default=False, init=False, repr=False)
 
     async def complete(
         self,
@@ -277,6 +301,14 @@ class AnthropicProvider:
         system_text, mapped, anchor_indices = await _to_anthropic_messages(
             messages, self.image_resolver
         )
+        # Stream HX-13 — deferred markers ride the specs (agent_node sets
+        # them on the native_search tier). Once the beta has been rejected,
+        # strip the markers so every later call goes out plain.
+        use_native = any(spec.defer_loading for spec in tools) and not self._native_search_disabled
+        if self._native_search_disabled:
+            tools = [
+                replace(spec, defer_loading=False) if spec.defer_loading else spec for spec in tools
+            ]
         tool_payload = [_to_anthropic_tool(spec) for spec in tools] if tools else None
 
         # Stream L.L1 — convert ``system`` from string to block list with
@@ -296,16 +328,44 @@ class AnthropicProvider:
         else:
             system_payload = system_text
 
-        body = await self.client.messages(
-            model=self.model,
-            system=system_payload,
-            messages=mapped,
-            tools=tool_payload,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            thinking={"type": "adaptive"} if self.adaptive_thinking else None,
-            output_config={"effort": self.effort} if self.effort is not None else None,
-        )
+        thinking_payload = {"type": "adaptive"} if self.adaptive_thinking else None
+        output_config = {"effort": self.effort} if self.effort is not None else None
+        try:
+            body = await self.client.messages(
+                model=self.model,
+                system=system_payload,
+                messages=mapped,
+                tools=tool_payload,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                thinking=thinking_payload,
+                output_config=output_config,
+                betas=[_TOOL_SEARCH_BETA] if use_native else None,
+            )
+        except LLMClientError:
+            if not use_native:
+                raise
+            # Stream HX-13 (Mini-ADR HX-J4) — the beta was rejected (or the
+            # request shape with defer markers was). Fail open: drop to the
+            # application tier for this provider instance and resend once.
+            # A vendor-side refusal must cost tokens, never capability.
+            self._native_search_disabled = True
+            _disclosure_fallback_total.labels(provider="anthropic").inc()
+            logger.warning("anthropic.tool_search_beta_rejected — falling back to app tier")
+            plain_tools = [
+                replace(spec, defer_loading=False) if spec.defer_loading else spec for spec in tools
+            ]
+            body = await self.client.messages(
+                model=self.model,
+                system=system_payload,
+                messages=mapped,
+                tools=[_to_anthropic_tool(spec) for spec in plain_tools] if plain_tools else None,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                thinking=thinking_payload,
+                output_config=output_config,
+                betas=None,
+            )
 
         return _from_anthropic_response(body)
 
@@ -539,11 +599,16 @@ async def _human_content(
 
 
 def _to_anthropic_tool(spec: ToolSpec) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "name": spec.name,
         "description": spec.description,
         "input_schema": dict(spec.parameters) or {"type": "object", "properties": {}},
     }
+    # Stream HX-13 — server-side tool search: a marked tool ships deferred
+    # (the API retrieves and injects its schema on demand).
+    if spec.defer_loading:
+        payload["defer_loading"] = True
+    return payload
 
 
 def _from_anthropic_response(body: Mapping[str, Any]) -> AIMessage:

@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -852,3 +854,88 @@ async def test_http_body_carries_thinking_and_effort_and_omits_temperature() -> 
     assert captured["thinking"] == {"type": "adaptive"}
     assert captured["output_config"] == {"effort": "max"}
     assert "temperature" not in captured
+
+
+# --- Stream HX-13 — native_search tier (defer_loading + beta header) --------
+
+
+@pytest.mark.asyncio
+async def test_defer_loading_marker_ships_with_beta_header() -> None:
+    client = RecordingAnthropicClient(
+        response={"content": [{"type": "text", "text": "ok"}]},
+    )
+    provider = AnthropicProvider(client=client, model="claude-opus-4-8")
+    await provider.complete(
+        messages=[HumanMessage(content="hi")],
+        tools=[
+            ToolSpec(name="active_tool", description="always bound"),
+            ToolSpec(name="mcp:gh.issue", description="deferred", defer_loading=True),
+        ],
+    )
+    call = client.calls[0]
+    assert call["betas"] == ["tool-search-tool-2025-10-19"]
+    by_name = {t["name"]: t for t in call["tools"]}
+    assert by_name["mcp:gh.issue"]["defer_loading"] is True
+    assert "defer_loading" not in by_name["active_tool"]
+
+
+@pytest.mark.asyncio
+async def test_no_markers_means_no_beta_header() -> None:
+    client = RecordingAnthropicClient(
+        response={"content": [{"type": "text", "text": "ok"}]},
+    )
+    provider = AnthropicProvider(client=client, model="claude-opus-4-8")
+    await provider.complete(
+        messages=[HumanMessage(content="hi")],
+        tools=[ToolSpec(name="active_tool", description="always bound")],
+    )
+    assert client.calls[0]["betas"] is None
+
+
+@pytest.mark.asyncio
+async def test_beta_rejection_falls_back_and_sticks() -> None:
+    """HX-J4 — a 4xx on the beta request resends once without markers and
+    the provider instance stays on the application tier afterwards."""
+
+    @dataclass
+    class _RejectBetaOnce:
+        calls: list[dict[str, Any]] = field(default_factory=list)
+
+        async def messages(self, **kwargs: Any) -> Mapping[str, Any]:
+            self.calls.append(kwargs)
+            if kwargs.get("betas"):
+                raise LLMClientError("anthropic 400: unknown beta")
+            return {"content": [{"type": "text", "text": "ok"}]}
+
+    client = _RejectBetaOnce()
+    provider = AnthropicProvider(client=client, model="claude-opus-4-8")
+    deferred_tools = [
+        ToolSpec(name="mcp:gh.issue", description="deferred", defer_loading=True),
+    ]
+
+    result = await provider.complete(messages=[HumanMessage(content="hi")], tools=deferred_tools)
+    assert result.content == "ok"
+    # First call carried the beta; the resend dropped markers + header.
+    assert client.calls[0]["betas"] == ["tool-search-tool-2025-10-19"]
+    assert client.calls[1]["betas"] is None
+    assert "defer_loading" not in client.calls[1]["tools"][0]
+
+    # Sticky: the next complete() goes straight to the plain shape.
+    await provider.complete(messages=[HumanMessage(content="hi")], tools=deferred_tools)
+    assert client.calls[2]["betas"] is None
+    assert "defer_loading" not in client.calls[2]["tools"][0]
+
+
+@pytest.mark.asyncio
+async def test_plain_client_error_propagates_without_fallback() -> None:
+    client = RecordingAnthropicClient(
+        response={"content": []},
+        raise_with=LLMClientError("anthropic 400: bad request"),
+    )
+    provider = AnthropicProvider(client=client, model="claude-opus-4-8")
+    with pytest.raises(LLMClientError):
+        await provider.complete(
+            messages=[HumanMessage(content="hi")],
+            tools=[ToolSpec(name="active_tool", description="x")],
+        )
+    assert len(client.calls) == 1  # no resend on the non-beta path
