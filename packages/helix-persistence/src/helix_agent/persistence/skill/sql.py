@@ -299,6 +299,7 @@ class SqlSkillStore(SkillStore):
         category: str | None = None,
         visibility: SkillVisibility | None = None,
         created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:
@@ -308,6 +309,7 @@ class SqlSkillStore(SkillStore):
             category=category,
             visibility=visibility,
             created_by_user_id=created_by_user_id,
+            created_by_agent_name=created_by_agent_name,
             cursor=cursor,
             limit=limit,
         )
@@ -317,12 +319,18 @@ class SqlSkillStore(SkillStore):
         *,
         status: SkillStatus | None = None,
         category: str | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:
         # Stream N — no tenant filter; caller must wrap in bypass_rls_session().
         return await self._list_skills(
-            tenant_id=None, status=status, category=category, cursor=cursor, limit=limit
+            tenant_id=None,
+            status=status,
+            category=category,
+            created_by_agent_name=created_by_agent_name,
+            cursor=cursor,
+            limit=limit,
         )
 
     async def _list_skills(
@@ -335,6 +343,7 @@ class SqlSkillStore(SkillStore):
         limit: int,
         visibility: SkillVisibility | None = None,
         created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
     ) -> tuple[list[Skill], UUID | None]:
         async with self._sf() as session:
             stmt = select(SkillRow).order_by(SkillRow.created_at.desc(), SkillRow.id)
@@ -348,6 +357,8 @@ class SqlSkillStore(SkillStore):
                 stmt = stmt.where(SkillRow.visibility == visibility)
             if created_by_user_id is not None:
                 stmt = stmt.where(SkillRow.created_by_user_id == created_by_user_id)
+            if created_by_agent_name is not None:
+                stmt = stmt.where(SkillRow.created_by_agent_name == created_by_agent_name)
             if cursor is not None:
                 cur_stmt = select(SkillRow).where(SkillRow.id == cursor)
                 if tenant_id is not None:

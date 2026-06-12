@@ -325,8 +325,15 @@ def build_triggers_router() -> APIRouter:
         triggers: Annotated[TriggerStore, Depends(_get_trigger_store)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         agent_name: Annotated[str | None, Query(min_length=1)] = None,
+        agent_version: Annotated[str | None, Query(min_length=1)] = None,
         tenant_id: Annotated[UUID | Literal["*"] | None, Query()] = None,  # Stream N
     ) -> JSONResponse:
+        # Stream H.6 (Mini-ADR H-12) — a bare version filter is meaningless.
+        if agent_version is not None and agent_name is None:
+            raise HTTPException(
+                status_code=422,
+                detail="agent_version requires agent_name",
+            )
         scope = await ensure_tenant_scope(
             request.state.principal,
             tenant_id,
@@ -337,10 +344,14 @@ def build_triggers_router() -> APIRouter:
         )
         async with applied_scope(scope):
             if isinstance(scope, CrossTenant):
-                items = await triggers.list_all_tenants(agent_name=agent_name)
+                items = await triggers.list_all_tenants(
+                    agent_name=agent_name, agent_version=agent_version
+                )
             else:
                 items = await triggers.list_by_tenant(
-                    tenant_id=scope.tenant_id, agent_name=agent_name
+                    tenant_id=scope.tenant_id,
+                    agent_name=agent_name,
+                    agent_version=agent_version,
                 )
         return JSONResponse(
             content={

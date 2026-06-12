@@ -45,21 +45,31 @@ class TriggerStore(abc.ABC):
 
     @abc.abstractmethod
     async def list_by_tenant(
-        self, *, tenant_id: UUID, agent_name: str | None = None
+        self,
+        *,
+        tenant_id: UUID,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
     ) -> list[TriggerRecord]:
-        """Return every trigger in a tenant; optional ``agent_name`` filter.
+        """Return every trigger in a tenant; optional agent filters.
 
         Differs from :meth:`list_by_agent`:that one requires ``agent_name``
         (the original CRUD list); this one is the relaxed admin variant
-        used by the Stream H Admin UI tenant view.
+        used by the Stream H Admin UI tenant view. ``agent_version``
+        narrows further (Stream H.6 — per-agent Triggers tab).
         """
 
     @abc.abstractmethod
-    async def list_all_tenants(self, *, agent_name: str | None = None) -> list[TriggerRecord]:
+    async def list_all_tenants(
+        self,
+        *,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+    ) -> list[TriggerRecord]:
         """Cross-tenant trigger list — Stream N (Mini-ADR N-4).
 
         Caller MUST be inside ``bypass_rls_session()``. Optional
-        ``agent_name`` filter applied across all tenants.
+        agent filters applied across all tenants.
         """
 
     @abc.abstractmethod

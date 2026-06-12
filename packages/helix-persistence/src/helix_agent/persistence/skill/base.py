@@ -150,6 +150,7 @@ class SkillStore(abc.ABC):
         category: str | None = None,
         visibility: SkillVisibility | None = None,
         created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:
@@ -162,7 +163,9 @@ class SkillStore(abc.ABC):
         Stream SE (SE-8): ``visibility`` / ``created_by_user_id`` filter the
         agent-self-authored slice (e.g. "this user's agent_private skills")
         for the admin governance surface. Both default ``None`` (no filter),
-        preserving the M0 list shape.
+        preserving the M0 list shape. ``created_by_agent_name`` narrows to
+        skills authored by that agent (Stream H.6 Mini-ADR H-11 — feeds
+        the per-agent Skills tab).
         """
 
     @abc.abstractmethod
@@ -171,6 +174,7 @@ class SkillStore(abc.ABC):
         *,
         status: SkillStatus | None = None,
         category: str | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:

@@ -41,16 +41,32 @@ class InMemoryTriggerStore(TriggerStore):
         ]
 
     async def list_by_tenant(
-        self, *, tenant_id: UUID, agent_name: str | None = None
+        self,
+        *,
+        tenant_id: UUID,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
     ) -> list[TriggerRecord]:
         return [
             r
             for r in self._rows.values()
-            if r.tenant_id == tenant_id and (agent_name is None or r.agent_name == agent_name)
+            if r.tenant_id == tenant_id
+            and (agent_name is None or r.agent_name == agent_name)
+            and (agent_version is None or r.agent_version == agent_version)
         ]
 
-    async def list_all_tenants(self, *, agent_name: str | None = None) -> list[TriggerRecord]:
-        return [r for r in self._rows.values() if agent_name is None or r.agent_name == agent_name]
+    async def list_all_tenants(
+        self,
+        *,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+    ) -> list[TriggerRecord]:
+        return [
+            r
+            for r in self._rows.values()
+            if (agent_name is None or r.agent_name == agent_name)
+            and (agent_version is None or r.agent_version == agent_version)
+        ]
 
     async def list_enabled_cron(self) -> list[TriggerRecord]:
         return [r for r in self._rows.values() if r.kind == "cron" and r.enabled]

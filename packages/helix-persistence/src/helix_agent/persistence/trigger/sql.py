@@ -101,7 +101,11 @@ class SqlTriggerStore(TriggerStore):
         return [_row_to_dto(r) for r in rows]
 
     async def list_by_tenant(
-        self, *, tenant_id: UUID, agent_name: str | None = None
+        self,
+        *,
+        tenant_id: UUID,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
     ) -> list[TriggerRecord]:
         stmt = (
             select(AgentTriggerRow)
@@ -110,15 +114,24 @@ class SqlTriggerStore(TriggerStore):
         )
         if agent_name is not None:
             stmt = stmt.where(AgentTriggerRow.agent_name == agent_name)
+        if agent_version is not None:
+            stmt = stmt.where(AgentTriggerRow.agent_version == agent_version)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_dto(r) for r in rows]
 
-    async def list_all_tenants(self, *, agent_name: str | None = None) -> list[TriggerRecord]:
+    async def list_all_tenants(
+        self,
+        *,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
+    ) -> list[TriggerRecord]:
         # Stream N — no tenant filter; caller must wrap in bypass_rls_session().
         stmt = select(AgentTriggerRow).order_by(AgentTriggerRow.created_at.asc())
         if agent_name is not None:
             stmt = stmt.where(AgentTriggerRow.agent_name == agent_name)
+        if agent_version is not None:
+            stmt = stmt.where(AgentTriggerRow.agent_version == agent_version)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_dto(r) for r in rows]

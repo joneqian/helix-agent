@@ -312,3 +312,28 @@ async def test_run_store_list_due_retries() -> None:
     due = await store.list_due_retries(before=now)
     assert len(due) == 1
     assert due[0].status is TriggerRunStatus.RETRYING
+
+
+@pytest.mark.asyncio
+async def test_list_by_tenant_agent_version_filter() -> None:
+    """Stream H.6 — agent_version narrows the admin list (Triggers tab)."""
+    store = InMemoryTriggerStore()
+    tenant = uuid4()
+    r1 = _record(tenant_id=tenant, agent_name="reporter", name="t1")
+    r2 = _record(tenant_id=tenant, agent_name="reporter", name="t2").model_copy(
+        update={"agent_version": "2.0.0"}
+    )
+    await store.create(r1)
+    await store.create(r2)
+
+    v1 = await store.list_by_tenant(tenant_id=tenant, agent_name="reporter", agent_version="1.0.0")
+    assert [t.name for t in v1] == ["t1"]
+
+    # Version filter alone also works at store level (the 422 guard is API-layer).
+    v2 = await store.list_by_tenant(tenant_id=tenant, agent_version="2.0.0")
+    assert [t.name for t in v2] == ["t2"]
+
+    # No filter → both (regression); cross-tenant variant same semantics.
+    assert len(await store.list_by_tenant(tenant_id=tenant)) == 2
+    cross = await store.list_all_tenants(agent_name="reporter", agent_version="2.0.0")
+    assert [t.name for t in cross] == ["t2"]

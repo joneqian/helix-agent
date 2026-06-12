@@ -121,3 +121,60 @@ async def test_check_access_and_delete() -> None:
     assert owner_delete is True
     gone = await store.check_access(thread_id, owner)
     assert gone is False
+
+
+# ---------------------------------------------------------------------------
+# Stream H.6 (Mini-ADR H-10) — agent_name / agent_version list filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_by_tenant_agent_filters() -> None:
+    store = InMemoryThreadMetaStore()
+    tenant_id = uuid4()
+    await store.create(
+        thread_id=uuid4(),
+        tenant_id=tenant_id,
+        created_by="x",
+        agent_name="reporter",
+        agent_version="1.0.0",
+    )
+    await store.create(
+        thread_id=uuid4(),
+        tenant_id=tenant_id,
+        created_by="x",
+        agent_name="reporter",
+        agent_version="2.0.0",
+    )
+    await store.create(
+        thread_id=uuid4(),
+        tenant_id=tenant_id,
+        created_by="x",
+        agent_name="scribe",
+        agent_version="1.0.0",
+    )
+    # Machine thread with no agent binding stays out of any agent filter.
+    await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="x")
+
+    by_name = await store.list_by_tenant(tenant_id, agent_name="reporter")
+    assert {m.agent_version for m in by_name} == {"1.0.0", "2.0.0"}
+
+    by_name_version = await store.list_by_tenant(
+        tenant_id, agent_name="reporter", agent_version="2.0.0"
+    )
+    assert [m.agent_version for m in by_name_version] == ["2.0.0"]
+
+    assert await store.list_by_tenant(tenant_id, agent_name="ghost") == []
+    # No filter → all four threads (regression).
+    assert len(await store.list_by_tenant(tenant_id)) == 4
+
+
+@pytest.mark.asyncio
+async def test_list_all_tenants_agent_filters() -> None:
+    store = InMemoryThreadMetaStore()
+    await store.create(thread_id=uuid4(), tenant_id=uuid4(), created_by="x", agent_name="reporter")
+    await store.create(thread_id=uuid4(), tenant_id=uuid4(), created_by="x", agent_name="scribe")
+
+    cross = await store.list_all_tenants(agent_name="reporter")
+    assert [m.agent_name for m in cross] == ["reporter"]
+    assert len(await store.list_all_tenants()) == 2

@@ -423,3 +423,42 @@ async def test_create_with_trace_id_round_trips() -> None:
 
     listed = await store.list_for_tenant(tenant_id=tenant_id)
     assert listed[0].trace_id == "cafef00d" * 4
+
+
+# ---------------------------------------------------------------------------
+# Stream H.6 (Mini-ADR H-10) — thread_ids list filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_for_tenant_thread_ids_filter() -> None:
+    store = InMemoryRunStore()
+    tenant_id = uuid4()
+    thread_a, thread_b = uuid4(), uuid4()
+    await store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_a))
+    await store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_a))
+    await store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_b))
+
+    subset = await store.list_for_tenant(tenant_id=tenant_id, thread_ids=[thread_a])
+    assert len(subset) == 2
+    assert {r.thread_id for r in subset} == {thread_a}
+
+    # Empty collection means "the agent has no threads" → no rows, NOT
+    # "no filter" (that's None).
+    assert await store.list_for_tenant(tenant_id=tenant_id, thread_ids=[]) == []
+
+    # None regression — unfiltered list unchanged.
+    assert len(await store.list_for_tenant(tenant_id=tenant_id)) == 3
+
+
+@pytest.mark.asyncio
+async def test_list_all_tenants_thread_ids_filter() -> None:
+    store = InMemoryRunStore()
+    thread_a = uuid4()
+    await store.create(_info(run_id=uuid4(), tenant_id=uuid4(), thread_id=thread_a))
+    await store.create(_info(run_id=uuid4(), tenant_id=uuid4(), thread_id=uuid4()))
+
+    subset = await store.list_all_tenants(thread_ids={thread_a})
+    assert [r.thread_id for r in subset] == [thread_a]
+    assert await store.list_all_tenants(thread_ids=set()) == []
+    assert len(await store.list_all_tenants()) == 2

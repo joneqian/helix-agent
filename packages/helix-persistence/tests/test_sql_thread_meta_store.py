@@ -168,3 +168,46 @@ async def test_delete_tenant_isolation(sql_store: SqlStoreFixture) -> None:
         assert gone is False
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_list_by_tenant_agent_filters(sql_store: SqlStoreFixture) -> None:
+    """Stream H.6 (Mini-ADR H-10) — agent_name / agent_version WHERE clauses."""
+    store, engine = sql_store
+    try:
+        tenant_id = uuid4()
+        await store.create(
+            thread_id=uuid4(),
+            tenant_id=tenant_id,
+            created_by="x",
+            agent_name="reporter",
+            agent_version="1.0.0",
+        )
+        await store.create(
+            thread_id=uuid4(),
+            tenant_id=tenant_id,
+            created_by="x",
+            agent_name="reporter",
+            agent_version="2.0.0",
+        )
+        await store.create(
+            thread_id=uuid4(),
+            tenant_id=tenant_id,
+            created_by="x",
+            agent_name="scribe",
+            agent_version="1.0.0",
+        )
+
+        by_name = await store.list_by_tenant(tenant_id, agent_name="reporter")
+        assert {m.agent_version for m in by_name} == {"1.0.0", "2.0.0"}
+
+        by_name_version = await store.list_by_tenant(
+            tenant_id, agent_name="reporter", agent_version="2.0.0"
+        )
+        assert [m.agent_version for m in by_name_version] == ["2.0.0"]
+
+        assert await store.list_by_tenant(tenant_id, agent_name="ghost") == []
+        # No filter → all three (regression).
+        assert len(await store.list_by_tenant(tenant_id)) == 3
+    finally:
+        await engine.dispose()
