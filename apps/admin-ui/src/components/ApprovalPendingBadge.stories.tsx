@@ -19,7 +19,7 @@ function withMockedTotal(total: number) {
       Promise.resolve({
         data: {
           success: true,
-          data: { items: [], total, cross_tenant: false },
+          data: { items: [], total, limit: 1, offset: 0 },
           error: null,
         },
         status: 200,
@@ -34,10 +34,10 @@ function withMockedTotal(total: number) {
 
 export const NoPending: Story = {
   decorators: [withMockedTotal(0)],
-  args: { children: <span style={{ padding: "0 8px" }}>Runs</span> },
+  args: { children: <span style={{ padding: "0 8px" }}>Approvals</span> },
 };
 
 export const ThreePending: Story = {
   decorators: [withMockedTotal(3)],
-  args: { children: <span style={{ padding: "0 8px" }}>Runs</span> },
+  args: { children: <span style={{ padding: "0 8px" }}>Approvals</span> },
 };

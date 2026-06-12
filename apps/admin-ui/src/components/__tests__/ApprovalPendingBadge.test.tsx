@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import "../../i18n";
 
-import * as runsSdk from "../../api/runs";
+import * as approvalsSdk from "../../api/approvals";
 import { ApprovalPendingBadge } from "../ApprovalPendingBadge";
 
-const listRunsMock = vi.spyOn(runsSdk, "listRuns");
+const listApprovalsMock = vi.spyOn(approvalsSdk, "listApprovals");
 
 beforeEach(() => {
-  listRunsMock.mockReset();
+  listApprovalsMock.mockReset();
 });
 
 afterEach(() => {
@@ -20,21 +20,21 @@ afterEach(() => {
 
 describe("ApprovalPendingBadge", () => {
   it("renders children only when total=0", async () => {
-    listRunsMock.mockResolvedValue({ items: [], total: 0, cross_tenant: false });
+    listApprovalsMock.mockResolvedValue({ items: [], total: 0, limit: 1, offset: 0 });
     render(
       <ApprovalPendingBadge>
         <span data-testid="label">Runs</span>
       </ApprovalPendingBadge>,
     );
     await waitFor(() => {
-      expect(listRunsMock).toHaveBeenCalledWith({ status: "paused", limit: 1 });
+      expect(listApprovalsMock).toHaveBeenCalledWith({ status: "pending", limit: 1 });
     });
     expect(screen.queryByTestId("approval-pending-badge")).toBeNull();
     expect(screen.getByTestId("label")).toBeInTheDocument();
   });
 
   it("renders the red dot badge when total>0", async () => {
-    listRunsMock.mockResolvedValue({ items: [], total: 3, cross_tenant: false });
+    listApprovalsMock.mockResolvedValue({ items: [], total: 3, limit: 1, offset: 0 });
     render(
       <ApprovalPendingBadge>
         <span>Runs</span>
@@ -46,13 +46,13 @@ describe("ApprovalPendingBadge", () => {
   });
 
   it("re-polls on visibilitychange when the tab becomes visible", async () => {
-    listRunsMock.mockResolvedValue({ items: [], total: 0, cross_tenant: false });
+    listApprovalsMock.mockResolvedValue({ items: [], total: 0, limit: 1, offset: 0 });
     render(
       <ApprovalPendingBadge>
         <span>Runs</span>
       </ApprovalPendingBadge>,
     );
-    await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledTimes(1));
     await act(async () => {
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
@@ -60,17 +60,17 @@ describe("ApprovalPendingBadge", () => {
       });
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalledTimes(2));
   });
 
-  it("swallows transient listRuns errors and keeps rendering children", async () => {
-    listRunsMock.mockRejectedValue(new Error("network"));
+  it("swallows transient listApprovals errors and keeps rendering children", async () => {
+    listApprovalsMock.mockRejectedValue(new Error("network"));
     render(
       <ApprovalPendingBadge>
         <span data-testid="label">Runs</span>
       </ApprovalPendingBadge>,
     );
-    await waitFor(() => expect(listRunsMock).toHaveBeenCalled());
+    await waitFor(() => expect(listApprovalsMock).toHaveBeenCalled());
     expect(screen.getByTestId("label")).toBeInTheDocument();
     expect(screen.queryByTestId("approval-pending-badge")).toBeNull();
   });

@@ -110,6 +110,35 @@ const RAW_EMPTY_AUDIT = {
   has_more: false,
   applied_scope: "22222222-2222-2222-2222-222222222222",
 };
+const APPROVALS_RESPONSE = {
+  success: true,
+  data: {
+    items: [
+      {
+        id: "55555555-5555-5555-5555-555555555555",
+        tenant_id: "22222222-2222-2222-2222-222222222222",
+        user_id: null,
+        run_id: "44444444-4444-4444-4444-444444444444",
+        thread_id: "33333333-3333-3333-3333-333333333333",
+        request_id: "approval:e2e",
+        node: "tools",
+        reason_kind: "policy_gate",
+        action_summary: "approval-gated tool 'send_email'",
+        proposed_args: { to: "ops@example.com" },
+        requested_at: "2026-06-12T08:00:00Z",
+        timeout_at: "2026-06-13T08:00:00Z",
+        status: "pending",
+        decided_by: null,
+        decided_at: null,
+      },
+    ],
+    total: 1,
+    limit: 100,
+    offset: 0,
+  },
+  error: null,
+};
+
 const ENVELOPED_EMPTY_LIST = {
   success: true,
   data: { items: [], total: 0, cross_tenant: false },
@@ -134,6 +163,11 @@ export async function installControlPlaneStub(page: Page): Promise<void> {
   });
   await page.route("**/v1/runs*", async (route) => {
     await route.fulfill({ json: RUNS_RESPONSE });
+  });
+  // Stream HX-7 — the approval queue (enveloped). One pending row so
+  // the /approvals page + nav badge have something to render.
+  await page.route("**/v1/approvals*", async (route) => {
+    await route.fulfill({ json: APPROVALS_RESPONSE });
   });
   // Memory backend is enveloped (Stream K.K6).
   await page.route("**/v1/memory*", async (route) => {
