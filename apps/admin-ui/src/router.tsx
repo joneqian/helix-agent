@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AgentsList } from "./pages/AgentsList";
 import { ApprovalsList } from "./pages/ApprovalsList";
 import { AgentDetail } from "./pages/AgentDetail";
+import { ArtifactsList } from "./pages/ArtifactsList";
 import { Curation } from "./pages/Curation";
 import { MemoryAdmin } from "./pages/MemoryAdmin";
 import { RunDetail } from "./pages/RunDetail";
@@ -38,6 +39,7 @@ export function AppRouter() {
       <Route path="/runs/:threadId/:runId" element={<RunDetail />} />
       <Route path="/curation" element={<Curation />} />
       <Route path="/memory" element={<MemoryAdmin />} />
+      <Route path="/artifacts" element={<ArtifactsList />} />
       <Route path="/skills" element={<SkillsList />} />
       <Route path="/skills/:skillId" element={<SkillDetail />} />
       <Route path="/triggers" element={<TriggersList />} />
