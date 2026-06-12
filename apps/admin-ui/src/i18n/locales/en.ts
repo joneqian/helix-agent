@@ -35,6 +35,7 @@ export interface TranslationKeys {
     approvals: string;
     curation: string;
     memory: string;
+    artifacts: string;
     skills: string;
     triggers: string;
     tenants: string;
@@ -139,6 +140,34 @@ export interface TranslationKeys {
     col_user: string;
     col_created: string;
     empty: string;
+  };
+  artifacts_page: {
+    page_title: string;
+    subtitle_home: string;
+    subtitle_cross: string;
+    cross_tenant_banner: string;
+    failed_to_load: string;
+    col_name: string;
+    col_kind: string;
+    col_latest: string;
+    col_tenant: string;
+    col_user: string;
+    download: string;
+    download_failed: string;
+    versions: string;
+    versions_title: string;
+    versions_empty: string;
+    ver_col_version: string;
+    ver_col_path: string;
+    ver_col_size: string;
+    ver_col_created: string;
+    digest_pending: string;
+    delete: string;
+    deleted: string;
+    delete_confirm_title: string;
+    delete_confirm_body: string;
+    empty_home: string;
+    empty_cross: string;
   };
   manifest_tab: {
     read_only_hint: string;
@@ -1168,6 +1197,7 @@ export interface TranslationKeys {
     label_approvals: string;
     label_curation: string;
     label_memory: string;
+    label_artifacts: string;
     label_skills: string;
     label_triggers: string;
     label_settings_api_keys: string;
@@ -1253,6 +1283,7 @@ const en: TranslationKeys = {
     approvals: "Approvals",
     curation: "Curation+Eval",
     memory: "Memory",
+    artifacts: "Artifacts",
     skills: "Skills",
     triggers: "Triggers",
     tenants: "Tenants",
@@ -1363,6 +1394,36 @@ const en: TranslationKeys = {
     col_user: "User",
     col_created: "Created",
     empty: "No memory items yet.",
+  },
+  artifacts_page: {
+    page_title: "Artifacts",
+    subtitle_home:
+      "Your run artifacts — artifacts are per-user assets; this account only sees and manages its own.",
+    subtitle_cross: "Platform-wide read-only aggregate across every tenant and user.",
+    cross_tenant_banner: "All tenants",
+    failed_to_load: "Failed to load artifacts",
+    col_name: "Name",
+    col_kind: "Kind",
+    col_latest: "Latest",
+    col_tenant: "Tenant",
+    col_user: "User",
+    download: "Download",
+    download_failed: "Download failed: {{detail}}",
+    versions: "Versions",
+    versions_title: "Versions of {{name}}",
+    versions_empty: "No versions recorded.",
+    ver_col_version: "Version",
+    ver_col_path: "Workspace path",
+    ver_col_size: "Size (bytes)",
+    ver_col_created: "Created",
+    digest_pending: "Backfilled after the first download",
+    delete: "Delete",
+    deleted: "Soft-deleted {{name}}",
+    delete_confirm_title: "Delete {{name}}?",
+    delete_confirm_body:
+      "Soft-delete: the artifact disappears from lists and downloads; bytes stay until the retention sweep, and re-saving the same name un-deletes it.",
+    empty_home: "This account has no run artifacts yet.",
+    empty_cross: "No artifacts anywhere on the platform yet.",
   },
   manifest_tab: {
     read_only_hint: "Read-only — click Edit to modify the spec.",
@@ -2436,6 +2497,7 @@ const en: TranslationKeys = {
     label_approvals: "Approvals (queue)",
     label_curation: "Curation review",
     label_memory: "Memory",
+    label_artifacts: "Artifacts",
     label_skills: "Skills",
     label_triggers: "Triggers",
     label_settings_api_keys: "Settings · API Keys",

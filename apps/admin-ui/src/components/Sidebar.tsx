@@ -13,6 +13,7 @@ import {
   KeyRound,
   Boxes,
   Gauge,
+  Package,
   Plug,
   Receipt,
   Sparkles,
@@ -40,6 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "approvals", labelKey: "nav.approvals", icon: <ListChecks size={16} strokeWidth={1.5} />, path: "/approvals", badge: true },
   { key: "curation", labelKey: "nav.curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, path: "/curation" },
   { key: "memory", labelKey: "nav.memory", icon: <Brain size={16} strokeWidth={1.5} />, path: "/memory" },
+  { key: "artifacts", labelKey: "nav.artifacts", icon: <Package size={16} strokeWidth={1.5} />, path: "/artifacts" },
   { key: "skills", labelKey: "nav.skills", icon: <FileText size={16} strokeWidth={1.5} />, path: "/skills" },
   { key: "triggers", labelKey: "nav.triggers", icon: <Clock size={16} strokeWidth={1.5} />, path: "/triggers" },
 ];
