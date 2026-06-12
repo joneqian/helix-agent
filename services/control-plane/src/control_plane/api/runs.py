@@ -925,12 +925,21 @@ def build_runs_list_router() -> APIRouter:
         threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
         status: Annotated[RunStatus | None, Query()] = None,
+        agent_name: Annotated[str | None, Query(min_length=1)] = None,
+        agent_version: Annotated[str | None, Query(min_length=1)] = None,
         limit: Annotated[int, Query(ge=1, le=10000)] = 100,
         offset: Annotated[int, Query(ge=0)] = 0,
         tenant_id: Annotated[UUID | Literal["*"] | None, Query()] = None,
     ) -> JSONResponse:
         trace_id = current_trace_id_hex()
         start = time.monotonic()
+
+        # Stream H.6 (Mini-ADR H-12) — a bare version filter is meaningless.
+        if agent_version is not None and agent_name is None:
+            raise HTTPException(
+                status_code=422,
+                detail="agent_version requires agent_name",
+            )
 
         scope = await ensure_tenant_scope(
             request.state.principal,
@@ -942,13 +951,40 @@ def build_runs_list_router() -> APIRouter:
         )
 
         async with applied_scope(scope):
+            # Stream H.6 (Mini-ADR H-10) — two-step agent resolve: agent →
+            # newest-first thread window (capped at MAX_LIST_LIMIT) → runs of
+            # those threads. ``thread_window_capped`` honestly signals when
+            # the agent has more threads than the window; the SQL-JOIN
+            # single-query variant is the M2 upgrade path.
+            thread_ids: list[UUID] | None = None
+            thread_window_capped = False
+            if agent_name is not None:
+                if isinstance(scope, CrossTenant):
+                    metas = await threads.list_all_tenants(
+                        agent_name=agent_name,
+                        agent_version=agent_version,
+                        limit=MAX_LIST_LIMIT + 1,
+                    )
+                else:
+                    metas = await threads.list_by_tenant(
+                        scope.tenant_id,
+                        agent_name=agent_name,
+                        agent_version=agent_version,
+                        limit=MAX_LIST_LIMIT + 1,
+                    )
+                thread_window_capped = len(metas) > MAX_LIST_LIMIT
+                thread_ids = [m.thread_id for m in metas[:MAX_LIST_LIMIT]]
+
             if isinstance(scope, CrossTenant):
-                items = await runs.list_all_tenants(status=status, limit=limit, offset=offset)
+                items = await runs.list_all_tenants(
+                    status=status, thread_ids=thread_ids, limit=limit, offset=offset
+                )
                 tenant_scope_label = "cross"
             else:
                 items = await runs.list_for_tenant(
                     tenant_id=scope.tenant_id,
                     status=status,
+                    thread_ids=thread_ids,
                     limit=limit,
                     offset=offset,
                 )
@@ -996,6 +1032,7 @@ def build_runs_list_router() -> APIRouter:
             trace_id=trace_id,
             details={
                 "status": status.value if status is not None else None,
+                "agent_name": agent_name,
                 "cross_tenant": isinstance(scope, CrossTenant),
                 "count": len(items_json),
                 "limit": limit,
@@ -1013,6 +1050,9 @@ def build_runs_list_router() -> APIRouter:
                     "items": items_json,
                     "total": len(items_json),
                     "cross_tenant": isinstance(scope, CrossTenant),
+                    # Stream H.6 — true when the agent filter's thread window
+                    # hit MAX_LIST_LIMIT (older threads' runs not included).
+                    "thread_window_capped": thread_window_capped,
                 },
                 "error": None,
             },

@@ -91,6 +91,8 @@ class SqlThreadMetaStore(ThreadMetaStore):
         *,
         status: ThreadStatus | None = None,
         user_id: UUID | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -99,6 +101,10 @@ class SqlThreadMetaStore(ThreadMetaStore):
             stmt = stmt.where(ThreadMetaRow.status == status.value)
         if user_id is not None:
             stmt = stmt.where(ThreadMetaRow.user_id == user_id)
+        if agent_name is not None:
+            stmt = stmt.where(ThreadMetaRow.agent_name == agent_name)
+        if agent_version is not None:
+            stmt = stmt.where(ThreadMetaRow.agent_version == agent_version)
         stmt = stmt.order_by(ThreadMetaRow.created_at.desc()).limit(limit).offset(offset)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
@@ -108,6 +114,8 @@ class SqlThreadMetaStore(ThreadMetaStore):
         self,
         *,
         status: ThreadStatus | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -115,6 +123,10 @@ class SqlThreadMetaStore(ThreadMetaStore):
         stmt = select(ThreadMetaRow)
         if status is not None:
             stmt = stmt.where(ThreadMetaRow.status == status.value)
+        if agent_name is not None:
+            stmt = stmt.where(ThreadMetaRow.agent_name == agent_name)
+        if agent_version is not None:
+            stmt = stmt.where(ThreadMetaRow.agent_version == agent_version)
         stmt = stmt.order_by(ThreadMetaRow.created_at.desc()).limit(limit).offset(offset)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()

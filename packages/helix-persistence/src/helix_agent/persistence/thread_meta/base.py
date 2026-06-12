@@ -70,13 +70,17 @@ class ThreadMetaStore(abc.ABC):
         *,
         status: ThreadStatus | None = None,
         user_id: UUID | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
         """Paginated list of threads for ``tenant_id``, newest first.
 
         When ``user_id`` is given, only that user's threads are returned
-        (Stream J.14 per-user scoping).
+        (Stream J.14 per-user scoping). ``agent_name`` / ``agent_version``
+        narrow to threads bound to that agent (Stream H.6 Mini-ADR H-10 —
+        feeds the per-agent Runs tab's thread-window resolve step).
         """
 
     @abc.abstractmethod
@@ -84,6 +88,8 @@ class ThreadMetaStore(abc.ABC):
         self,
         *,
         status: ThreadStatus | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -91,7 +97,8 @@ class ThreadMetaStore(abc.ABC):
 
         Caller MUST be inside ``bypass_rls_session()``. No ``user_id``
         filter — the platform admin view aggregates every user's
-        sessions across every tenant. Newest first.
+        sessions across every tenant. Newest first. ``agent_name`` /
+        ``agent_version`` as in :meth:`list_by_tenant` (Mini-ADR H-10).
         """
 
     @abc.abstractmethod

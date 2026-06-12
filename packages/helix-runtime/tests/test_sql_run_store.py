@@ -270,3 +270,22 @@ async def test_set_trace_id_unknown_run_returns_false_sql(
 ) -> None:
     ok = await run_store.set_trace_id(run_id=uuid4(), tenant_id=uuid4(), trace_id="abc")
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_list_for_tenant_thread_ids_filter_sql(run_store: SqlRunStore) -> None:
+    """Stream H.6 (Mini-ADR H-10) — ``WHERE thread_id IN (...)`` + empty fast-path."""
+    tenant_id = uuid4()
+    thread_a, thread_b = uuid4(), uuid4()
+    await run_store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_a))
+    await run_store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_a))
+    await run_store.create(_info(run_id=uuid4(), tenant_id=tenant_id, thread_id=thread_b))
+
+    subset = await run_store.list_for_tenant(tenant_id=tenant_id, thread_ids=[thread_a])
+    assert len(subset) == 2
+    assert {r.thread_id for r in subset} == {thread_a}
+
+    # Empty collection → no rows (the agent has no threads), not "no filter".
+    assert await run_store.list_for_tenant(tenant_id=tenant_id, thread_ids=[]) == []
+    # None regression — unfiltered list unchanged.
+    assert len(await run_store.list_for_tenant(tenant_id=tenant_id)) == 3

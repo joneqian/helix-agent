@@ -382,3 +382,38 @@ async def test_curator_distinct_tenant_ids_excludes_platform() -> None:
     ids = await store.curator_distinct_tenant_ids()
     assert ids == [tenant]
     assert None not in ids
+
+
+@pytest.mark.asyncio
+async def test_list_skills_filters_by_created_by_agent_name() -> None:
+    """Stream H.6 (Mini-ADR H-11) — agent-authored slice for the Skills tab."""
+    store = InMemorySkillStore()
+    tenant = _t()
+    await store.create_skill(
+        skill_id=uuid4(),
+        tenant_id=tenant,
+        name="authored-by-reporter",
+        created_by_agent_name="reporter",
+    )
+    await store.create_skill(
+        skill_id=uuid4(),
+        tenant_id=tenant,
+        name="authored-by-scribe",
+        created_by_agent_name="scribe",
+    )
+    # Human-authored skill has no agent provenance.
+    await store.create_skill(skill_id=uuid4(), tenant_id=tenant, name="human-made")
+
+    rows, _ = await store.list_skills(tenant_id=tenant, created_by_agent_name="reporter")
+    assert [s.name for s in rows] == ["authored-by-reporter"]
+
+    none_rows, _ = await store.list_skills(tenant_id=tenant, created_by_agent_name="ghost")
+    assert none_rows == []
+
+    # No filter → all three (regression).
+    all_rows, _ = await store.list_skills(tenant_id=tenant)
+    assert len(all_rows) == 3
+
+    # Cross-tenant variant honours the same filter.
+    cross, _ = await store.list_skills_all_tenants(created_by_agent_name="scribe")
+    assert [s.name for s in cross] == ["authored-by-scribe"]

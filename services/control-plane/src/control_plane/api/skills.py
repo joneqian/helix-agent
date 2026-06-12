@@ -845,6 +845,9 @@ def build_skills_router() -> APIRouter:
         # surface (e.g. "this user's agent_private skills"). Single-tenant only.
         visibility: Annotated[SkillVisibility | None, Query()] = None,
         created_by_user_id: Annotated[UUID | None, Query()] = None,
+        # Stream H.6 (Mini-ADR H-11) — skills authored by a given agent
+        # (feeds the per-agent Skills tab).
+        created_by_agent_name: Annotated[str | None, Query(min_length=1)] = None,
     ) -> JSONResponse:
         scope = await ensure_tenant_scope(
             request.state.principal,
@@ -861,7 +864,11 @@ def build_skills_router() -> APIRouter:
         async with applied_scope(scope):
             if isinstance(scope, CrossTenant):
                 rows, next_cursor = await store.list_skills_all_tenants(
-                    status=status, category=category, cursor=cursor, limit=limit
+                    status=status,
+                    category=category,
+                    created_by_agent_name=created_by_agent_name,
+                    cursor=cursor,
+                    limit=limit,
                 )
             else:
                 rows, next_cursor = await store.list_skills(
@@ -870,6 +877,7 @@ def build_skills_router() -> APIRouter:
                     category=category,
                     visibility=visibility,
                     created_by_user_id=created_by_user_id,
+                    created_by_agent_name=created_by_agent_name,
                     cursor=cursor,
                     limit=limit,
                 )

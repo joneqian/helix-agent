@@ -550,3 +550,50 @@ async def test_patch_status_and_pinned_in_one_call(setup: Setup) -> None:
     body = response.json()
     assert body["status"] == "active"
     assert body["pinned"] is True
+
+
+# ---------------------------------------------------------------------------
+# Stream H.6 (Mini-ADR H-11) — created_by_agent_name list filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_skills_filters_by_created_by_agent_name() -> None:
+    """Agent-authored slice for the per-agent Skills tab.
+
+    Builds its own app (not the shared ``setup`` fixture) because agent
+    provenance is set by the distiller via the store, not the POST API —
+    the seed goes through ``app.state.skill_store`` directly (same pattern
+    as ``test_skill_evolution_api``).
+    """
+    from uuid import uuid4
+
+    app = create_app(
+        settings=_settings(),
+        audit_logger=build_default_audit_logger(InMemoryAuditLogStore()),
+        jwt_verifier=build_test_jwt_verifier(),
+        enable_reaper=False,
+    )
+    store = app.state.skill_store
+    await store.create_skill(
+        skill_id=uuid4(),
+        tenant_id=_TENANT,
+        name="authored-by-reporter",
+        created_by_agent_name="reporter",
+    )
+    await store.create_skill(skill_id=uuid4(), tenant_id=_TENANT, name="human-made")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://cp.test", headers=_headers()
+    ) as client:
+        filtered = await client.get("/v1/skills", params={"created_by_agent_name": "reporter"})
+        assert filtered.status_code == 200
+        assert [s["name"] for s in filtered.json()["items"]] == ["authored-by-reporter"]
+
+        miss = await client.get("/v1/skills", params={"created_by_agent_name": "ghost"})
+        assert miss.json()["items"] == []
+
+        # No filter → both (regression).
+        all_resp = await client.get("/v1/skills")
+        assert len(all_resp.json()["items"]) == 2

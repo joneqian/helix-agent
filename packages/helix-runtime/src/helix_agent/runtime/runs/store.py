@@ -19,6 +19,7 @@ Implementations:
 from __future__ import annotations
 
 import abc
+from collections.abc import Collection
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -79,6 +80,7 @@ class RunStore(abc.ABC):
         *,
         tenant_id: UUID,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
@@ -86,6 +88,10 @@ class RunStore(abc.ABC):
 
         Stream H.3 PR 1 — feeds the cross-thread ``GET /v1/runs`` index.
         ``limit`` is clamped to ``MAX_LIST_LIMIT`` (Mini-ADR H-7 D).
+        ``thread_ids`` narrows to runs of those threads (Stream H.6
+        Mini-ADR H-10 — the API layer resolves an agent to its thread
+        window via ``ThreadMetaStore`` and passes the ids here; an empty
+        collection returns no rows).
         """
 
     @abc.abstractmethod
@@ -93,6 +99,7 @@ class RunStore(abc.ABC):
         self,
         *,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
@@ -100,7 +107,8 @@ class RunStore(abc.ABC):
 
         Stream N: callers MUST wrap this in ``bypass_rls_session()`` so
         the SQL backend bypasses tenant RLS. ``limit`` is clamped to
-        ``MAX_LIST_LIMIT`` (Mini-ADR H-7 D).
+        ``MAX_LIST_LIMIT`` (Mini-ADR H-7 D). ``thread_ids`` as in
+        :meth:`list_for_tenant` (Mini-ADR H-10).
         """
 
     @abc.abstractmethod
@@ -189,12 +197,16 @@ class InMemoryRunStore(RunStore):
         *,
         tenant_id: UUID,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
         rows = [r for r in self._rows.values() if r.tenant_id == tenant_id]
         if status is not None:
             rows = [r for r in rows if r.status is status]
+        if thread_ids is not None:
+            wanted = set(thread_ids)
+            rows = [r for r in rows if r.thread_id in wanted]
         rows.sort(key=lambda r: r.created_at, reverse=True)
         clamped = _clamp_limit(limit)
         return rows[offset : offset + clamped]
@@ -203,12 +215,16 @@ class InMemoryRunStore(RunStore):
         self,
         *,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
         rows = list(self._rows.values())
         if status is not None:
             rows = [r for r in rows if r.status is status]
+        if thread_ids is not None:
+            wanted = set(thread_ids)
+            rows = [r for r in rows if r.thread_id in wanted]
         rows.sort(key=lambda r: r.created_at, reverse=True)
         clamped = _clamp_limit(limit)
         return rows[offset : offset + clamped]
@@ -329,9 +345,12 @@ class SqlRunStore(RunStore):
         *,
         tenant_id: UUID,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
+        if thread_ids is not None and not thread_ids:
+            return []
         clamped = _clamp_limit(limit)
         stmt = (
             select(AgentRunRow)
@@ -342,6 +361,8 @@ class SqlRunStore(RunStore):
         )
         if status is not None:
             stmt = stmt.where(AgentRunRow.status == status.value)
+        if thread_ids is not None:
+            stmt = stmt.where(AgentRunRow.thread_id.in_(list(thread_ids)))
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_dto(r) for r in rows]
@@ -350,10 +371,13 @@ class SqlRunStore(RunStore):
         self,
         *,
         status: RunStatus | None = None,
+        thread_ids: Collection[UUID] | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[RunInfo]:
         # Stream N — no tenant filter; caller MUST wrap in bypass_rls_session().
+        if thread_ids is not None and not thread_ids:
+            return []
         clamped = _clamp_limit(limit)
         stmt = (
             select(AgentRunRow)
@@ -363,6 +387,8 @@ class SqlRunStore(RunStore):
         )
         if status is not None:
             stmt = stmt.where(AgentRunRow.status == status.value)
+        if thread_ids is not None:
+            stmt = stmt.where(AgentRunRow.thread_id.in_(list(thread_ids)))
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
         return [_row_to_dto(r) for r in rows]

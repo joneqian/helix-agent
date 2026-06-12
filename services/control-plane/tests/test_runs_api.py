@@ -790,3 +790,53 @@ async def test_events_endpoint_unknown_session_returns_404(
 
     resp = await runs_client.get(f"/v1/sessions/{uuid4()}/runs/{uuid4()}/events")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Stream H.6 (Mini-ADR H-10 / H-12) — GET /v1/runs agent filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_runs_agent_filter_happy(runs_client: AsyncClient) -> None:
+    """``?agent_name=`` narrows to that agent's threads; cap signal present."""
+    await _seed_completed_run(runs_client)
+    resp = await runs_client.get("/v1/runs", params={"agent_name": "code-reviewer"})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert len(data["items"]) >= 1
+    assert all(item["agent_name"] == "code-reviewer" for item in data["items"])
+    assert data["thread_window_capped"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_runs_agent_filter_name_and_version(runs_client: AsyncClient) -> None:
+    await _seed_completed_run(runs_client)
+    hit = await runs_client.get(
+        "/v1/runs", params={"agent_name": "code-reviewer", "agent_version": "1.0.0"}
+    )
+    assert hit.status_code == 200
+    assert len(hit.json()["data"]["items"]) >= 1
+
+    miss = await runs_client.get(
+        "/v1/runs", params={"agent_name": "code-reviewer", "agent_version": "9.9.9"}
+    )
+    assert miss.status_code == 200
+    assert miss.json()["data"]["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_runs_agent_filter_unknown_agent_returns_empty(
+    runs_client: AsyncClient,
+) -> None:
+    await _seed_completed_run(runs_client)
+    resp = await runs_client.get("/v1/runs", params={"agent_name": "ghost"})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_runs_bare_agent_version_is_422(runs_client: AsyncClient) -> None:
+    """Mini-ADR H-12 — ``agent_version`` without ``agent_name`` fails fast."""
+    resp = await runs_client.get("/v1/runs", params={"agent_version": "1.0.0"})
+    assert resp.status_code == 422

@@ -63,6 +63,8 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         *,
         status: ThreadStatus | None = None,
         user_id: UUID | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -71,6 +73,10 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
             rows = [r for r in rows if r.status == status]
         if user_id is not None:
             rows = [r for r in rows if r.user_id == user_id]
+        if agent_name is not None:
+            rows = [r for r in rows if r.agent_name == agent_name]
+        if agent_version is not None:
+            rows = [r for r in rows if r.agent_version == agent_version]
         rows.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return rows[offset : offset + limit]
 
@@ -78,12 +84,18 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         self,
         *,
         status: ThreadStatus | None = None,
+        agent_name: str | None = None,
+        agent_version: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
         rows = list(self._rows.values())
         if status is not None:
             rows = [r for r in rows if r.status == status]
+        if agent_name is not None:
+            rows = [r for r in rows if r.agent_name == agent_name]
+        if agent_version is not None:
+            rows = [r for r in rows if r.agent_version == agent_version]
         rows.sort(key=lambda r: r.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return rows[offset : offset + limit]
 

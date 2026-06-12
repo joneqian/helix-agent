@@ -46,6 +46,7 @@ def _paginate_skills(
     limit: int,
     visibility: SkillVisibility | None = None,
     created_by_user_id: UUID | None = None,
+    created_by_agent_name: str | None = None,
 ) -> tuple[list[Skill], UUID | None]:
     """Shared keyset-pagination helper for ``list_skills`` + ``list_skills_all_tenants``."""
     if status is not None:
@@ -56,6 +57,8 @@ def _paginate_skills(
         rows = [r for r in rows if r.visibility == visibility]
     if created_by_user_id is not None:
         rows = [r for r in rows if r.created_by_user_id == created_by_user_id]
+    if created_by_agent_name is not None:
+        rows = [r for r in rows if r.created_by_agent_name == created_by_agent_name]
     rows.sort(key=lambda r: (r.created_at, r.id), reverse=True)
     if cursor is not None:
         try:
@@ -202,6 +205,7 @@ class InMemorySkillStore(SkillStore):
         category: str | None = None,
         visibility: SkillVisibility | None = None,
         created_by_user_id: UUID | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:
@@ -212,6 +216,7 @@ class InMemorySkillStore(SkillStore):
             category=category,
             visibility=visibility,
             created_by_user_id=created_by_user_id,
+            created_by_agent_name=created_by_agent_name,
             cursor=cursor,
             limit=limit,
         )
@@ -221,12 +226,20 @@ class InMemorySkillStore(SkillStore):
         *,
         status: SkillStatus | None = None,
         category: str | None = None,
+        created_by_agent_name: str | None = None,
         cursor: UUID | None = None,
         limit: int = 50,
     ) -> tuple[list[Skill], UUID | None]:
         # Stream N — no tenant filter.
         rows = list(self._skills.values())
-        return _paginate_skills(rows, status=status, category=category, cursor=cursor, limit=limit)
+        return _paginate_skills(
+            rows,
+            status=status,
+            category=category,
+            created_by_agent_name=created_by_agent_name,
+            cursor=cursor,
+            limit=limit,
+        )
 
     async def set_status(self, *, skill_id: UUID, tenant_id: UUID, status: SkillStatus) -> Skill:
         row = await self.get_skill(skill_id=skill_id, tenant_id=tenant_id)

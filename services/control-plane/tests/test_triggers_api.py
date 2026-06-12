@@ -471,3 +471,40 @@ async def test_create_422_body_does_not_leak_pattern_id(triggers_client: AsyncCl
     assert "you are now" not in detail.lower()
     for forbidden in ("role_hijack", "prompt_injection", "pattern", "regex"):
         assert forbidden not in detail.lower(), f"detail leaked {forbidden!r}: {detail!r}"
+
+
+# ---------------------------------------------------------------------------
+# Stream H.6 (Mini-ADR H-12) — agent_version list filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_triggers_agent_version_filter(triggers_client: AsyncClient) -> None:
+    await _create_cron(triggers_client, name="v1-trigger")
+    resp = await triggers_client.post(
+        "/v1/triggers",
+        json={
+            "agent_name": "reporter",
+            "agent_version": "2.0.0",
+            "name": "v2-trigger",
+            "kind": "cron",
+            "config": {"expr": "0 9 * * *"},
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+    v2 = await triggers_client.get(
+        "/v1/triggers", params={"agent_name": "reporter", "agent_version": "2.0.0"}
+    )
+    assert v2.status_code == 200
+    assert [t["name"] for t in v2.json()["items"]] == ["v2-trigger"]
+
+    # No version → both (regression).
+    all_resp = await triggers_client.get("/v1/triggers", params={"agent_name": "reporter"})
+    assert len(all_resp.json()["items"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_triggers_bare_agent_version_is_422(triggers_client: AsyncClient) -> None:
+    resp = await triggers_client.get("/v1/triggers", params={"agent_version": "1.0.0"})
+    assert resp.status_code == 422
