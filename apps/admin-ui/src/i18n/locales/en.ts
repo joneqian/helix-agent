@@ -51,6 +51,7 @@ export interface TranslationKeys {
     platform_skills: string;
     usage: string;
     chargeback: string;
+    rate_card: string;
   };
   login: {
     title: string;
@@ -172,6 +173,43 @@ export interface TranslationKeys {
     col_chunks: string;
     col_updated: string;
     delete_doc_confirm_title: string;
+  };
+  rate_card_page: {
+    page_title: string;
+    subtitle: string;
+    system_admin_only: string;
+    failed_to_load: string;
+    empty: string;
+    filter_provider: string;
+    filter_model: string;
+    include_expired: string;
+    create: string;
+    edit: string;
+    edit_title: string;
+    delete: string;
+    delete_confirm_title: string;
+    delete_confirm_body: string;
+    col_provider: string;
+    col_model: string;
+    col_plan: string;
+    col_input: string;
+    col_output: string;
+    col_markup: string;
+    col_effective: string;
+    all_plans: string;
+    open_ended: string;
+    field_provider: string;
+    field_model: string;
+    field_input: string;
+    field_output: string;
+    field_cache_creation: string;
+    field_cache_read: string;
+    field_markup: string;
+    field_plan: string;
+    field_effective_from: string;
+    field_effective_until: string;
+    until_after_from: string;
+    identity_immutable: string;
   };
   artifacts_page: {
     page_title: string;
@@ -1332,6 +1370,7 @@ const en: TranslationKeys = {
     platform_skills: "Platform Skills",
     usage: "Usage",
     chargeback: "Chargeback",
+    rate_card: "Rate Card",
   },
   login: {
     title: "helix Admin",
@@ -1462,6 +1501,45 @@ const en: TranslationKeys = {
     col_chunks: "Chunks",
     col_updated: "Updated",
     delete_doc_confirm_title: "Delete document {{name}}?",
+  },
+  rate_card_page: {
+    page_title: "Rate Card",
+    subtitle: "Platform model pricing — micro-USD per token, plus a basis-point markup.",
+    system_admin_only: "Rate-card management is platform-admin (system_admin) only.",
+    failed_to_load: "Failed to load rate cards",
+    empty: "No rate-card rows yet.",
+    filter_provider: "Provider",
+    filter_model: "Model",
+    include_expired: "Include expired",
+    create: "New rate",
+    edit: "Edit",
+    edit_title: "Edit {{provider}} / {{model}}",
+    delete: "Delete",
+    delete_confirm_title: "Delete this rate-card row?",
+    delete_confirm_body:
+      "Usage already priced by this row keeps its historical cost; future usage falls back to the next matching row.",
+    col_provider: "Provider",
+    col_model: "Model",
+    col_plan: "Plan",
+    col_input: "Input (µ$)",
+    col_output: "Output (µ$)",
+    col_markup: "Markup",
+    col_effective: "Effective",
+    all_plans: "all plans",
+    open_ended: "open-ended",
+    field_provider: "Provider",
+    field_model: "Model",
+    field_input: "Input price (micro-USD / token)",
+    field_output: "Output price (micro-USD / token)",
+    field_cache_creation: "Cache-creation price (micro-USD / token)",
+    field_cache_read: "Cache-read price (micro-USD / token)",
+    field_markup: "Markup (basis points)",
+    field_plan: "Plan tier (empty = all plans)",
+    field_effective_from: "Effective from",
+    field_effective_until: "Effective until (empty = open-ended)",
+    until_after_from: "effective_until must be after effective_from",
+    identity_immutable:
+      "Provider / model / plan / effective-from are this row's identity and cannot change — reprice by creating a new row.",
   },
   artifacts_page: {
     page_title: "Artifacts",
