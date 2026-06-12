@@ -25,7 +25,7 @@
 | HX-7 | ⑨ 可观测 / 治理 | Langfuse 停在 Recording stub（OTel 链已通，见 §8.1）；approval 无队列视图/批量 | LangfuseSdkClient + settings/factory 接线 + approval list API + 批量 decide + /approvals 队列页 | §8（本文） |
 | HX-8 | ⑩ 多租户 | 平台 provider/tool 凭证全租户共享一把上游 key（爆炸半径/成本归因/限流隔离全缺）；跨租户查询零开关（仅 audit） | per-tenant 凭证 override（平台管理，非 BYOK）+ 部署级跨租户 block 开关 | §9（本文） |
 | HX-12 | ② 工具面 | find_tools 检索无 ranked/中文分词；MCP always-defer 无逃生门；deferred 直调裸报错；promotion 永不退场 | BM25+jieba ranked 检索 + 防呆包 + 阈值逃生门 + call-through + 退场 | §10（本文） |
-| HX-13 | ② 工具面 | 厂商原生档（anthropic defer_loading / openai allowed_tools）未接 | ModelEntry.tool_disclosure 能力位 + 两家接线（前置 HX-12） | 开工时追加 |
+| HX-13 | ② 工具面 | 厂商原生档（anthropic defer_loading / openai allowed_tools）未接；caller 链路无 deferred 可见性 | `tool_disclosure` 能力位 + `ToolSpec.defer_loading` 单标记 + 两家接线（前置 HX-12） | §11（本文） |
 
 Wave 1 顺序：HX-1 → HX-2 → HX-3 → HX-4（HX-1 的 estimator 是 HX-12 阈值逃生门的前置件；HX-4 的指标骨架吃 HX-1 的 drift 数据）。
 
@@ -809,3 +809,80 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 | PR2 | 阈值逃生门（assembly + estimator + context_window 传入） | §10.5-PR2 |
 | PR3 | call-through + ranked 错误建议 | §10.5-PR3 |
 | PR4（收尾） | promotion 退场（last_used + reducer 删除语义 + demote）+ 指标收口 | §10.5-PR4；零债 6 条 |
+
+---
+
+## 11. HX-13 — 工具披露 2.0·厂商原生档
+
+> 前置 HX-12（§10，已收尾）。拍板（2026-06-11）：能力位翻译层（CM-10 同款模式）；三档行为分裂已接受（None 兜底档 = HX-12 全套保语义底线）；beta 拒绝 fail-open 降 None 档。
+
+### 11.1 现状取证（2026-06-12，main@HX-12 #570 收尾后）
+
+1. **ModelEntry**（`protocol/model_catalog.py:25`）：frozen Pydantic + `extra="forbid"`，现 8 字段；**CM-10 先例**：`thinking: Literal["effort","budget","toggle"] | None = None` 能力位 + `agent_factory._thinking_payload` 翻译层 + per-provider 分支——HX-13 完全同模式。新字段必须带默认值（50+ catalog 条目 + 测试 doubles 才零破坏）。
+2. **Provider 值域 9 家**（`provider_catalog.py:29`）：anthropic / openai / azure / self-hosted / kimi / glm / deepseek / qwen / doubao。**无 openrouter**（立项文案里的 openrouter 不在本仓值域，剔除）；compat 家族（kimi/glm/deepseek/qwen/doubao/self-hosted）`tool_choice.allowed_tools` 支持情况按 CM-L5 纪律逐家核实，核实不过 → None 档。
+3. **anthropic adapter**（`llm/providers/anthropic.py`）：自写 httpx 客户端（非 SDK）——beta header 是 `HTTPAnthropicClient.messages` headers 字典加一行的事；`_to_anthropic_tool` 输出 name/description/input_schema 三字段。现无任何 beta header 机制（CM-9 字段全 GA）。
+4. **openai adapter**（`llm/providers/openai.py`）：7 家共用 `OpenAIProvider`；`_to_openai_tool` 输出 function 三件套；**现无 `tool_choice` 处理**。
+5. **关键架构事实**：`LLMCaller` Protocol = `(messages, tools)`——caller **无 registry / deferred 全集可见性**；但 `agent_node` 的 bind 组装点（builder.py）持有 registry 闭包 + promoted state——disclosure 分支天然落位在 agent_node 层，caller 接口不必扩展。
+6. **HX-12 资产咬合**：anthropic native search 由服务端检索并直接发起 deferred 工具的 tool_call——dispatch 侧 **call-through（HX-12 PR3）已兜住**（直调 deferred 名 → promote + 执行），原生档检索结果回流 promote 零额外代码。
+
+### 11.2 设计
+
+#### 11.2.1 ① 能力位 + 单一传载标记
+
+- `ModelEntry.tool_disclosure: Literal["native_search", "allowed_tools"] | None = None`。标注：anthropic 支持 tool-search beta 的条目 → `native_search`；openai / azure → `allowed_tools`；其余默认 None（compat 家族核实结论以注释入 catalog）。
+- `ToolSpec.defer_loading: bool = False`（dataclass 默认值，全部构造点零破坏）：**一个标记服务两档**——
+  - anthropic 档：标记者以 `defer_loading: true` 进 API（服务端检索池）；
+  - openai 档：标记者**排除**出 `tool_choice.allowed_tools` 子集（全量 schema 冻结，允许集 = 未标记者）。
+- agent_node 按档构造 bind：
+  - **None 档**：现状（active + promoted），字节不变。
+  - **native_search 档**：active（**排除 find_tools**——服务端检索取代）+ promoted + deferred 全集的 `dataclasses.replace(spec, defer_loading=True)` 副本。
+  - **allowed_tools 档**：active（**保留 find_tools**——它是 promote 的唯一入口，allowed_tools 强约束下模型无法直调名单外工具）+ promoted + deferred 全集（未 promote 者标 defer_loading）。schema 全量冻结利好 provider prompt cache；promotion 驱动**子集**而非 bind。
+- 档位解析：agent_factory `catalog_entry(provider, name).tool_disclosure` → `build_react_graph(tool_disclosure=...)` 新可选参数（None 默认零破坏）。
+
+#### 11.2.2 ② anthropic 接线
+
+- `_to_anthropic_tool`：spec.defer_loading 为真时输出 `"defer_loading": true`。
+- `HTTPAnthropicClient.messages`：请求含 defer_loading 工具时加 header `anthropic-beta: tool-search-tool-2025-10-19`（provider 检测 `any(defer_loading)` 决定，header 不常驻）。
+- **fail-open 降级**：beta 被拒（4xx 含 beta/unsupported 信号）→ 重发一次"去 defer 标记 + 去 header + 全量工具"的请求，并进程内记忆降级（该 provider 实例此后直接走 None 档形态，避免每请求双发）；任何判定不确定 → 降级侧。模型方挂掉 ≠ 能力丢失（公理）。
+
+#### 11.2.3 ③ openai / azure 接线
+
+- `OpenAIProvider.complete`：存在 defer_loading 标记时构造 `tool_choice` 形态 `{"type": "allowed_tools", "mode": "auto", "tools": [未标记者]}`（OpenAI 2025 allowed_tools 语法；azure 同 wire 格式）。
+- 不支持 `allowed_tools` 的 compat 家族（核实结论）维持 None 档：catalog 不标注即天然走兜底，**无运行时探测**（CM-L5：能力位是声明式的，错了改 catalog 一行）。
+- fail-open：tool_choice 被拒 → 同 anthropic 模式降级重发 + 记忆。
+
+### 11.3 边界（不做）
+
+- **openrouter**：不在 Provider 值域，不虚构。
+- **compat 家族的 allowed_tools 探测**：声明式 catalog（CM-L5），不做运行时 capability probe。
+- **anthropic SDK 迁移**：自写 httpx 客户端加 header 足够，不为 beta 换 SDK。
+- **native 档的 find_tools 混合模式**：服务端检索与自家 find_tools 二选一，不并存（双检索通道徒增模型困惑）。
+- **per-tenant 档位 override**：能力位是模型属性不是租户策略。
+
+### 11.4 可观测
+
+- `helix_tool_promotion_total` 四事件继续工作（native 档 call-through 即服务端检索回流的 promote 信号）。
+- 降级事件：`helix_llm_tool_disclosure_fallback_total{provider}` counter + WARNING 日志（一次性）。
+
+### 11.5 测试
+
+- **PR1**：ModelEntry 新字段默认值（catalog 全量构造回归）+ ToolSpec.defer_loading 默认 False + doubles sweep（grep ModelEntry( 构造点全量）。
+- **PR2**：anthropic——defer_loading 进 wire / beta header 条件出现 / 无标记时 header 不出现 / beta 拒绝降级重发 + 记忆 + counter / native 档 bind 排除 find_tools 含 deferred 副本（agent_node 分支测试）。
+- **PR3**：openai——tool_choice 子集构造 / 全量 schema 冻结断言 / promoted 进 allowed / find_tools 在 allowed / None 档零 tool_choice 回归 / 降级路径。
+
+### 11.6 Mini-ADR
+
+- **HX-J1 disclosure 分支落位 agent_node，caller 接口不动**：bind 组装点本就持有 registry + promoted；`LLMCaller` Protocol 扩展会迫使全部实现者 sweep——用 ToolSpec.defer_loading 单标记把档位语义随 specs 自然下传。
+- **HX-J2 一个 defer_loading 标记服务两档**：anthropic 读它进服务端检索池，openai 读它反推 allowed 子集——两档语义同源（"这工具暂不进活跃面"），无需两套标记。
+- **HX-J3 find_tools 档位差异**：native 档排除（服务端检索取代，双通道徒增困惑）；allowed_tools 档保留（强约束下它是唯一 promote 入口）。
+- **HX-J4 fail-open = 降级重发 + 进程内记忆**：beta/tool_choice 拒绝 → 一次性回 None 档形态，此后该 provider 实例直走兜底——每请求双发不可接受，重启即重试新档。
+- **HX-J5 能力位声明式（CM-L5 延续）**：catalog 标注即真相，不做运行时探测；compat 家族核实结论写注释，错了改一行。
+
+### 11.7 PR 切分
+
+| PR | 内容 | 验证 |
+|----|------|------|
+| PR0（本设计） | §11 + ITERATION-PLAN 细化 | 纯 docs，CI |
+| PR1 | ModelEntry.tool_disclosure + catalog 标注 + ToolSpec.defer_loading + 档位解析至 build_react_graph | §11.5-PR1 |
+| PR2 | anthropic：agent_node native 档分支 + adapter defer_loading/beta header + fail-open 降级 | §11.5-PR2 |
+| PR3（收尾） | openai/azure：allowed_tools 子集 + compat 核实结论入册 + 降级 + 文档 | §11.5-PR3；零债 6 条 |
