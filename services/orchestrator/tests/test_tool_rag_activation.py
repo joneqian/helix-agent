@@ -106,9 +106,7 @@ async def _registry_with_mcp_and_window(context_window: int | None) -> ToolRegis
     pool = MCPServerPool()
     await pool.add("fs", RecordingMCPClient(tools=(_tool_def("read_file"), _tool_def("list_dir"))))
     env = ToolEnv(mcp_pool=pool)
-    return await build_tool_registry(
-        [MCPToolSpec()], tool_env=env, context_window=context_window
-    )
+    return await build_tool_registry([MCPToolSpec()], tool_env=env, context_window=context_window)
 
 
 @pytest.mark.asyncio
