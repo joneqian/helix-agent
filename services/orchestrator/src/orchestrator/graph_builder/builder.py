@@ -56,6 +56,7 @@ import itertools
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -275,6 +276,13 @@ def build_react_graph(
     workspace_writer_factory: Callable[[ToolContext], WorkspaceFileWriter] | None = None,
     approval_required_tools: frozenset[str] = frozenset(),
     approval_timeout_s: int = 86400,
+    # Stream HX-13 — vendor-native tool-disclosure tier from the model
+    # catalog (``ModelEntry.tool_disclosure``). ``None`` (default) keeps the
+    # HX-12 application tier byte-identical; "native_search" hands the
+    # deferred pool to Anthropic's server-side tool search (find_tools
+    # excluded); "allowed_tools" freezes the full schema set on the wire
+    # and drives the OpenAI allowed subset via promotion.
+    tool_disclosure: Literal["native_search", "allowed_tools"] | None = None,
     # Capability Uplift Sprint #8 — Mini-ADR U-8.
     memory_recall_mode: Literal["per_session", "per_turn"] = "per_session",
 ) -> StateGraph[AgentState, None, AgentState, AgentState]:
@@ -344,8 +352,42 @@ def build_react_graph(
         # promoted via ``find_tools`` (carried per-thread on AgentState, so the
         # cached registry stays untouched). ``deferred_specs([])`` is empty when
         # nothing was promoted → identical to the pre-TE-6 ``specs()`` bind.
+        # Stream HX-13 — the vendor-native tiers reshape this bind; the
+        # ``None`` tier is the HX-12 application tier, byte-identical.
         promoted = state.get("promoted_tools") or []
-        tools = [*tool_registry.specs(), *tool_registry.deferred_specs(promoted)]
+        if tool_disclosure == "native_search":
+            # Anthropic server-side tool search: every still-deferred tool
+            # rides along marked ``defer_loading`` (the API retrieves and
+            # invokes it; HX-12 call-through promotes on dispatch), and our
+            # own ``find_tools`` leaves the bind — one retrieval channel
+            # only (Mini-ADR HX-J3).
+            promoted_set = set(promoted)
+            active = [s for s in tool_registry.specs() if s.name != "find_tools"]
+            still_deferred = [
+                replace(s, defer_loading=True)
+                for s in tool_registry.deferred_specs(tool_registry.deferred_names())
+                if s.name not in promoted_set
+            ]
+            tools = [*active, *tool_registry.deferred_specs(promoted), *still_deferred]
+        elif tool_disclosure == "allowed_tools":
+            # OpenAI/Azure: the FULL schema set goes on the wire every turn
+            # (prompt-cache friendly); still-deferred tools carry the marker
+            # so the adapter excludes them from ``tool_choice.allowed_tools``.
+            # ``find_tools`` stays — under the allowed constraint it is the
+            # only promotion entry point (Mini-ADR HX-J3).
+            promoted_set = set(promoted)
+            still_deferred = [
+                replace(s, defer_loading=True)
+                for s in tool_registry.deferred_specs(tool_registry.deferred_names())
+                if s.name not in promoted_set
+            ]
+            tools = [
+                *tool_registry.specs(),
+                *tool_registry.deferred_specs(promoted),
+                *still_deferred,
+            ]
+        else:
+            tools = [*tool_registry.specs(), *tool_registry.deferred_specs(promoted)]
         messages = list(state["messages"])
         # Stream CM-2 — working-memory sliding window: cheap LLM-free first
         # gate. Trims the raw history to first turn + most-recent N turns

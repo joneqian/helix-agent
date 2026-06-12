@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -670,6 +670,9 @@ async def build_agent(
         approval_required_tools=frozenset(spec.spec.policies.approval_required_tools),
         approval_timeout_s=spec.spec.policies.approval_timeout_s,
         memory_recall_mode=memory_recall_mode,
+        # Stream HX-13 — vendor-native tool-disclosure tier (catalog bit;
+        # off-catalog / unannotated models stay on the HX-12 tier).
+        tool_disclosure=_resolved_tool_disclosure(spec.spec.model),
     )
     compiled = GraphRunner(checkpointer=checkpointer).compile(graph)
     return BuiltAgent(
@@ -1103,6 +1106,17 @@ def _thinking_budget(effort: str, max_tokens: int) -> int:
 #: without a published window). Matches the long-standing ModelSpec
 #: default so off-catalog behaviour is unchanged.
 _FALLBACK_CONTEXT_WINDOW = 200_000
+
+
+def _resolved_tool_disclosure(model: ModelSpec) -> Literal["native_search", "allowed_tools"] | None:
+    """Stream HX-13 — the model's vendor-native tool-disclosure tier.
+
+    Pure catalog lookup (Mini-ADR HX-J5, declarative): an off-catalog model
+    (e.g. an Azure deployment name) resolves ``None`` — the HX-12
+    application tier, the semantic floor every provider gets.
+    """
+    entry = catalog_entry(model.provider, model.name)
+    return entry.tool_disclosure if entry is not None else None
 
 
 def _resolved_context_window(model: ModelSpec) -> int:
