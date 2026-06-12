@@ -63,7 +63,7 @@ pytestmark = pytest.mark.integration
 #: ``HELIX_TEST_SANDBOX_RUNTIME=runsc`` so this same acceptance suite runs
 #: under gVisor (test matrix #43 extended to the prod runtime).
 _OCI_RUNTIME = cast(
-    "Literal['runc', 'runsc']",
+    Literal["runc", "runsc"],
     os.environ.get("HELIX_TEST_SANDBOX_RUNTIME", "runc"),
 )
 #: Skip gVisor-specific invariants when the suite runs under runc.
