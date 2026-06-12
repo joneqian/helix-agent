@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Menu } from "antd";
 import {
+  Banknote,
   Bot,
   Activity,
   ListChecks,
@@ -61,6 +62,7 @@ const SETTINGS_ITEMS: NavItem[] = [
   { key: "settings-mcp-servers", labelKey: "nav.mcp_servers", icon: <Plug size={16} strokeWidth={1.5} />, path: "/settings/mcp-servers" },
   { key: "settings-usage", labelKey: "nav.usage", icon: <Gauge size={16} strokeWidth={1.5} />, path: "/settings/usage" },
   { key: "settings-chargeback", labelKey: "nav.chargeback", icon: <Receipt size={16} strokeWidth={1.5} />, path: "/settings/billing-chargeback" },
+  { key: "settings-rate-card", labelKey: "nav.rate_card", icon: <Banknote size={16} strokeWidth={1.5} />, path: "/settings/rate-card" },
 ];
 
 export function Sidebar() {
