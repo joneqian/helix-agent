@@ -18,16 +18,14 @@ fit to HX-H3's "resolver stays a pure resolver").
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from helix_agent.common.credentials import CredentialsResolver, CredentialsResolverError
+from helix_agent.protocol import Provider, Tool
 
-if TYPE_CHECKING:
-    from helix_agent.protocol import Provider, Tool
-
-TenantProviderViewGetter = Callable[[UUID], "Awaitable[dict[Provider, str]]"]
-TenantToolViewGetter = Callable[[UUID], "Awaitable[dict[Tool, str]]"]
+TenantProviderViewGetter = Callable[[UUID], Awaitable[dict[Provider, str]]]
+TenantToolViewGetter = Callable[[UUID], Awaitable[dict[Tool, str]]]
 
 
 class TenantOverlayCredentialsResolver(CredentialsResolver):
