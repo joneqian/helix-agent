@@ -98,6 +98,7 @@ from orchestrator.tools.error_classifier import (
     classify_tool_error,
     render_recovery_advisory,
 )
+from orchestrator.tools.find_tools import promotion_events
 from orchestrator.tools.mutation_classifier import classify as classify_mutation
 from orchestrator.tools.overflow import clamp_overflow, overflow_rel_path, render_overflow_footer
 from orchestrator.tools.registry import (
@@ -986,6 +987,23 @@ async def _dispatch_tool(
         tool = registry.get_required(name)
         outcome = await _invoke_tool(tool, args, call_id, ctx, overflow_writer=overflow_writer)
         ok = outcome[0].status != "error"
+        # Stream HX-12 (Mini-ADR HX-I4) — call-through: the model called a
+        # deferred name directly (it remembered the tool without a
+        # find_tools round-trip). Dispatch already routes (TE-6 keeps
+        # deferred tools in the lookup table); what was missing is the
+        # promotion — without it the schema never enters the next turn's
+        # bind and the model keeps calling blind. Piggyback the promote
+        # on the tool's own state updates.
+        if name in registry.deferred_names():
+            message, state_updates, refund, classified = outcome
+            merged_updates = dict(state_updates)
+            promoted = merged_updates.get("promoted_tools")
+            merged_updates["promoted_tools"] = [
+                *(promoted if isinstance(promoted, list) else []),
+                name,
+            ]
+            outcome = (message, merged_updates, refund, classified)
+            promotion_events.labels(event="call_through").inc()
         _record_tool_metrics(name, started, "ok" if ok else "error")
         await _emit_tool_audit(
             audit_logger,
@@ -1017,9 +1035,22 @@ async def _dispatch_tool(
             reason="unknown_tool",
             duration_ms=_elapsed_ms(started),
         )
+        # Stream HX-12 — a truly unknown name gets ranked suggestions from
+        # the deferred pool instead of a dead-end error (fail-open: worst
+        # case is the unchanged bare error).
+        content = _format_error(exc)
+        try:
+            suggestions = [spec.name for spec in registry.search(name)[:3]]
+        except Exception:
+            suggestions = []
+        if suggestions:
+            content += (
+                f" Did you mean: {', '.join(suggestions)}? "
+                "Use find_tools to search for and load tools."
+            )
         return (
             ToolMessage(
-                content=_format_error(exc),
+                content=content,
                 tool_call_id=call_id,
                 status="error",
             ),

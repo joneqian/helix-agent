@@ -725,7 +725,7 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 1. **检索**：`registry.search`（`orchestrator/tools/registry.py:369`）三语法（`select:a,b` 精确 / `+kw rest` AND 过滤 / 其余 regex→substring 降级），**只搜 deferred 池**，无 ranked、无中文分词、无相关性排序——多工具命中时顺序无意义。
 2. **MCP always-defer 硬编码**（TE-6b）：三个 MCP 池（平台/租户/用户 OAuth）在 `tools/assembly.py:489/517/539` 全部 `deferred=True`，**无"总量小就直接 active"逃生门**——一个只挂 3 个 MCP 工具的 agent 也要付 find_tools 间接层成本。
 3. **find_tools**（`tools/find_tools.py:28`）：描述未截断（超长 MCP description 全文进上下文）；零命中返回 `"(no matching tools found)"` 无任何引导；promote 经 `state_updates={"promoted_tools": names}`。
-4. **dispatch**（`graph_builder/builder.py:661`）：LLM 直调未 promote 的 deferred 名 → `ToolNotFoundError` → `"[tool error] unknown tool: ..."`——**工具明明在 registry 里却报 unknown**，无建议、无自动 promote，模型只能盲试 find_tools。
+4. **dispatch**（`graph_builder/builder.py`）：~~LLM 直调未 promote 的 deferred 名 → 裸报 unknown~~ **取证修正（PR3，2026-06-12）**：`get_required` 查 `_tools`（含 deferred）——deferred 名直调**本就能执行**（TE-6 "stays dispatchable" 设计如此）。真实缺口：①执行成功但**不 promote**（schema 不进后续 bind，模型每次都得盲调）；②真未知名（拼错/幻觉）报错无建议。
 5. **promoted_tools reducer append-only**（`state.py:46` `_merge_promoted`）：union-dedupe，**永不删除**——长会话里 promote 过的工具 schema 永久占上下文，无退场。
 6. **HX-1 资产可用**：`TokenEstimator` 协议 + `TiktokenEstimator`（`helix-runtime/tokens.py`，`default_estimator()` 单例）已落地；`context_window` 解析（manifest override → MODEL_CATALOG）在 agent_factory。阈值逃生门可直接用真 tokenizer（ITERATION-PLAN 原文"chars/4，HX-1 落地后换"已过期——直接上真分词）。
 7. **jieba 已是仓内依赖**（helix-persistence，J.5 `knowledge/text_search.py` app-side CJK 分词先例）；无 BM25 实现/依赖。
@@ -760,7 +760,7 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 
 #### 10.2.4 ③ call-through（dispatch 拦截）
 
-- `tools_node` 捕 `ToolNotFoundError` 前先查：名字**在 deferred 池** → 自动 promote（state_updates 合并 `promoted_tools`）+ **本 turn 直接执行**（registry.get 本就能拿到 deferred 工具，dispatch 零额外成本）+ `helix_tool_promotion_total{event="call_through"}`——模型记得工具名就不必付 find_tools 往返。
+- dispatch 成功路径检测：名字**在 deferred 池** → 执行照常（本就 dispatchable）+ **补写 promote**（outcome 的 state_updates 合并 `promoted_tools`，重复 promote 由 reducer dedupe 幂等）+ `helix_tool_promotion_total{event="call_through"}`——模型记得工具名就不必付 find_tools 往返，且 schema 进入后续 bind 不再盲调。
 - 名字**不在任何池** → 错误信息附 **ranked top-3 建议**（复用 10.2.1 内核检索错误名）：`"unknown tool: 'x'. Did you mean: a, b, c? Use find_tools to search."`。
 - 公理兑现：两分支都只多花 token，不可能比现状（裸报错）差。
 
