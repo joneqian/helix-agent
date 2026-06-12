@@ -36,6 +36,7 @@ from helix_agent.persistence import InMemoryUserWorkspaceStore
 from helix_agent.runtime.sandbox import SandboxRuntimeProvider
 from sandbox_supervisor.docker_client import CliDockerClient
 from sandbox_supervisor.domain import SandboxRecord, SandboxState
+from sandbox_supervisor.pool import PoolReplenisher, SandboxPool
 from sandbox_supervisor.schemas import AcquireRequest
 from sandbox_supervisor.settings import SandboxSupervisorSettings
 from sandbox_supervisor.supervisor import SandboxSupervisor
@@ -171,6 +172,14 @@ class _InMemoryStore:
 
     async def sandbox_limit_for_tenant(self, tenant_id: UUID) -> int | None:
         return None
+
+    async def claim_ready(self, record: SandboxRecord) -> bool:
+        # HX-6 CAS mirror: rebind only while the row is still READY.
+        current = self.rows.get(record.id)
+        if current is None or current.state is not SandboxState.READY:
+            return False
+        self.rows[record.id] = record
+        return True
 
 
 class _NullAudit:
@@ -499,3 +508,56 @@ async def test_gate_59_stdlib_c_extensions_importable(helix: _Harness) -> None:
 
     assert result.exit_code == 0, result.stderr
     assert "stdlib-ok" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-6 — warm pool: replenish → claim → exec → release
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_warm_pool_claim_exec_release() -> None:
+    # End-to-end over real Docker: the replenisher pre-launches one READY
+    # container; an ephemeral acquire claims it (no docker run on the
+    # acquire path), ``docker update`` pairs the request's limits, exec
+    # runs over the held link, and release destroys it like any
+    # ephemeral sandbox.
+    store = _InMemoryStore()
+    docker = CliDockerClient()
+    settings = SandboxSupervisorSettings(
+        sandbox_image=_IMAGE, oci_runtime="runc", pool_size_minimal=1
+    )
+    runtime = SandboxRuntimeProvider(oci_runtime="runc", egress_network=_NETWORK)
+    pool = SandboxPool()
+    supervisor = SandboxSupervisor(
+        store=store,  # type: ignore[arg-type]  # structural SandboxStore
+        docker=docker,
+        audit=_NullAudit(),  # type: ignore[arg-type]  # structural AuditSink
+        runtime_provider=runtime,
+        workspace_store=InMemoryUserWorkspaceStore(),
+        settings=settings,
+        pool=pool,
+    )
+    replenisher = PoolReplenisher(
+        pool=pool,
+        store=store,  # type: ignore[arg-type]  # structural SandboxStore
+        docker=docker,
+        runtime_provider=runtime,
+        settings=settings,
+    )
+
+    await replenisher.run_once()
+    assert pool.size(_IMAGE) == 1
+
+    acquired = await supervisor.acquire(
+        AcquireRequest(tenant_id=uuid4(), thread_id="t-pool", cpu=0.5, memory_mb=256, pids_limit=64)
+    )
+    assert acquired.cold_start is False
+    assert pool.size(_IMAGE) == 0
+
+    result = await supervisor.exec(acquired.sandbox_id, code="print(6 * 7)")
+    assert result.exit_code == 0, result.stderr
+    assert "42" in result.stdout
+
+    await supervisor.release(acquired.sandbox_id)
+    assert store.rows[acquired.sandbox_id].state is SandboxState.DESTROYED

@@ -35,6 +35,14 @@ from sandbox_supervisor.domain import (
     SupervisorError,
     WorkspaceFileNotFoundError,
     WorkspaceFileTooLargeError,
+    container_name,
+)
+from sandbox_supervisor.pool import (
+    DESTROY_REASON_POOL_CLAIM_FAILED,
+    PooledSandbox,
+    SandboxPool,
+    discard_pooled,
+    observe_pool_event,
 )
 from sandbox_supervisor.quota_enforcer import QuotaEnforcer
 from sandbox_supervisor.runner_link import ExecResult, RunnerLink, RunnerLinkError
@@ -69,9 +77,9 @@ class AuditSink(Protocol):
         """Persist one audit entry."""
 
 
-def _container_name(sandbox_id: UUID) -> str:
-    """The deterministic ``--name`` for a sandbox's container."""
-    return f"helix-sb-{sandbox_id}"
+#: The deterministic ``--name`` for a sandbox's container — the helper
+#: moved to ``domain.py`` (HX-6) so the pool replenisher can share it.
+_container_name = container_name
 
 
 #: Per-file download cap for the J.9 workspace-file read. Artifacts are
@@ -106,6 +114,7 @@ class SandboxSupervisor:
         workspace_store: UserWorkspaceStore,
         settings: SandboxSupervisorSettings,
         quota_enforcer: QuotaEnforcer | None = None,
+        pool: SandboxPool | None = None,
     ) -> None:
         self._store = store
         self._docker = docker
@@ -113,6 +122,9 @@ class SandboxSupervisor:
         self._runtime = runtime_provider
         self._workspaces = workspace_store
         self._settings = settings
+        # Stream HX-6 — the warm READY pool. ``None`` (legacy callers /
+        # pool disabled) keeps the cold-start path byte-identical.
+        self._pool = pool
         # Stream J.15-补强-1 — per-workspace volume quota gate. ``None``
         # means quota enforcement is disabled (legacy callers + the
         # ephemeral-tmpfs path; the J.15 warm-session path always
@@ -154,6 +166,17 @@ class SandboxSupervisor:
                 return reused
 
         await self._enforce_quota(request.tenant_id)
+
+        # Stream HX-6 — an ephemeral acquire (no user_id → tmpfs
+        # workspace) claims a pre-launched READY container when the pool
+        # holds one. A persistent-workspace acquire can never be pooled:
+        # the user's named volume mounts at ``docker run`` time
+        # (Mini-ADR HX-F2). Claim failure of any kind falls through to
+        # the unchanged cold-start path below.
+        if request.user_id is None and self._pool is not None:
+            claimed = await self._claim_pooled(request)
+            if claimed is not None:
+                return claimed
 
         # A user-scoped acquire mounts that user's persistent workspace
         # volume at /workspace; resolve (creating on first use) the
@@ -447,6 +470,80 @@ class SandboxSupervisor:
             container_id=_container_name(sandbox_id),
             cold_start=False,
             acquired_at=record.acquired_at or record.created_at,
+        )
+
+    async def _claim_pooled(self, request: AcquireRequest) -> AcquireResponse | None:
+        """Claim a READY pool container for an ephemeral acquire (HX-6).
+
+        Returns ``None`` on any non-hit (pool empty for the variant, CAS
+        lost, limit pairing failed) — the caller cold-starts. The claim
+        order is CAS first (own the row), then ``docker update`` to pair
+        the request's limits; an update failure destroys the container
+        (Mini-ADR HX-F3 fail-closed: limits are a security surface).
+        """
+        if self._pool is None:
+            return None
+        image_ref = self._select_image(request.image_variant)
+        pooled = self._pool.take(image_ref)
+        if pooled is None:
+            observe_pool_event("miss")
+            return None
+        s = self._settings
+        acquired_at = datetime.now(UTC)
+        record = pooled.record.with_state(
+            SandboxState.IN_USE,
+            tenant_id=request.tenant_id,
+            thread_id=request.thread_id,
+            cpu_quota=request.cpu if request.cpu is not None else s.default_cpu,
+            memory_mb=request.memory_mb if request.memory_mb is not None else s.default_memory_mb,
+            pids_limit=(
+                request.pids_limit if request.pids_limit is not None else s.default_pids_limit
+            ),
+            timeout_s=request.timeout_s if request.timeout_s is not None else s.default_timeout_s,
+            acquired_at=acquired_at,
+        )
+        if not await self._store.claim_ready(record):
+            # CAS lost — the row is no longer READY. The in-memory take
+            # is exclusive so this branch is defensive only; whoever
+            # re-homed the row owns the container — don't touch it.
+            observe_pool_event("claim_raced")
+            return None
+        try:
+            await self._docker.update_limits(
+                container_name(record.id),
+                cpus=record.cpu_quota,
+                memory_mb=record.memory_mb,
+                pids_limit=record.pids_limit,
+            )
+        except DockerError as exc:
+            observe_pool_event("update_failed")
+            logger.warning("pool.claim_update_failed sandbox=%s reason=%s", record.id, exc)
+            await discard_pooled(
+                PooledSandbox(record=record, link=pooled.link),
+                docker=self._docker,
+                store=self._store,
+                reason=DESTROY_REASON_POOL_CLAIM_FAILED,
+            )
+            return None
+        self._links[record.id] = pooled.link
+        observe_pool_event("hit")
+        await self._emit_audit(
+            tenant_id=record.tenant_id,
+            action=AuditAction.SANDBOX_ACQUIRED,
+            result=AuditResult.SUCCESS,
+            sandbox_id=record.id,
+            details={
+                "image_ref": record.image_ref,
+                "thread_id": record.thread_id,
+                "persistent_workspace": False,
+                "pooled": True,
+            },
+        )
+        return AcquireResponse(
+            sandbox_id=record.id,
+            container_id=container_name(record.id),
+            cold_start=False,
+            acquired_at=acquired_at,
         )
 
     async def _touch(self, sandbox_id: UUID) -> None:

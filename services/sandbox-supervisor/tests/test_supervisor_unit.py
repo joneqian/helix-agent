@@ -37,6 +37,13 @@ from sandbox_supervisor.domain import (
     WorkspaceFileTooLargeError,
     WorkspaceQuotaExceededError,
 )
+from sandbox_supervisor.pool import (
+    DESTROY_REASON_POOL_CLAIM_FAILED,
+    DESTROY_REASON_POOL_SHRUNK,
+    POOL_TENANT_ID,
+    PoolReplenisher,
+    SandboxPool,
+)
 from sandbox_supervisor.quota_enforcer import QuotaEnforcer
 from sandbox_supervisor.reaper import SandboxReaper
 from sandbox_supervisor.runner_link import ExecResult, RunnerLinkError
@@ -94,6 +101,7 @@ class RecordingDockerClient:
         volume_file_error: DockerError | None = None,
         measured_size: int = 0,
         measure_error: DockerError | None = None,
+        update_error: DockerError | None = None,
     ) -> None:
         self.launches: list[list[str]] = []
         self.removed: list[str] = []
@@ -107,6 +115,8 @@ class RecordingDockerClient:
         self._measured_size = measured_size
         self._measure_error = measure_error
         self.measure_calls: list[tuple[str, str]] = []
+        self._update_error = update_error
+        self.limit_updates: list[tuple[str, float, int, int]] = []
 
     async def launch(self, argv: list[str]) -> FakeRunnerLink:
         self.launches.append(argv)
@@ -140,6 +150,13 @@ class RecordingDockerClient:
         if self._measure_error is not None:
             raise self._measure_error
         return self._measured_size
+
+    async def update_limits(
+        self, container_name: str, *, cpus: float, memory_mb: int, pids_limit: int
+    ) -> None:
+        self.limit_updates.append((container_name, cpus, memory_mb, pids_limit))
+        if self._update_error is not None:
+            raise self._update_error
 
 
 class InMemorySandboxStore:
@@ -176,6 +193,14 @@ class InMemorySandboxStore:
 
     async def sandbox_limit_for_tenant(self, tenant_id: UUID) -> int | None:
         return self._limit
+
+    async def claim_ready(self, record: SandboxRecord) -> bool:
+        # HX-6 CAS mirror: rebind only while the row is still READY.
+        current = self.rows.get(record.id)
+        if current is None or current.state is not SandboxState.READY:
+            return False
+        self.rows[record.id] = record
+        return True
 
     def seed_active(self, tenant_id: UUID) -> SandboxRecord:
         """Insert an IN_USE row directly — for quota / reaper setup."""
@@ -214,6 +239,7 @@ def _harness(
     docker: RecordingDockerClient | None = None,
     settings: SandboxSupervisorSettings | None = None,
     quota_enabled: bool = False,
+    pool: SandboxPool | None = None,
 ) -> _Harness:
     """Build a fake-backed supervisor harness.
 
@@ -247,6 +273,7 @@ def _harness(
         workspace_store=workspaces,
         settings=resolved_settings,
         quota_enforcer=quota_enforcer,
+        pool=pool,
     )
     return _Harness(supervisor, resolved_store, resolved_docker, audit, workspaces)
 
@@ -1075,3 +1102,258 @@ async def test_warm_session_not_reused_across_image_variants() -> None:
     # The stale-variant session is torn down now (not left for the reaper),
     # so it stops counting toward the tenant sandbox quota (review MEDIUM).
     assert h.store.rows[r1.sandbox_id].state is SandboxState.DESTROYED
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-6 — warm READY pool + claim-time limit pairing
+# ---------------------------------------------------------------------------
+
+
+def _replenisher(
+    h: _Harness,
+    pool: SandboxPool,
+    *,
+    pool_size_minimal: int = 1,
+    pool_size_office: int = 0,
+) -> PoolReplenisher:
+    settings = SandboxSupervisorSettings(
+        pool_size_minimal=pool_size_minimal, pool_size_office=pool_size_office
+    )
+    return PoolReplenisher(
+        pool=pool,
+        store=h.store,
+        docker=h.docker,
+        runtime_provider=SandboxRuntimeProvider(oci_runtime="runc"),
+        settings=settings,
+    )
+
+
+@pytest.mark.asyncio
+async def test_replenisher_tops_up_to_target() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 2
+    assert len(h.docker.launches) == 2
+    ready = [r for r in h.store.rows.values() if r.state is SandboxState.READY]
+    assert len(ready) == 2
+    # Pool rows are platform-neutral until claim binds a real tenant.
+    assert all(r.tenant_id == POOL_TENANT_ID for r in ready)
+    assert all(r.user_id is None for r in ready)
+
+
+@pytest.mark.asyncio
+async def test_replenisher_zero_target_launches_nothing() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=0, pool_size_office=0).run_once()
+
+    assert h.docker.launches == []
+    assert h.store.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_replenisher_shrinks_past_target() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+
+    # The operator lowered the target — the next sweep destroys extras.
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 1
+    assert len(h.docker.removed) == 1
+    destroyed = [r for r in h.store.rows.values() if r.state is SandboxState.DESTROYED]
+    assert len(destroyed) == 1
+    assert destroyed[0].destroy_reason == DESTROY_REASON_POOL_SHRUNK
+
+
+@pytest.mark.asyncio
+async def test_replenisher_launch_failure_is_fail_open() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool, docker=RecordingDockerClient(launch_error=DockerError("daemon down")))
+
+    # No raise: the pool just stays short; the next tick retries.
+    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 0
+    states = [r.state for r in h.store.rows.values()]
+    assert states == [SandboxState.FAILED]
+
+
+@pytest.mark.asyncio
+async def test_acquire_claims_pooled_container() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    tenant = uuid4()
+
+    request = AcquireRequest(
+        tenant_id=tenant, thread_id="t-1", cpu=2.0, memory_mb=1024, pids_limit=256
+    )
+    response = await h.supervisor.acquire(request)
+
+    # Claimed, not cold-started — the pool launch is the only docker run.
+    assert response.cold_start is False
+    assert len(h.docker.launches) == 1
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 0
+    # The request's limits were paired onto the claimed container.
+    assert h.docker.limit_updates == [(f"helix-sb-{response.sandbox_id}", 2.0, 1024, 256)]
+    # The row was rebound: tenant + IN_USE + per-acquire limits.
+    row = h.store.rows[response.sandbox_id]
+    assert row.state is SandboxState.IN_USE
+    assert row.tenant_id == tenant
+    assert row.cpu_quota == 2.0
+    assert row.memory_mb == 1024
+    # Audit marks the claim as pooled.
+    entry = h.audit.entries[-1]
+    assert entry.action is AuditAction.SANDBOX_ACQUIRED
+    assert entry.details["pooled"] is True
+    # exec works over the pool container's held link.
+    result = await h.supervisor.exec(response.sandbox_id, code="print(1)")
+    assert result.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_acquire_pool_empty_falls_back_to_cold_start() -> None:
+    pool = SandboxPool()  # built but never replenished
+    h = _harness(pool=pool)
+
+    response = await h.supervisor.acquire(_acquire_request())
+
+    assert response.cold_start is True
+    assert len(h.docker.launches) == 1
+    assert h.docker.limit_updates == []
+
+
+@pytest.mark.asyncio
+async def test_claim_update_failure_destroys_and_cold_starts() -> None:
+    pool = SandboxPool()
+    docker = RecordingDockerClient(update_error=DockerError("update refused"))
+    h = _harness(pool=pool, docker=docker)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+
+    response = await h.supervisor.acquire(_acquire_request())
+
+    # Fail-closed: the mispaired container is destroyed; the acquire
+    # still succeeds via a fresh cold start (1 pool + 1 cold launch).
+    assert response.cold_start is True
+    assert len(h.docker.launches) == 2
+    assert len(h.docker.removed) == 1
+    discarded = [r for r in h.store.rows.values() if r.state is SandboxState.DESTROYED]
+    assert len(discarded) == 1
+    assert discarded[0].destroy_reason == DESTROY_REASON_POOL_CLAIM_FAILED
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claims_one_hit_one_cold() -> None:
+    import asyncio as _asyncio
+
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+
+    first, second = await _asyncio.gather(
+        h.supervisor.acquire(_acquire_request()),
+        h.supervisor.acquire(_acquire_request()),
+    )
+
+    assert sorted([first.cold_start, second.cold_start]) == [False, True]
+    assert first.sandbox_id != second.sandbox_id
+    # 1 pool launch + exactly 1 cold launch — never a double claim.
+    assert len(h.docker.launches) == 2
+
+
+@pytest.mark.asyncio
+async def test_claim_cas_lost_falls_back_without_touching_container() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    # Simulate the defensive CAS-lost branch: the row is no longer READY.
+    (ready_id,) = [r.id for r in h.store.rows.values() if r.state is SandboxState.READY]
+    h.store.rows[ready_id] = h.store.rows[ready_id].with_state(SandboxState.IN_USE)
+
+    response = await h.supervisor.acquire(_acquire_request())
+
+    assert response.cold_start is True
+    # The lost container was not destroyed and its limits were not touched.
+    assert h.docker.removed == []
+    assert h.docker.limit_updates == []
+
+
+@pytest.mark.asyncio
+async def test_user_scoped_acquire_bypasses_pool() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+
+    response = await h.supervisor.acquire(_acquire_request(user_id=uuid4()))
+
+    # A persistent-workspace acquire can never claim from the pool —
+    # the named volume must mount at docker run time (Mini-ADR HX-F2).
+    assert response.cold_start is True
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 1
+    assert h.docker.limit_updates == []
+
+
+@pytest.mark.asyncio
+async def test_warm_session_takes_priority_over_pool() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    tenant, user = uuid4(), uuid4()
+
+    first = await h.supervisor.acquire(_acquire_request(tenant, user_id=user))
+    second = await h.supervisor.acquire(_acquire_request(tenant, user_id=user))
+
+    # J.15 session reuse wins; the pool inventory is untouched.
+    assert second.sandbox_id == first.sandbox_id
+    assert second.cold_start is False
+    settings = SandboxSupervisorSettings()
+    assert pool.size(settings.sandbox_image) == 1
+
+
+@pytest.mark.asyncio
+async def test_ready_pool_rows_do_not_count_toward_tenant_quota() -> None:
+    pool = SandboxPool()
+    store = InMemorySandboxStore(limit=1)
+    h = _harness(pool=pool, store=store)
+    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+
+    # READY rows count against nobody — the sentinel has no active rows...
+    assert await store.count_active_for_tenant(POOL_TENANT_ID) == 0
+    # ...and a tenant at limit=1 can still claim one (quota holds after).
+    tenant = uuid4()
+    first = await h.supervisor.acquire(_acquire_request(tenant))
+    assert first.cold_start is False
+    with pytest.raises(QuotaExceededError):
+        await h.supervisor.acquire(_acquire_request(tenant))
+
+
+def test_pool_size_settings_clamped_to_bounds() -> None:
+    # Defensive parse (fail-open): out-of-range targets clamp, not crash.
+    assert SandboxSupervisorSettings(pool_size_minimal=99).pool_size_minimal == 16
+    assert SandboxSupervisorSettings(pool_size_minimal=-3).pool_size_minimal == 0
+    assert SandboxSupervisorSettings(pool_size_office=99).pool_size_office == 16
+
+
+@pytest.mark.asyncio
+async def test_released_pooled_claim_is_destroyed_like_any_ephemeral() -> None:
+    pool = SandboxPool()
+    h = _harness(pool=pool)
+    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+
+    response = await h.supervisor.acquire(_acquire_request())
+    assert response.cold_start is False
+    await h.supervisor.release(response.sandbox_id)
+
+    # No user_id → release destroys (the claim does not return to the pool).
+    row = h.store.rows[response.sandbox_id]
+    assert row.state is SandboxState.DESTROYED
+    assert row.destroy_reason == "release"

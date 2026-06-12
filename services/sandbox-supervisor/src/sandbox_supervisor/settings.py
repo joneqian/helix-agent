@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,20 @@ class SandboxSupervisorSettings(BaseSettings):
     #: active window, so this cap is effectively the number of
     #: concurrently-active users a tenant supports (STREAM-J-DESIGN § 9).
     default_max_sandboxes: int = Field(default=50, gt=0, le=1000)
+
+    # ------------------------------------------------------- pool (HX-6)
+    #: Warm-pool target per image variant (STREAM-HX-DESIGN § 7.2-①):
+    #: how many READY containers the replenisher keeps pre-launched.
+    #: ``0`` disables the pool for that variant (dev / CI default for
+    #: office). Defensively clamped to [0, 16] rather than rejected —
+    #: a bad value must not take the supervisor down (fail-open).
+    pool_size_minimal: int = 2
+    pool_size_office: int = 0
+
+    @field_validator("pool_size_minimal", "pool_size_office")
+    @classmethod
+    def _clamp_pool_size(cls, value: int) -> int:
+        return max(0, min(16, value))
 
     # -------------------------------------------------------------- reaper
     reaper_interval_s: float = Field(default=10.0, gt=0, le=300)
