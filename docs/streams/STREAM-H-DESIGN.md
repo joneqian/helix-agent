@@ -1376,6 +1376,58 @@ SDK 增参:`ListRunsParams + agentName/agentVersion`、`ListSkillsParams + creat
 
 ---
 
+## 6.8 H.8 详细设计 — Artifacts 运行产物治理面
+
+> 2026-06-12 设计先行。H.8 是 J.15 收尾时挂账的债("前端 inline preview → H.4 admin UI"至今未落)。
+> 后端 `/v1/artifacts`(`artifacts.py`,Mini-ADR J-25)已全发;H.8 = 纯前端消费,后端零改。
+
+### 6.8.1 现状取证(2026-06-12,file:line)
+
+| 事实 | 位置 | 影响 |
+|---|---|---|
+| 5 端点全 **raw**(非 envelope) | `artifacts.py:107-364` | SDK 走 `apiClient.get/...`,不走 `getJson` |
+| **全部端点 caller-user-scoped**:download/delete/patch/versions 按 `resolve_caller_user_id` 解析,跨用户/不存在统一 404 隐藏 | `:171-180/:256-265/:301-309/:346-352` | 租户 admin 只能操作**自己的**产物 |
+| list 双态:home scope = caller 自己的(machine principal 返空);cross-tenant `*` = 全租户全用户聚合,行带 `tenant_id`/`user_id` | `:124-151` | 页面两态渲染;cross-tenant 行**无行级动作**(无 per-user 上下文) |
+| list 响应 `{artifacts, items, cross_tenant}`(双 key 同值) | `:152-158` | SDK 读 `items` |
+| download:quota admission(`artifact_download` 计数)→ supervisor 读 workspace 文件 → MIME 安全推断 + `Content-Disposition` + `nosniff`;懒回填 size/sha256;无 supervisor 503 | `:188-239` | 前端 axios blob + objectURL 下载(Bearer header 必须,裸 `window.open` 无 header 必 401);503/429 错误文案 |
+| delete = soft-delete(metadata 隐藏,字节留 retention sweep;重存同名 un-delete) | `:241-278` | UI 文案讲清"软删" |
+| patch 仅 `kind`(document/code/data/other);unchanged 409 | `:280-329` | 内联 Select,选同值不发请求 |
+| versions newest-first;`size_bytes`/`sha256` 未下载前 NULL(懒回填);**无 per-version download 端点**(download 只取 latest) | `:331-364` | 版本历史只读展示,NULL 显 "—" |
+| audit 已发:ARTIFACT_DELETE / ARTIFACT_UPDATE | `:271/:315` | 前端无需补 |
+
+### 6.8.2 设计
+
+**SDK `src/api/artifacts.ts`(新)**:`ArtifactKind` / `ArtifactListItem`(name/kind/latest_version + 可选 tenant_id/user_id)/ `ArtifactVersion` / `listArtifacts({tenantScope})` / `downloadArtifact(name)`(axios `responseType:"blob"` + objectURL + a.click,文件名取 `Content-Disposition`)/ `deleteArtifact(name)` / `patchArtifactKind(name, kind)` / `listArtifactVersions(name)`。全 raw 形态。
+
+**页面 `/artifacts`(`ArtifactsList.tsx`)**:
+- 列:name(strong)/ kind(内联 Select 即 patch 入口;cross-tenant 态退化为 Tag)/ latest_version / 行动作(download / versions 抽屉 / delete Popconfirm 带软删说明)。
+- **双态**(Mini-ADR H-14):home = "我的产物"全功能;cross-tenant `*` = 只读聚合(多 tenant_id/user_id 两列,无行动作)。页头副标题随态切换,讲清归属语义。
+- versions 抽屉:Table(version / path_in_workspace / size_bytes / sha256 截断 / created_in_thread / created_at),NULL 显 "—" + tooltip "首次下载后回填"。
+- 错误映射:404(已删/不存在)/ 409(前端拦截不触发)/ 429(配额)/ 503(supervisor 未配置)各有文案。
+- 空态:home "该账号还没有运行产物";cross-tenant "全平台暂无产物"。
+
+**接线(SE-8 清单)**:router `/artifacts`;Sidebar 主区 memory 之后(`Package` icon);CommandPalette(`g f`);i18n zh/en `artifacts_page.*` + `nav.artifacts` + `cmdk.label_artifacts`;TenantScope 复用 `useTenantScope`;Storybook 3 stories;vitest;Playwright 冒烟。
+
+### 6.8.3 Mini-ADR
+
+- **H-14 治理面如实双态,不假装租户 admin 能管他人产物**:后端契约是 per-user 资产 + 404 隐藏(J-25 隐私语义),cross-tenant 仅聚合 list。前端债范围 = 消费已发能力;"租户 admin 代管他人产物"是后端能力变更(新端点 + 权限模型),记 **H.8-F1 follow-up** 不混入本期([memory:no-design-choice-disguise]:契约事实,非能力缩水)。
+- **H-15 download = axios blob + objectURL**:auth 走 Bearer header;blob 路径同时拿到 `Content-Disposition` 文件名。大文件风险接受(产物有 quota cap)。
+- **H-16 kind 内联 Select,前端拦截 no-op**:后端 409 语义是"别重试",前端选同值直接不发请求,409 留防御文案。
+
+### 6.8.4 测试
+
+- vitest:home 列表渲染 + 行动作(download 调 SDK / delete Popconfirm / kind Select 变更发 patch、同值不发)/ cross-tenant 态(tenant/user 列现身 + 动作列消失)/ versions 抽屉(NULL 显 "—")/ 空态。
+- Storybook 3;Playwright:登录 → /artifacts 渲染 + Sidebar 入口冒烟。
+
+### 6.8.5 PR 切分
+
+| PR | 内容 | 验证 |
+|----|------|------|
+| PR0(本设计) | § 6.8 + ITERATION-PLAN H.8 细化 | 纯 docs,CI |
+| PR1(实现,收尾) | SDK + ArtifactsList 双态 + versions 抽屉 + download/delete/patch + 全接线 + i18n + Storybook + vitest + Playwright | § 6.8.4;零债 6 条 |
+
+---
+
 ## 6. PR 链(预估)
 
 | PR | 内容 | 估时 |
@@ -1442,5 +1494,6 @@ SDK 增参:`ListRunsParams + agentName/agentVersion`、`ListSkillsParams + creat
 | 2026-05-26 | v1.7 | **H.3 收尾**:6 个 PR 全部合入 main(#289–#294);新增 § 6.5.18 H.3 收尾摘要 — 决议 A–F 全部兑现、设计文档 § 6.5.13 漏交的 2 个 story(EventStreamPanel + ApprovalCard)在收尾 PR 补齐;遗留待办全部归类到 M0 dogfood / H.4 收尾(approval 完整 E2E、RunsList mockup、ApprovalCard 编辑态 mockup) |
 | 2026-05-26 | v1.8 | **H.4 设计基线**:加 § 6.6 H.4 详细设计(18 子章节,复刻 § 6.5 范式)— 范围 7 子面(Curation+Eval / Memory / Skills / Triggers / Audit / Settings IAM / Settings Ops)+ Audit backend endpoint 新建 + 跨租户 RBAC matrix + 错误边界矩阵(12 条)+ i18n 8 namespace ~130 keys + 测试计划(backend 10 测 + frontend 45 单测 + 33 stories + E2E 7 happy-path)。锁定 4 个 spike 结果:(1) Trigger webhook secret 回包 schema 已有 — PR6 backend 不需改;(2) ResourceType Literal 双份漂移 — PR3 必须改 `protocol/audit.py:146` + `control-plane/audit.py:111` 两处;(3) audit_logger fixture pattern = 每测试自建,不走 conftest — PR3 遵循同型;(4) RoleBinding self-elevation 已被 DTO + caller 双重保护 — PR7 backend 不需改。PR 链拆 PR8-12(原 5 个 H.4 PR)为 PR8-17(10 个 PR:1 设计 + 8 实施 + 1 收尾),总估时 14-18 天。|
 | 2026-06-12 | v2.0 | **H.6 详细设计**(前端债回填,用户拍板 H.6 起手,H.7–H.9 顺序后定):加 § 6.7 — AgentDetail 4 tab 真实现;现状取证 12 条 file:line(含 envelope-vs-raw 逐端点核实:runs/memory=envelope、skills/triggers=raw);后端过滤前置 = thread_ids 两段式(H-10,不做 SQL JOIN——InMemoryRunStore 无 thread_meta 视野,protocol 两 impl 同义优先)+ skills agent-authored 语义(H-11,created_by_agent_name 列已在)+ triggers 补 version + Memory 不造 agent 维度(H-13,per-user 资产语义事实);2-PR 切分(backend 过滤 / frontend 4 tab 收尾) |
+| 2026-06-12 | v2.2 | **H.8 详细设计**(前端债第 2 项,顺序 H.8→H.7→H.9):加 § 6.8 — Artifacts 治理面;现状取证 9 条(5 端点全 raw / **全端点 caller-user-scoped + 404 隐藏**是 J-25 契约事实);Mini-ADR H-14 如实双态(home=我的产物全功能 / cross-tenant=只读聚合无行动作),"租户 admin 代管他人产物"记 H.8-F1 follow-up 不混入;H-15 download=axios blob(Bearer header 约束);H-16 kind 内联 Select 前端拦 no-op;纯前端 2-PR(设计 + 实现收尾) |
 | 2026-06-12 | v2.1 | **H.6 收尾**:PR1(#582)backend 过滤全交付(三 store 过滤 + thread_ids 空集≠None 语义 + 3 端点 + `thread_window_capped` + 422 防呆 + 测试 +15);PR2 frontend 全交付(SDK 增参 + RunsTab/SkillsTab/TriggersTab/MemoryTab + AgentDetail 去占位接线 + i18n zh/en 4 namespace + Storybook 5 stories + vitest 7 测 + Playwright `agent-detail-tabs.spec.ts`)。占位 Empty 仅余 unknown-tab fallback。设计 § 6.7 全兑现无偏差;遗留:H-10 SQL JOIN 仍是 M2 优化接缝(cap 500 生效中) |
 | 2026-05-26 | v1.9 | **H.4 收尾 + Stream H 整体收官**:9 个 H.4 PR 全部合入 main(#296–#304),共 ~+9,500 行;§ 6.6.18 H.4 收尾摘要落地(决议核验 / 零债 6 条 / 留给后续 stream 的债务清单 / capability gap 声明);PR0 spike 简化兑现:(spike 2) `AUDIT_READ` enum + `"audit"` ResourceType 已存在 — 取消"新增 AUDIT_QUERY enum / 双份 Literal drift 修复"两条原计划改动;(spike 1/3/4) backend 不需改;实施期发现 3 个 latent SDK envelope-vs-raw bug 全部修复(`listCandidates` PR1 + `listSkills` PR5 + `listTriggers` PR6),根因写入新 memory `feedback_envelope_vs_raw_contract_check`;Stream H 整体验收(§ 7)全部 ✅(7 条全勾);ITERATION-PLAN Stream H 收官归档;Playwright `e2e/governance.spec.ts` 7 happy-path 冒烟;补 mockup `04-run-trace.html` ApprovalCard 编辑态截图(H.3 留账兑现)|
