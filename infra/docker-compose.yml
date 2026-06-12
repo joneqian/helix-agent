@@ -384,6 +384,11 @@ services:
       # docker daemon (sandboxes launch via the mounted socket) must be able
       # to pull it — `docker login` to the registry or pre-pull the image.
       HELIX_SANDBOX_SANDBOX_IMAGE_OFFICE: ${HELIX_SANDBOX_IMAGE_OFFICE:-helix-sandbox-office:dev}
+      # Stream HX-10 — OCI runtime. Unset = runc (settings default; required
+      # on macOS dev — gVisor is Linux-only). A multi-tenant production host
+      # sets HELIX_SANDBOX_OCI_RUNTIME=runsc (gVisor) to close the shared-kernel
+      # cross-tenant escape residual; the sandbox-gvisor CI workflow runs the
+      # acceptance suite under runsc so that switch stays verified.
       # Stream HX-10 — pinned seccomp profile. Unset here: dev rides the host
       # Docker default profile. To enable (prod / staging): pre-place
       # infra/sandbox-image/seccomp-profile.json at a host path, bind-mount it
