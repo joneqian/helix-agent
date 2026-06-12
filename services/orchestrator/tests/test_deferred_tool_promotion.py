@@ -189,3 +189,91 @@ async def test_no_deferral_keeps_bind_identical() -> None:
         )
 
     assert sorted(llm.bound_tool_names[0]) == ["find_tools", "search"]
+
+
+# --- Stream HX-12 — call-through + ranked unknown-name suggestions ----------
+
+
+@pytest.mark.asyncio
+async def test_direct_call_to_deferred_name_executes_and_promotes() -> None:
+    """HX-12 call-through: the model calls a deferred name WITHOUT a
+    find_tools round-trip. Dispatch routes (TE-6 keeps deferred tools in
+    the lookup table) and the name is promoted so the schema enters the
+    next turn's bind."""
+    registry = ToolRegistry()
+    registry.register(FindToolsTool(registry=registry))
+    registry.register(_ScriptedTool(name="github_issue", result="issue#7"), deferred=True)
+
+    llm = _ScriptedLLM(
+        responses=[
+            # Turn 1 — call the deferred tool DIRECTLY (no find_tools).
+            AIMessage(
+                content="",
+                tool_calls=[_tool_call("github_issue", {"title": "bug"}, "tc-direct")],
+            ),
+            # Turn 2 — finalise.
+            AIMessage(content="done"),
+        ]
+    )
+
+    async with make_checkpointer("memory") as cp:
+        runner = GraphRunner(checkpointer=cp)
+        compiled = runner.compile(build_react_graph(llm_caller=llm, tool_registry=registry))
+        cfg: RunnableConfig = {"configurable": {"thread_id": "hx12-callthrough"}}
+        state: AgentState = await compiled.ainvoke(
+            {
+                "messages": [HumanMessage(content="open a github issue")],
+                "step_count": 0,
+                "max_steps": 10,
+            },
+            config=cfg,
+        )
+
+    # The direct call executed (no unknown-tool error)...
+    tool_msgs = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+    assert any(m.content == "issue#7" for m in tool_msgs)
+    # ...and the name was promoted into AgentState + the next bind.
+    assert state["promoted_tools"] == ["github_issue"]
+    assert "github_issue" in llm.bound_tool_names[1]
+
+
+@pytest.mark.asyncio
+async def test_unknown_name_error_carries_ranked_suggestions() -> None:
+    """HX-12 — a truly unknown name (typo/hallucination) errors with
+    ranked suggestions from the deferred pool instead of a dead end."""
+    registry = ToolRegistry()
+    registry.register(FindToolsTool(registry=registry))
+    registry.register(
+        _ScriptedTool(name="github_create_issue", result="x"),
+        deferred=True,
+    )
+
+    llm = _ScriptedLLM(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[_tool_call("github_issue_create", {}, "tc-typo")],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+
+    async with make_checkpointer("memory") as cp:
+        runner = GraphRunner(checkpointer=cp)
+        compiled = runner.compile(build_react_graph(llm_caller=llm, tool_registry=registry))
+        cfg: RunnableConfig = {"configurable": {"thread_id": "hx12-typo"}}
+        state: AgentState = await compiled.ainvoke(
+            {
+                "messages": [HumanMessage(content="open an issue")],
+                "step_count": 0,
+                "max_steps": 10,
+            },
+            config=cfg,
+        )
+
+    tool_msgs = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+    error_msg = next(m for m in tool_msgs if m.status == "error")
+    assert "Did you mean" in str(error_msg.content)
+    assert "github_create_issue" in str(error_msg.content)
+    # Nothing was promoted — the call never routed.
+    assert not state.get("promoted_tools")
