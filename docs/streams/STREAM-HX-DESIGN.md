@@ -943,7 +943,11 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 - **runtime 真起断言**（防静默回落）：容器起后 `docker inspect --format '{{.HostConfig.Runtime}}'` 断言 = 期望值；runsc 期望下实际是 runc 则 fail（daemon 注册失败会静默回落，否则「验证」名存实亡）。
 - **兼容坑断言（按 Tencent/调研踩坑清单）**：runsc job 内补——io_uring 在沙箱内返 ENOSYS（确认 seccomp/gVisor 双重不可用且优雅）、`/proc/sys/net` 访问不崩、典型 Python import + numpy 计算跑通。
 - **逃逸 PoC 用例（Gate #7 自动化起点）**：CVE-2019-5736 类逃逸「应失败」（runc skip——本就可能受影响；runsc 断言被挡）。timing side-channel（#6）环境敏感留 staging。
+  - **实施注记（PR2 #578）**：CVE-2019-5736 真 PoC（覆写宿主 runc 二进制）**降级 staging 渗透**——在共享 CI runner 上跑真容器逃逸利用既不安全（真去破坏宿主）又脆弱（依赖具体 runc 版本/时序）。CI 改以**良性 gVisor 不变量**覆盖：io_uring 在 runsc 下返 -1/ENOSYS（gVisor 不实现，正是 #27230 兼容坑 + 逃逸面收窄证据）+ 其余 gate 验收测试在 runsc 通过（exec/文件/进程/取消隔离），gate_49 网络 + gate_56 fork-bomb 因 gVisor 架构差异 runsc 下 xfail（见下「首跑注记」）。`/proc/sys/net` 与 numpy 项不单测（minimal 镜像 pure-stdlib 无 numpy；gate 测试已覆盖 import/exec 路径），保留 io_uring 这条最高信号不变量。Gate #6/#7 真 PoC 与 timing 同档留 staging（[memory:no-design-choice-disguise] 正面用法——CI 不可安全跑真逃逸是真约束，非弱能力包装）。
 - **Gate 收益**：M0→M1 Gate 的 gVisor 验证从一次性人工活动变持续自动验证。
+- **首跑注记（PR2 #578，实证驱动）**：gVisor workflow 首跑即暴露 2 个 gVisor 多年 open issue 的架构行为（非测试 bug，调研落 [research](../research/2026-06-12-sandbox-isolation-defense-in-depth.md) + google/gvisor#7469 / #2490）——这正是 gVisor CI 的价值（上线前暴露而非上线后炸）。两者 runsc 下 `xfail(strict=False)` 记录，其余 gate 保留回归保护（不卡 PR、可见、记账，方案 Y）：
+  - **gate_49 网络隔离**：gVisor netstack 不支持 docker embedded DNS（127.0.0.11 是 sentry 自身 loopback，dockerd 不在那监听）；容器名解析在 runsc 必失败。隔离本身更强（公网/metadata 全不可达），但**生产沙箱亦靠主机名 `credential-proxy.internal` 找 proxy** → **gVisor 生产上线前置：沙箱→proxy 寻址改 /etc/hosts + 固定 IP（`--add-host`，gofer 文件 gVisor 天然工作）**。follow-up：HX-10-F1。
+  - **gate_56 fork bomb**：`--pids-limit` 在 gVisor 下限 sentry 宿主线程非 guest 进程；fork bomb → Go runtime 建线程失败 → sentry panic → 沙箱（含 runner）整体死（gVisor 从不声称防 fork bomb，资源耗尽防御委托宿主 cgroup）。隔离没破（爆炸半径=沙箱）但语义异于 runc。**gVisor 生产上线前置：接受沙箱阵亡+重建语义 或 guest 内 cgroupfs pids.max + `--memory` 上限**。follow-up：HX-10-F2。
 
 #### 12.2.3 ③ Trivy 镜像 CVE 扫描（PR3，收尾）
 

@@ -1,0 +1,101 @@
+name: Sandbox gVisor (runsc)
+
+# Stream HX-10 — runs the sandbox acceptance suite under gVisor (runsc), the
+# production isolation runtime. The suite otherwise only runs under runc (dev /
+# the main CI integration job), so "switching to gVisor works" was an
+# unverified assumption until now. This turns the M0->M1 Gate's gVisor
+# verification from a one-off manual activity into a continuous CI check.
+#
+# Path-filtered: only fires when sandbox runtime code / image / this workflow
+# changes — most PRs do not pay for it. workflow_dispatch for on-demand runs.
+#
+# Platform: gVisor's systrap platform needs no KVM / nested virtualisation, so
+# a stock ubuntu runner suffices. CI pulls runsc from the official Google
+# bucket (reachable from GitHub's runners); production hosts in mainland China
+# mirror the verified binary via OSS/ACR instead of a direct Google fetch
+# (HX-K4) — that is a deploy concern, not a CI one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/helix-runtime/src/helix_agent/runtime/sandbox/**"
+      - "services/sandbox-supervisor/**"
+      - "infra/sandbox-image/**"
+      - ".github/workflows/sandbox-gvisor.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/helix-runtime/src/helix_agent/runtime/sandbox/**"
+      - "services/sandbox-supervisor/**"
+      - "infra/sandbox-image/**"
+      - ".github/workflows/sandbox-gvisor.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.9.26"
+  # gVisor release channel. ``release/latest`` floats; the download is still
+  # integrity-checked against its published sha512 below. Production pins a
+  # specific build and mirrors it (HX-K4); CI only needs a verified recent
+  # build to prove compatibility.
+  RUNSC_RELEASE: "release/latest"
+
+jobs:
+  gvisor:
+    name: Acceptance suite under runsc
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Shared-runner Docker is bursty and gVisor setup is new here; do not gate
+    # PRs on it yet (mirrors the main integration job). Tighten once stable.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install runsc (gVisor)
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          url="https://storage.googleapis.com/gvisor/releases/${RUNSC_RELEASE}/${arch}"
+          wget --quiet "${url}/runsc" "${url}/runsc.sha512"
+          sha512sum -c runsc.sha512
+          chmod +x runsc
+          sudo mv runsc /usr/local/bin/runsc
+          runsc --version
+
+      - name: Register runsc with the Docker daemon
+        run: |
+          set -euo pipefail
+          # ``runsc install`` writes the runtime into /etc/docker/daemon.json.
+          sudo runsc install
+          sudo systemctl restart docker
+          # Fail loudly if the daemon did not pick up the runtime — otherwise
+          # the suite would silently run under runc (the runtime assertion in
+          # the suite is the second line of defence).
+          docker info --format '{{json .Runtimes}}' | grep -q runsc
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Sync workspace
+        run: uv sync --frozen
+
+      - name: Run sandbox acceptance suite under gVisor
+        env:
+          HELIX_TEST_SANDBOX_RUNTIME: runsc
+        run: >-
+          uv run pytest -v -m integration
+          services/sandbox-supervisor/tests/test_supervisor_integration.py

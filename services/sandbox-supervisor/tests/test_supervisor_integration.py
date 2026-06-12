@@ -1,7 +1,10 @@
 """Docker integration tests for the Sandbox Supervisor — Stream F.8 / F.9.
 
-These exercise the *real* ``CliDockerClient`` against a runc container,
-covering STREAM-F-DESIGN § 1.3 acceptance gates that runc fully proves:
+These exercise the *real* ``CliDockerClient`` against the configured OCI
+runtime — ``runc`` by default (local / the existing CI integration job),
+or ``runsc`` when ``HELIX_TEST_SANDBOX_RUNTIME=runsc`` (the Stream HX-10
+gVisor CI workflow runs this same acceptance suite under gVisor). It covers
+STREAM-F-DESIGN § 1.3 acceptance gates:
 
 * #45 — ``exec_python`` runs code end to end
 * #48 — filesystem + process isolation (gates #1 / #2)
@@ -11,8 +14,18 @@ covering STREAM-F-DESIGN § 1.3 acceptance gates that runc fully proves:
 * #57 — a cancelled run is SIGKILLed within 1s (gate #8)
 * #59 — the image's CPython ships a complete C-extension stdlib
 
-Out of scope (Mini-ADR F-10): gates #6 / #7 need real gVisor (runsc) —
-M0→M1 penetration testing.
+Under runsc the suite additionally asserts the live container's runtime
+(guarding against a silent fall-back to runc) and a gVisor isolation
+invariant (io_uring unavailable). Two gates are ``xfail`` under runsc —
+their runc-shaped assertions encode behaviour gVisor changes by design:
+#49 (egress) relies on docker embedded DNS, which gVisor netstack does not
+support (google/gvisor#7469); #56 (fork bomb) expects graceful pids-limit
+containment, but under gVisor a fork bomb panics the sentry
+(google/gvisor#2490) — isolation holds, semantics differ. Both are HX-10
+follow-ups (production sandbox->proxy addressing / fork-bomb semantics).
+Gate #6 (timing side-channel) and a full CVE-2019-5736 escape PoC stay out
+of CI — environment-sensitive / unsafe as a live exploit on shared runners
+— and remain staging penetration tests (Mini-ADR F-10 / HX-10 §12.2.2).
 
 A session fixture builds the sandbox image, creates the ``--internal``
 egress network, and starts a stub proxy on it; the whole module
@@ -23,11 +36,13 @@ egress network, and starts a stub proxy on it; the whole module
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -39,9 +54,23 @@ from sandbox_supervisor.domain import SandboxRecord, SandboxState
 from sandbox_supervisor.pool import PoolReplenisher, SandboxPool
 from sandbox_supervisor.schemas import AcquireRequest
 from sandbox_supervisor.settings import SandboxSupervisorSettings
-from sandbox_supervisor.supervisor import SandboxSupervisor
+from sandbox_supervisor.supervisor import SandboxSupervisor, _container_name
 
 pytestmark = pytest.mark.integration
+
+#: Stream HX-10 — the OCI runtime under test. Defaults to ``runc`` (local /
+#: the existing CI integration job); the gVisor CI workflow sets
+#: ``HELIX_TEST_SANDBOX_RUNTIME=runsc`` so this same acceptance suite runs
+#: under gVisor (test matrix #43 extended to the prod runtime).
+_OCI_RUNTIME = cast(
+    "Literal['runc', 'runsc']",
+    os.environ.get("HELIX_TEST_SANDBOX_RUNTIME", "runc"),
+)
+#: Skip gVisor-specific invariants when the suite runs under runc.
+_gvisor_only = pytest.mark.skipif(
+    _OCI_RUNTIME != "runsc",
+    reason="gVisor-specific invariant (set HELIX_TEST_SANDBOX_RUNTIME=runsc)",
+)
 
 #: Image tag built for the test run; kept distinct from the dev tag.
 _IMAGE = "helix-sandbox:itest"
@@ -202,9 +231,9 @@ def helix() -> _Harness:
         store=store,  # type: ignore[arg-type]  # structural SandboxStore
         docker=CliDockerClient(),
         audit=_NullAudit(),  # type: ignore[arg-type]  # structural AuditSink
-        runtime_provider=SandboxRuntimeProvider(oci_runtime="runc", egress_network=_NETWORK),
+        runtime_provider=SandboxRuntimeProvider(oci_runtime=_OCI_RUNTIME, egress_network=_NETWORK),
         workspace_store=InMemoryUserWorkspaceStore(),
-        settings=SandboxSupervisorSettings(sandbox_image=_IMAGE, oci_runtime="runc"),
+        settings=SandboxSupervisorSettings(sandbox_image=_IMAGE, oci_runtime=_OCI_RUNTIME),
     )
     return _Harness(supervisor=supervisor, store=store)
 
@@ -369,6 +398,17 @@ _EGRESS_PROBE = (
 )
 
 
+@pytest.mark.xfail(
+    condition=_OCI_RUNTIME == "runsc",
+    reason=(
+        "gVisor netstack does not support docker embedded DNS (127.0.0.11 is the "
+        "sentry's own loopback, not where dockerd listens) — google/gvisor#7469. "
+        "The probe resolves the proxy by container name, which fails under runsc "
+        "(isolation still holds: public/metadata stay unreachable). Production must "
+        "address sandbox->credential-proxy via /etc/hosts / fixed IP. HX-10 follow-up."
+    ),
+    strict=False,
+)
 @pytest.mark.asyncio
 async def test_gate_49_network_egress_isolation(helix: _Harness) -> None:
     box = await helix.supervisor.acquire(_acquire_request("t-49"))
@@ -439,6 +479,18 @@ _FORK_BOMB = (
 )
 
 
+@pytest.mark.xfail(
+    condition=_OCI_RUNTIME == "runsc",
+    reason=(
+        "gVisor's --pids-limit caps the sentry's HOST threads, not guest processes "
+        "— a fork bomb makes the Go runtime fail to create an OS thread and panics "
+        "the sentry, killing the runner (google/gvisor#2490); gVisor never claims "
+        "fork-bomb protection. Isolation still holds (blast radius = the sandbox, no "
+        "host/cross-tenant impact). Production needs a sandbox-death+rebuild semantic "
+        "or guest-side cgroupfs pids.max + a memory cap. HX-10 follow-up."
+    ),
+    strict=False,
+)
 @pytest.mark.asyncio
 async def test_gate_56_fork_bomb_contained_by_pids_limit(helix: _Harness) -> None:
     box = await helix.supervisor.acquire(_acquire_request("t-56"))
@@ -525,9 +577,9 @@ async def test_warm_pool_claim_exec_release() -> None:
     store = _InMemoryStore()
     docker = CliDockerClient()
     settings = SandboxSupervisorSettings(
-        sandbox_image=_IMAGE, oci_runtime="runc", pool_size_minimal=1
+        sandbox_image=_IMAGE, oci_runtime=_OCI_RUNTIME, pool_size_minimal=1
     )
-    runtime = SandboxRuntimeProvider(oci_runtime="runc", egress_network=_NETWORK)
+    runtime = SandboxRuntimeProvider(oci_runtime=_OCI_RUNTIME, egress_network=_NETWORK)
     pool = SandboxPool()
     supervisor = SandboxSupervisor(
         store=store,  # type: ignore[arg-type]  # structural SandboxStore
@@ -561,3 +613,49 @@ async def test_warm_pool_claim_exec_release() -> None:
 
     await supervisor.release(acquired.sandbox_id)
     assert store.rows[acquired.sandbox_id].state is SandboxState.DESTROYED
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-10 — runtime-under-test assertion + gVisor invariants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_container_runs_under_expected_runtime(helix: _Harness) -> None:
+    # Guards against a silent fall-back to runc: if the gVisor CI workflow
+    # fails to register runsc with the daemon, docker silently uses the
+    # default runtime and the "gVisor verification" would be a no-op. Assert
+    # the live container's runtime matches what the provider asked for.
+    acquired = await helix.supervisor.acquire(_acquire_request("t-runtime"))
+    try:
+        inspect = _docker(
+            "inspect", _container_name(acquired.sandbox_id), "--format", "{{.HostConfig.Runtime}}"
+        )
+        assert inspect.returncode == 0, inspect.stderr
+        assert inspect.stdout.strip() == _OCI_RUNTIME
+    finally:
+        await helix.supervisor.release(acquired.sandbox_id)
+
+
+@_gvisor_only
+@pytest.mark.asyncio
+async def test_gvisor_io_uring_is_unavailable(helix: _Harness) -> None:
+    # gVisor does not implement io_uring (a recurring container-escape
+    # surface): the syscall returns ENOSYS. This is the compatibility/escape
+    # invariant the research flagged (Claude Code #27230) — under gVisor a
+    # script reaching for io_uring gets -1/ENOSYS rather than a live ring.
+    # ``425`` is the io_uring_setup syscall number on the linux/amd64 CI runner.
+    acquired = await helix.supervisor.acquire(_acquire_request("t-iouring"))
+    code = (
+        "import ctypes, os\n"
+        "libc = ctypes.CDLL(None, use_errno=True)\n"
+        "rc = libc.syscall(425, 1, 0)\n"  # io_uring_setup(entries=1, params=NULL)
+        "print(rc, os.strerror(ctypes.get_errno()) if rc < 0 else 'ring')\n"
+    )
+    try:
+        result = await helix.supervisor.exec(acquired.sandbox_id, code=code)
+        assert result.exit_code == 0, result.stderr
+        # -1 return → io_uring rejected by gVisor (ENOSYS / EPERM family).
+        assert result.stdout.strip().startswith("-1"), result.stdout
+    finally:
+        await helix.supervisor.release(acquired.sandbox_id)
