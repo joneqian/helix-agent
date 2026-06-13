@@ -324,6 +324,7 @@ ResourceType = Literal[
     "artifact",  # Stream J.9-step3 — Mini-ADR J-25
     "approval",  # Stream J.8 — Mini-ADR J-24
     "trigger",  # Stream J.10 — Mini-ADR J-26 / J-42
+    "webhook_endpoint",  # HX-9 — STREAM-HX § 13 (outbound webhook hook)
     "eval_dataset",  # Stream J.12 — Mini-ADR J-43
     "curation_candidate",  # Stream J.12 — Mini-ADR J-43
     "system",  # Stream N — Mini-ADR N-5 (cross-tenant query / tenant switch)
