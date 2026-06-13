@@ -62,7 +62,8 @@ class EvalEngine(Protocol):
     """Executes a suite, returning per-case outcomes. Injected so the worker
     stays decoupled from the eval harness (tests inject a fake)."""
 
-    async def run(self, suite: str) -> Sequence[EvalCaseOutcome]: ...
+    async def run(self, suite: str) -> Sequence[EvalCaseOutcome]:
+        """Execute ``suite`` and return one outcome per case."""
 
 
 @dataclass
