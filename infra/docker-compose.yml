@@ -684,12 +684,12 @@ services:
       # control plane can point at them without clicking through the UI.
       # Override the keys in any shared environment.
       LANGFUSE_INIT_ORG_ID: helix
-      LANGFUSE_INIT_PROJECT_ID: helix-dev
+      LANGFUSE_INIT_PROJECT_ID: helix
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${HELIX_LANGFUSE_PUBLIC_KEY:-pk-lf-helix-dev}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${HELIX_LANGFUSE_SECRET_KEY:-sk-lf-helix-dev}
       LANGFUSE_INIT_USER_EMAIL: ${HELIX_LANGFUSE_INIT_EMAIL:-dev@helix.local}
       LANGFUSE_INIT_USER_PASSWORD: ${HELIX_LANGFUSE_INIT_PASSWORD:-helix_langfuse_dev}
-      LANGFUSE_INIT_USER_NAME: helix-dev
+      LANGFUSE_INIT_USER_NAME: helix
     ports:
       - "3001:3000"
 
