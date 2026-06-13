@@ -85,6 +85,12 @@ from helix_agent.protocol.eval_dataset import (
     FeedbackRating,
     TrajectoryOutcome,
 )
+from helix_agent.protocol.eval_run import (
+    EvalCaseResultRecord,
+    EvalRunRecord,
+    EvalRunStatus,
+    EvalTriggeredBy,
+)
 from helix_agent.protocol.event import EventRecord, EventType
 from helix_agent.protocol.image_upload import ImageUpload
 from helix_agent.protocol.knowledge import (
@@ -279,8 +285,12 @@ __all__ = [
     "DrillRecord",
     "DrillType",
     "DynamicContextSpec",
+    "EvalCaseResultRecord",
     "EvalDatasetRecord",
     "EvalDatasetSource",
+    "EvalRunRecord",
+    "EvalRunStatus",
+    "EvalTriggeredBy",
     "EvalVerdict",
     "EventRecord",
     "EventType",

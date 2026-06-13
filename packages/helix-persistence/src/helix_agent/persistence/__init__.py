@@ -68,6 +68,9 @@ from helix_agent.persistence.dr import (
     InMemoryBackupRecordStore as InMemoryBackupRecordStore,
 )
 from helix_agent.persistence.dr import SqlBackupRecordStore as SqlBackupRecordStore
+from helix_agent.persistence.eval import EvalRunStore as EvalRunStore
+from helix_agent.persistence.eval import InMemoryEvalRunStore as InMemoryEvalRunStore
+from helix_agent.persistence.eval import SqlEvalRunStore as SqlEvalRunStore
 from helix_agent.persistence.image_upload import (
     ImageUploadNotFoundError as ImageUploadNotFoundError,
 )
@@ -303,6 +306,7 @@ __all__ = [
     "DuplicateKnowledgeBaseError",
     "DuplicateMemberError",
     "EvalDatasetStore",
+    "EvalRunStore",
     "EventLogRow",
     "InMemoryApprovalStore",
     "InMemoryArtifactStore",
@@ -310,6 +314,7 @@ __all__ = [
     "InMemoryBackupRecordStore",
     "InMemoryCurationCandidateStore",
     "InMemoryEvalDatasetStore",
+    "InMemoryEvalRunStore",
     "InMemoryKnowledgeStore",
     "InMemoryMcpConnectorCatalogStore",
     "InMemoryMcpOAuthConnectionStore",
@@ -355,6 +360,7 @@ __all__ = [
     "SqlBackupRecordStore",
     "SqlCurationCandidateStore",
     "SqlEvalDatasetStore",
+    "SqlEvalRunStore",
     "SqlKnowledgeStore",
     "SqlMcpConnectorCatalogStore",
     "SqlMcpOAuthConnectionStore",
