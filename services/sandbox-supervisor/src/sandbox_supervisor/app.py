@@ -130,6 +130,9 @@ def create_app(
         runtime_provider = make_sandbox_runtime_provider(
             resolved_settings.oci_runtime,
             seccomp_profile_path=resolved_settings.seccomp_profile_path,
+            # HX-10-F1 — fixed-IP /etc/hosts entries (gVisor has no Docker
+            # embedded DNS); a malformed value raises here, aborting startup.
+            extra_hosts=resolved_settings.parsed_extra_hosts,
         )
         pool = SandboxPool()
         live = SandboxSupervisor(

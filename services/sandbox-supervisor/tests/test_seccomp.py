@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_supervisor.seccomp import SeccompProfileError, validate_seccomp_profile
+from sandbox_supervisor.settings import SandboxSupervisorSettings
 
 #: The pinned profile shipped in the repo — its content contract is asserted
 #: below so a regression (e.g. someone adding io_uring to the allowlist) is
@@ -128,3 +129,41 @@ def test_pinned_profile_allows_core_runtime_syscalls() -> None:
     allow = _unconditional_allow(_load_pinned())
     for needed in ("read", "write", "openat", "mmap", "futex", "execve", "clone"):
         assert needed in allow, f"core syscall {needed} missing from allowlist"
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-10-F1 — HELIX_SANDBOX_EXTRA_HOSTS parsing (same fail-closed
+# misconfig discipline as the seccomp path, hence this module).
+# ---------------------------------------------------------------------------
+
+
+def test_extra_hosts_empty_parses_to_no_entries() -> None:
+    settings = SandboxSupervisorSettings(extra_hosts="")
+    assert settings.parsed_extra_hosts == {}
+
+
+def test_extra_hosts_parses_single_and_multiple_entries() -> None:
+    single = SandboxSupervisorSettings(extra_hosts="credential-proxy.internal=172.30.0.10")
+    assert single.parsed_extra_hosts == {"credential-proxy.internal": "172.30.0.10"}
+
+    multi = SandboxSupervisorSettings(
+        extra_hosts=" credential-proxy.internal = 172.30.0.10 , collector.internal=172.30.0.11 ,"
+    )
+    assert multi.parsed_extra_hosts == {
+        "credential-proxy.internal": "172.30.0.10",
+        "collector.internal": "172.30.0.11",
+    }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "no-equals-sign",
+        "=172.30.0.10",
+        "credential-proxy.internal=",
+    ],
+)
+def test_extra_hosts_malformed_entry_raises(raw: str) -> None:
+    settings = SandboxSupervisorSettings(extra_hosts=raw)
+    with pytest.raises(ValueError, match="malformed HELIX_SANDBOX_EXTRA_HOSTS"):
+        _ = settings.parsed_extra_hosts
