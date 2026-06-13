@@ -61,6 +61,7 @@ from helix_agent.persistence.models.token_budget_ledger import TokenBudgetLedger
 from helix_agent.persistence.models.token_reservation import TokenReservationRow
 from helix_agent.persistence.models.user_workspace import UserWorkspaceRow
 from helix_agent.persistence.models.volume_backup_dlq import VolumeBackupDLQRow
+from helix_agent.persistence.models.webhook import WebhookDeliveryRow, WebhookEndpointRow
 
 __all__ = [
     "AgentApprovalRow",
@@ -118,4 +119,6 @@ __all__ = [
     "TriggerRunRow",
     "UserWorkspaceRow",
     "VolumeBackupDLQRow",
+    "WebhookDeliveryRow",
+    "WebhookEndpointRow",
 ]

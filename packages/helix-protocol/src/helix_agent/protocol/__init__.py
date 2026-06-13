@@ -215,6 +215,14 @@ from helix_agent.protocol.trigger import (
     TriggerSpec,
 )
 from helix_agent.protocol.user_workspace import UserWorkspace
+from helix_agent.protocol.webhook import (
+    WebhookDeliveryRecord,
+    WebhookDeliveryStatus,
+    WebhookEndpointRecord,
+    WebhookEndpointSource,
+    WebhookEndpointSpec,
+    WebhookEventType,
+)
 
 __all__ = [
     "ALL_TENANTS",
@@ -385,6 +393,12 @@ __all__ = [
     "TriggerSpec",
     "UserWorkspace",
     "VisionSpec",
+    "WebhookDeliveryRecord",
+    "WebhookDeliveryStatus",
+    "WebhookEndpointRecord",
+    "WebhookEndpointSource",
+    "WebhookEndpointSpec",
+    "WebhookEventType",
     "WorkflowSpec",
     "apply_markup",
     "catalog_entry",

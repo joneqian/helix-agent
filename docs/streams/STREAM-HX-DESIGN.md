@@ -1055,7 +1055,7 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 |---|---|---|
 | manifest `hooks: dict[str,str]`（占位零消费方） | `protocol/agent_spec.py:811` | **转 deprecated**（注册改 API CRUD，见 ①） |
 | triggers CRUD 全套（J.10） | `api/triggers.py` / `persistence/trigger/{base,memory,sql}.py` / `models/agent_trigger.py` | webhook_endpoint CRUD/Store/ORM 模板 |
-| run_event 表 + RunEventStore + SSE | `runs/event_store.py` / H.3 | 事件主轴（但仅 run 终态在轴上，见 ②） |
+| 3 个事件源表 | `agent_run`（终态）/ `agent_approval` / `artifact` | worker 直读（方案 b，见 §13.2.2）——各带 tenant_id/时间戳/payload |
 | DLQ worker + 退避表 | `memory/dlq_worker.py:76`（`_BACKOFF_SCHEDULE`/`_MAX_ATTEMPTS`）/ `feedback_consumer.py:104` | 投递 worker 形态 |
 | SSRF | `helix-common/url_validation.py:44` / `api/mcp_servers.py:52` host-pivot 字符黑名单 | URL 注册双段校验 |
 | RLS bypass 跨租户扫 | `persistence/rls.py:92` `bypass_rls_var` | worker cross-tenant 扫描 |
@@ -1063,18 +1063,20 @@ tenant_tool_getter: Callable[[UUID], Awaitable[dict[Tool, str]]] | None = None
 
 ### 13.2 设计
 
-**架构（单事件主轴 → 投递 worker）**：
+**架构（worker 读 3 源表 → 投递）**：
 
 ```
-run_event 主轴（单一事件源，seq 单调）
-  ├─ run 终态（现成: orchestrator/sse.py:423 SUCCESS / 504+546 ERROR）
-  ├─ 审批请求（新 emit: orchestrator/sse.py:439 _register_pending_approval）
-  └─ artifact 产出（新 emit: orchestrator/tools/artifact.py SaveArtifact dispatch）
+事件源 = 三张现成表（各带 tenant_id / 时间戳 / payload，零 orchestrator 改动）
+  ├─ run.completed / run.failed ← agent_run（终态 status + finished_at）
+  ├─ approval.requested        ← agent_approval（新审批行）
+  └─ artifact.saved            ← artifact（新产出版本）
         │
         ▼
 WebhookDeliveryWorker（control-plane lifespan，照 MemoryDLQWorker）
-  cross-tenant 扫 run_event 新帧 → 匹配租户已注册 endpoint 的 event_type
-  → 入 webhook_delivery 队列表（per-delivery 行）
+  cross-tenant 扫 3 源表新行（per-source 游标，仅作扫描量优化）
+  → 匹配租户已注册 endpoint 的 event_type
+  → 入 webhook_delivery 队列表；UNIQUE(endpoint_id, event_id) 幂等去重
+    （event_id = run:{run_id} / approval:{id} / artifact:{ver_id}）
   → SSRF 双段校验 + HMAC-SHA256 签名 → POST 租户 URL
   → 2xx=delivered / 5xx·timeout=指数退避 / 4xx=不重试直接 dead_letter
   → per-endpoint 断路器 + per-tenant 并发上限
@@ -1082,11 +1084,15 @@ WebhookDeliveryWorker（control-plane lifespan，照 MemoryDLQWorker）
 
 #### 13.2.1 ① 注册面 = 平台 API CRUD（PR2）
 
-hook URL 是**运维配置资产**非 agent 行为——改 URL 不该弹 agent 版本。照 triggers 模板：`webhook_endpoint` 表（`tenant_id`/`agent_name`/`agent_version` scope + `url` + `event_types`（订阅哪几类）+ `secret_hash` + `enabled` + `source`）；5 端点 CRUD；HMAC secret show-once（创建响应返一次明文，存 hash）；per-tenant endpoint 配额。manifest `hooks` 字段标 deprecated（docstring + 不接线），未来若要 manifest 引用走「转引用 endpoint id」而非内联 URL。
+hook URL 是**运维配置资产**非 agent 行为——改 URL 不该弹 agent 版本。照 triggers 模板：`webhook_endpoint` 表（`tenant_id` + `name`（tenant 内唯一）+ `url` + `event_types`（订阅哪几类）+ `agent_name`（可空，NULL=全 agent）+ `secret_hash` + `enabled` + `source`）；5 端点 CRUD；HMAC secret show-once（创建响应返一次明文，存 hash）；per-tenant endpoint 配额。manifest `hooks` 字段标 deprecated（docstring + 不接线），未来若要 manifest 引用走「转引用 endpoint id」而非内联 URL。
 
-#### 13.2.2 ② 起步事件集 = 三类 via 方案 (a)（PR1）
+#### 13.2.2 ② 起步事件集 = 三类 via 方案 (b)（worker 读 3 源表）
 
-`run.completed` / `run.failed`（run 终态，run_event 现成）+ `approval.requested` + `artifact.saved`。**关键**：审批/artifact 当前不写 run_event（分别在 `agent_approval` 表 + audit / `artifact` 表）。选三类 = **补 2 个 emit 帧写进 run_event 主轴**（方案 a），换取单事件源 + seq 统一去重，优于 worker 读三个源（游标分裂）。emit 复用现成 `_persist_event` 容错通道——**失败不阻塞 run**（fail-open）。
+`run.completed` / `run.failed`（agent_run 终态）+ `approval.requested`（agent_approval）+ `artifact.saved`（artifact）。
+
+**取数机制订正（2026-06-13）**：原 §13 PR0 写「方案 (a) 补 run_event emit 帧」，实现期深读发现该假设站不住——run_event 主轴只有 `metadata/updates/retry/error/end`，**没有干净的 run 终态帧**（终态在 agent_run.status），且 **run_event 表无 tenant_id 列**（靠 run_id join agent_run 走 RLS）。故 (a) 实际要补 **4** 个 emit 帧（动 orchestrator 热路径 4 处 + 污染终端用户 SSE 流），且 worker 跨租户扫 run_event 拿投递路由 tenant_id 仍须 join agent_run——「单一数据源」不成立。
+
+改 **方案 (b)**：worker 直接扫三张源表（agent_run 终态 / agent_approval / artifact），各表本就带 tenant_id + 时间戳 + payload 字段，**零 orchestrator 改动、无 SSE 污染、零 join**。代价仅 worker 3 个 per-source 游标——而 `webhook_delivery` 的 `UNIQUE(endpoint_id, event_id)` 已保证幂等投递，**游标只为省扫描量、非正确性关键**（粗粒度时间窗重扫也不会重复投）。三类事件**范围不变**，仅取数从合成主轴换成读自然源表。详见 Mini-ADR HX-J1。
 
 #### 13.2.3 ③ 投递基建 = 自建薄版（PR3）
 
@@ -1110,14 +1116,14 @@ hook URL 是**运维配置资产**非 agent 行为——改 URL 不该弹 agent 
 
 ### 13.5 测试
 
-- **PR1**：Store 三层 round-trip + RLS 隔离；两个新 run_event emit 帧（approval/artifact）+ 失败不阻塞 run（fail-open）；迁移真 PG（RLS + 部分索引）。
+- **PR1**：Store 三层 round-trip（endpoint + delivery）+ 租户隔离（get/list/update/delete 跨租户返空）+ 唯一约束（endpoint name / delivery dedup）+ list_ready 状态过滤 + 配额 count；迁移真 PG（RLS + 部分索引）。**纯数据模型，零 orchestrator 改动（方案 b）。**
 - **PR2**：5 端点 CRUD + tenant scope + 跨租户（Stream N）+ audit emit + secret show-once + 配额 429；SSRF 拒私网/host-pivot；admin-ui vitest + Playwright（CI）。
 - **PR3**：worker 退避/DLQ/断路器状态机；HMAC 签名正确性 + 验签；4xx 不重试 / 5xx 退避 / 耗尽 DLQ；per-tenant 并发；e2e（注册→触发三类事件→stub 收签名 POST + 幂等去重）。
 
 ### 13.6 Mini-ADR
 
 - **HX-J0 注册面 = API CRUD 非 manifest**：hook URL 是运维配置非 agent 行为，改 URL 不弹版本；triggers 已证 API 路线治理面够；manifest `hooks` 转 deprecated。
-- **HX-J1 单事件主轴（补 2 emit 帧）非多源读**：审批/artifact 补写 run_event 换 seq 统一去重 + 单游标；emit 走 `_persist_event` fail-open 不阻塞 run。诚实记：三类事件非零成本复用，是 +2 emit 点。
+- **HX-J1 worker 读 3 源表（方案 b），非补 run_event emit 帧（方案 a，已否决）**：实现期发现 run_event 无干净 run 终态帧 + 无 tenant_id 列（join agent_run 才有），(a) 实际要补 4 帧 + 污染终端 SSE 流且仍须 join。改 worker 直读 agent_run/agent_approval/artifact 三源表（零 orchestrator 改动 / 无 SSE 污染 / 零 join）。`webhook_delivery` 的 `UNIQUE(endpoint_id, event_id)` 幂等去重使 per-source 游标仅为扫描量优化、非正确性关键。诚实记：三类事件取数是 worker 3 游标的内部复杂度，不外溢。
 - **HX-J2 自建薄版非 Svix**：三套 worker 模板同构，Svix 复杂度过剩 + 引第三方违数据不出平台；事件集窄 PG 队列足够。
 - **HX-J3 仅出站异步（fail-open 公理）**：投递故障绝不影响 run；同步改写回调拉租户端点进关键路径 = 可用性耦合，归 M1-F。
 - **HX-J4 爆炸半径由跨租户决定（同 HX-10 公理）**：per-tenant 队列 + per-endpoint 断路器，慢/坏端点不反压邻租户。
@@ -1128,6 +1134,6 @@ hook URL 是**运维配置资产**非 agent 行为——改 URL 不该弹 agent 
 | PR | 内容 | 验证 |
 |----|------|------|
 | PR0（本设计） | §13 + research 文档 + ITERATION-PLAN HX-9 细化 | 纯 docs，CI |
-| PR1 | 迁移 `webhook_endpoint`+`webhook_delivery` 两表 + RLS + 部分索引 + DTO/ORM/Store 三层 + ResourceType/AuditAction 双镜像 + 2 个 run_event emit 帧 | §13.5-PR1；迁移真 PG |
-| PR2 | `api/webhook_endpoints.py` 5 端点 CRUD + authz + 跨租户 + audit + secret show-once + 配额 + SSRF + admin-ui（SDK/页面/tab/i18n/接线） | §13.5-PR2 |
-| PR3（收尾） | `WebhookDeliveryWorker`（退避/DLQ/断路器/per-tenant 并发）+ HMAC 签名 + lifespan 接线 + 计量 + 可观测 | §13.5-PR3；零债 6 条 |
+| PR1 | 迁移 `webhook_endpoint`+`webhook_delivery` 两表 + RLS + 部分索引 + DTO/ORM/Store 三层 + ResourceType 双镜像（AuditAction 推迟到 PR2 emit）。**纯数据模型，零 orchestrator 改动（方案 b）** | §13.5-PR1；迁移真 PG |
+| PR2 | `api/webhook_endpoints.py` 5 端点 CRUD + authz + 跨租户 + AuditAction WEBHOOK_* + secret show-once + 配额 + SSRF + admin-ui（SDK/页面/tab/i18n/接线） | §13.5-PR2 |
+| PR3（收尾） | `WebhookDeliveryWorker`（扫 3 源表 agent_run/agent_approval/artifact → 入队 → 投递；退避/DLQ/断路器/per-tenant 并发）+ HMAC 签名 + lifespan 接线 + 计量 + 可观测 | §13.5-PR3；零债 6 条 |

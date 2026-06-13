@@ -245,6 +245,16 @@ from helix_agent.persistence.trigger import SqlTriggerRunStore as SqlTriggerRunS
 from helix_agent.persistence.trigger import SqlTriggerStore as SqlTriggerStore
 from helix_agent.persistence.trigger import TriggerRunStore as TriggerRunStore
 from helix_agent.persistence.trigger import TriggerStore as TriggerStore
+from helix_agent.persistence.webhook import (
+    InMemoryWebhookDeliveryStore as InMemoryWebhookDeliveryStore,
+)
+from helix_agent.persistence.webhook import (
+    InMemoryWebhookEndpointStore as InMemoryWebhookEndpointStore,
+)
+from helix_agent.persistence.webhook import SqlWebhookDeliveryStore as SqlWebhookDeliveryStore
+from helix_agent.persistence.webhook import SqlWebhookEndpointStore as SqlWebhookEndpointStore
+from helix_agent.persistence.webhook import WebhookDeliveryStore as WebhookDeliveryStore
+from helix_agent.persistence.webhook import WebhookEndpointStore as WebhookEndpointStore
 from helix_agent.persistence.workspace import (
     InMemoryUserWorkspaceStore as InMemoryUserWorkspaceStore,
 )
@@ -318,6 +328,8 @@ __all__ = [
     "InMemoryTriggerStore",
     "InMemoryUserWorkspaceStore",
     "InMemoryVolumeBackupDLQ",
+    "InMemoryWebhookDeliveryStore",
+    "InMemoryWebhookEndpointStore",
     "KnowledgeBaseRow",
     "KnowledgeChunkRow",
     "KnowledgeDocumentRow",
@@ -359,6 +371,8 @@ __all__ = [
     "SqlTriggerStore",
     "SqlUserWorkspaceStore",
     "SqlVolumeBackupDLQ",
+    "SqlWebhookDeliveryStore",
+    "SqlWebhookEndpointStore",
     "TenantBillingLedgerRow",
     "TenantBillingLedgerStore",
     "TenantConfigStore",
@@ -379,6 +393,8 @@ __all__ = [
     "UserWorkspaceStore",
     "VolumeBackupDLQ",
     "VolumeDLQRow",
+    "WebhookDeliveryStore",
+    "WebhookEndpointStore",
     "WorkspaceNotFoundError",
     "build_rls_sessionmaker",
     "bypass_rls_var",
