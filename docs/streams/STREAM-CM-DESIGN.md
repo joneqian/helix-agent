@@ -8,7 +8,7 @@
 >
 > **零债收尾规则**（[memory:zero-tech-debt]）：每条交付收尾 6 条全过 —— 无 TODO / 测试达标 / 文档同步 / 可观测齐全 / CI 全绿 / bug 不遗留。
 >
-> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）+ CM-4（reranker 接通，§6）+ CM-5（可恢复压缩，§7）+ CM-6（时间衰减+MMR，§8）+ CM-7（结构化摘要+写入显式操作，§9）+ CM-8（plan UI 通道+resume ingest 修复，§10）+ CM-9（effort 档位+撞限升档，§11）+ CM-N5（评测基线，§12）+ CM-10（跨厂商思考深度统一，§13）详设已锁定。
+> **本文件状态**：CM-0（地基，§2）+ CM-1（运行时 error-as-guidance，§3）+ CM-2（working memory 滑动窗口，§4）+ CM-3（压缩前 flush，§5）+ CM-4（reranker 接通，§6）+ CM-5（可恢复压缩，§7）+ CM-6（时间衰减+MMR，§8）+ CM-7（结构化摘要+写入显式操作，§9）+ CM-8（plan UI 通道+resume ingest 修复，§10）+ CM-9（effort 档位+撞限升档，§11）+ CM-N5（评测基线，§12）+ CM-10（跨厂商思考深度统一，§13）+ CM-11（事件驱动升档：工具错/目标变更触发，§14）详设已锁定。
 
 ---
 
@@ -1397,7 +1397,55 @@ OpenAIProvider 加 thinking_payload 字段（factory 构造时翻译好，comple
 
 ---
 
-## 14. 与既有 Stream 的衔接
+## 14. CM-11 详细设计 —— 事件驱动升档（动态算力分配的第二组触发）
+
+### 14.1 关键事实 + 缺口
+
+CM-9（§11）已落地"撞限升档"机制：`escalated_llm_caller`（升一档 effort 的同模型 caller）+ `AgentState.escalate_next` 通道 + 双信号（loop 检测 / budget 撞限）。CM-10（§13）把这套推广到全 provider。**机制完备，但触发信号只有两个**——都是"系统压力"信号（在打转 / 步数快用尽）。
+
+驾驭工程的"动态算力分配"还要两个**任务语义**触发（业界 harness 的慢思考动态开关）：
+
+- **微观**：上一批工具调用出现**真异常**（非 `transient` 抖动）→ 本 turn 深推理消化。当前 `tool_failures` 通道（CM-1）只驱动 `<recovery-advisory>` 注入，不驱动升档——模型拿到恢复建议但仍用基线 effort 浅想。
+- **宏观**：plan 目标变更（planner 重规划，或人工编辑 PLAN.md 经 CM-0 ingest 回灌 `AgentState.plan`）→ 一次深推理重校执行策略。当前无任何"目标变更"信号。
+
+### 14.2 设计 —— 复用 CM-9 机制，加两信号（零新基建）
+
+```
+agent_node（LLM 调用前，§11.3 升档 block 处叠加）：
+  error_signal = any(f.error_class != "transient" for f in tool_failures)   # tool_failures 已在手（CM-1，行内）
+  current_goal = plan.goal if plan else None                                # plan 已在手（J.1，行内）
+  goal_signal  = current_goal ∧ prior_goal ∧ current_goal != prior_goal     # prior_goal = state.last_plan_goal
+  escalate = loop_signal ∨ budget_signal ∨ error_signal ∨ goal_signal        # 四信号或，任一命中
+  caller   = escalated_llm_caller if escalate ∧ escalated_llm_caller else llm_caller
+  signal_label = loop / budget / error / goal（优先序，复用 helix_cm_effort_escalation_total{signal}）
+return：last_plan_goal = current_goal   # 每 turn rebaseline → 一次变更只升一档 turn
+```
+
+新 state 通道 `AgentState.last_plan_goal: NotRequired[str | None]`：agent_node 每 turn 写当前 `plan.goal`（react 图恒 None）。下 turn 与活 plan goal 比对。**首个 plan turn 无 prior（缺省）→ 不升档**：初始分解 planner 已深想过（§8 CM-J 同理），避免每 plan_execute run 首轮误触发。
+
+### 14.3 不变量
+
+① 与 CM-9 同——升档只改该 turn 的 LLM 调用参数，prompt 字节不变（prompt cache 零代价）；② 无 escalated caller（模型不支持/已 max/未配 effort）⇒ 现状字节一致；③ 两新信号都在 LLM 调用**前**可知（`tool_failures` 来自上一 tools 批、`plan.goal` 在 state），故**本 turn**升档（区别于 loop_signal 的 arm-then-consume——loop 只在响应后可知）；④ `transient` 排除：仅可重试抖动不值深想，与 CM-B5 retryable 门控语义一致；⑤ react 图 plan 恒 None → goal_signal 恒 False，零行为变更。
+
+### 14.4 受影响文件
+
+1. **state**：`AgentState.last_plan_goal`（NotRequired，overwrite reducer）。
+2. **builder**：§11.3 升档 block 加 `error_signal`/`goal_signal` + 四信号或 + signal label 优先序；两 return dict（middleware/plain 路径）加 `last_plan_goal=current_goal`。
+3. **可观测**：复用 `helix_cm_effort_escalation_total{signal}`——新增 label 值 `error`/`goal`（非新 metric，无 catalog 漂移）。
+
+### 14.5 测试 & 验收（CM-11 Exit）
+
+`tests/test_effort_escalation.py` 扩展 4 测：非 transient 工具错本 turn 升档 / `transient` 不升档 / plan goal 变更升档且 rebaseline / 首个 plan 不升档。test_state 键集 +1。1152 orchestrator 单元回归绿。
+
+### 14.6 Mini-ADR（CM-11 锁定）
+
+| ID | 决策 |
+|---|---|
+| **CM-M1** | **复用 CM-9 机制加信号，非新建**：CM-9 的 `escalated_llm_caller`+`helix_cm_effort_escalation_total{signal}` 已是升档基建；CM-11 仅加 `error`/`goal` 两信号进同一 block，零新 caller/metric/graph 参数（保 surgical）。微观=非 transient 工具错本 turn 升档（信号在调用前可知）；宏观=plan goal 变更（`last_plan_goal` rebaseline）；首个 plan 不算变更（planner 已深想）。`transient` 排除对齐 CM-B5。新 label 值非新 metric → 无 [memory:audit-literal-drift] 风险。 |
+
+---
+
+## 15. 与既有 Stream 的衔接
 
 - **Stream J**：复用 `user_workspace`（J.15 卷）、`memory_item`（J.3）、approval（J.8——pause→resume 的 ingest 时机由 CM-8 §10.3 修复补齐）、`update_plan`（K.8）。
 - **Stream L**：投影钩子在 agent_node/tools_node，与 L-1 cache prefix（system 冻结）、L-2 compressor（CM-2/3 在此之上）共存；recitation 放非 system 区不破 L-1。**L-4 mutation advisory 被 CM-1 收敛**（`failed_mutations`→`tool_failures`、`<mutation-advisory>`→`<recovery-advisory>`，mutation 校验作为 `mutation_not_landed` 一类保留），非并行；L-5 退款语义不动（失败工具调用照常计步）。
