@@ -156,9 +156,11 @@ async def test_endpoint_list_filters_update_delete_count(
 
     rec = await endpoints.get(endpoint_id=eid, tenant_id=tenant)
     assert rec is not None
-    assert await endpoints.update(rec.model_copy(update={"enabled": False})) is True
+    updated = await endpoints.update(rec.model_copy(update={"enabled": False}))
+    assert updated is True
 
-    assert await endpoints.delete(endpoint_id=eid, tenant_id=tenant) is True
+    deleted = await endpoints.delete(endpoint_id=eid, tenant_id=tenant)
+    assert deleted is True
     assert await endpoints.count_by_tenant(tenant_id=tenant) == 1
 
 
@@ -244,8 +246,13 @@ async def test_delivery_exists_update_list_ready(
             "response_status": 200,
         }
     )
-    assert await deliveries.update(delivered) is True
+    updated = await deliveries.update(delivered)
+    assert updated is True
 
-    ready = await deliveries.list_ready(before=now)
-    # p1 is now delivered; only the due retry remains deliverable.
-    assert {d.event_id for d in ready} == {"r-due"}
+    # list_ready is cross-tenant (the shared container carries sibling tests'
+    # rows), so assert by membership on this test's own event_ids — the
+    # trigger SQL suite uses the same convention.
+    ready = {d.event_id for d in await deliveries.list_ready(before=now)}
+    assert "r-due" in ready  # retrying + next_retry_at passed
+    assert "p1" not in ready  # now delivered
+    assert "r-future" not in ready  # retry not yet due

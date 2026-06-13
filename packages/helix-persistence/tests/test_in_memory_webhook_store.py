@@ -117,12 +117,14 @@ async def test_endpoint_update_replaces_and_cross_tenant_misses() -> None:
 
     rec = await store.get(endpoint_id=eid, tenant_id=tenant_a)
     assert rec is not None
-    assert await store.update(rec.model_copy(update={"enabled": False})) is True
+    updated = await store.update(rec.model_copy(update={"enabled": False}))
+    assert updated is True
     again = await store.get(endpoint_id=eid, tenant_id=tenant_a)
     assert again is not None and again.enabled is False
 
     impostor = again.model_copy(update={"tenant_id": tenant_b})
-    assert await store.update(impostor) is False
+    cross = await store.update(impostor)
+    assert cross is False
 
 
 @pytest.mark.asyncio
@@ -133,9 +135,11 @@ async def test_endpoint_delete_and_count() -> None:
     await store.create(_endpoint(tenant_id=tenant, name="b"))
 
     assert await store.count_by_tenant(tenant_id=tenant) == 2
-    assert await store.delete(endpoint_id=eid, tenant_id=tenant) is True
+    deleted = await store.delete(endpoint_id=eid, tenant_id=tenant)
+    assert deleted is True
     assert await store.get(endpoint_id=eid, tenant_id=tenant) is None
-    assert await store.delete(endpoint_id=eid, tenant_id=tenant) is False
+    deleted_again = await store.delete(endpoint_id=eid, tenant_id=tenant)
+    assert deleted_again is False
     assert await store.count_by_tenant(tenant_id=tenant) == 1
 
 
@@ -222,12 +226,14 @@ async def test_delivery_update_transitions_and_cross_tenant_misses() -> None:
     done = rec.model_copy(
         update={"status": WebhookDeliveryStatus.DELIVERED, "attempt": 1, "response_status": 200}
     )
-    assert await store.update(done) is True
+    updated = await store.update(done)
+    assert updated is True
     again = await store.get(delivery_id=did, tenant_id=tenant_a)
     assert again is not None and again.status is WebhookDeliveryStatus.DELIVERED
 
     impostor = again.model_copy(update={"tenant_id": tenant_b})
-    assert await store.update(impostor) is False
+    cross = await store.update(impostor)
+    assert cross is False
 
 
 @pytest.mark.asyncio
