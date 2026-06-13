@@ -163,6 +163,8 @@ helix.orchestrator.session_run
 
 ### 5.2 关键 metric
 
+> ⚠️ 本节为**设计期目标清单**，部分指标名与实现已漂移（如实际为 `helix_llm_token_usage_total` 而非 `helix_llm_tokens_total`），且含 `helix_subagent_*` / `helix_hitl_*` / `helix_eval_*` 等 **M1 目标但 M0 未实现**项。**as-built 完整 catalog = A.9 follow-up**（待定 doc shape：标注 M0-shipped vs M1-target，或独立 as-built 参考）。指标命名的**强制真值源**是 `helix-common/observability/metrics.py` 的 validator（`helix_*` 前缀 + label cardinality 拦截）。
+
 **业务指标**
 
 ```
@@ -213,12 +215,17 @@ helix_dr_backup_age_seconds{asset_type}                             gauge     # 
 | `logger` | str | `helix.{component}` |
 | `message` | str | 事件名（snake_case，非自由文本） |
 | `tenant` | str | 必填，contextvar 注入 |
-| `trace_id` | str | W3C |
-| `span_id` | str | W3C |
+| `trace_id` | str\|null | W3C，OTel 活跃 span 优先、contextvar 兜底；无 trace 上下文（如启动期日志）为 `null` |
+| `span_id` | str\|null | W3C，同 `trace_id` 的 null 语义 |
+| `run_id` | str\|null | run-worker 作用域（HX-4 Mini-ADR HX-D4）；run 外（HTTP handler / 后台 sweep）为 `null` |
 | `service` | str | service name |
 | `env` | str | dev/staging/prod |
 
-可选但常见：`session_id`, `agent`, `agent_version`, `actor_id`。
+> 实现：`_MANDATORY_FIELDS`（`helix-common/observability/log.py`）固定这 10 个键；缺失（应有却无 `tenant`/`trace_id`）不抛异常，写 `null` + 单独 WARNING `helix.log_schema_violation`。
+
+可选但常见：`session_id`, `agent`, `agent_version`, `actor_id`——经 `extra={...}` 传入。
+
+**redaction**：mandatory 字段永不被 `extra` 覆盖；`extras` 部分过 `ExtrasRedactor`（与 audit `AuditRedactor` 同形，按 `tenant_config.pii_fields`）后才落盘。
 
 **关键决策**：**`message` 必须是 snake_case 的事件 ID**（如 `session.start`、`tool.call.start`），不允许 `f"started session {x}"`。事件 ID 是查询 key，自由文本进 `extra` 字段。
 
