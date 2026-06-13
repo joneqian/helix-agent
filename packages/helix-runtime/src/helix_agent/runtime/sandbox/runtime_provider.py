@@ -66,6 +66,17 @@ class SandboxRuntimeProvider:
     #: forwards the path; existence / JSON validity is validated fail-closed
     #: at supervisor startup (it stays pure / Docker-free).
     seccomp_profile_path: str | None = None
+    #: Stream HX-10-F1 — static ``(hostname, ip)`` pairs emitted as
+    #: ``--add-host`` flags. gVisor's netstack does not implement Docker's
+    #: embedded DNS (127.0.0.11 is the sentry's own loopback —
+    #: google/gvisor#7469), so under ``runsc`` the sandbox cannot resolve
+    #: sibling containers by name. ``/etc/hosts`` entries are written by
+    #: dockerd *before* the sandbox starts (a gofer-backed file read, which
+    #: gVisor handles natively), so a fixed-IP mapping for the
+    #: credential-proxy works under both runtimes. Empty = no flags (dev /
+    #: runc, where embedded DNS works). A tuple of pairs keeps the frozen
+    #: dataclass hashable; ordering is preserved into the argv.
+    extra_hosts: tuple[tuple[str, str], ...] = ()
 
     def docker_run_argv(
         self,
@@ -110,6 +121,8 @@ class SandboxRuntimeProvider:
             "--network",
             self.egress_network,
         ]
+        for hostname, ip in self.extra_hosts:
+            argv += ["--add-host", f"{hostname}:{ip}"]
         if self.oci_runtime == "runsc":
             argv += ["--runtime", "runsc"]
         argv.append(image)
@@ -148,6 +161,7 @@ def make_sandbox_runtime_provider(
     *,
     egress_network: str = DEFAULT_EGRESS_NETWORK,
     seccomp_profile_path: str | None = None,
+    extra_hosts: dict[str, str] | None = None,
 ) -> SandboxRuntimeProvider:
     """Build a :class:`SandboxRuntimeProvider`, validating ``oci_runtime``.
 
@@ -158,7 +172,9 @@ def make_sandbox_runtime_provider(
 
     ``seccomp_profile_path`` is forwarded verbatim — the caller
     (supervisor startup) is responsible for the fail-closed existence /
-    JSON-validity check, keeping this factory pure.
+    JSON-validity check, keeping this factory pure. ``extra_hosts``
+    (HX-10-F1) maps hostname → fixed IP; insertion order is preserved
+    into the argv.
     """
     valid: tuple[str, ...] = get_args(SandboxOciRuntime)
     if oci_runtime not in valid:
@@ -168,4 +184,5 @@ def make_sandbox_runtime_provider(
         oci_runtime=oci_runtime,  # type: ignore[arg-type]  # validated above
         egress_network=egress_network,
         seccomp_profile_path=seccomp_profile_path,
+        extra_hosts=tuple((extra_hosts or {}).items()),
     )

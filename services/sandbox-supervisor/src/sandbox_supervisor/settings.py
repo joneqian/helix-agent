@@ -45,8 +45,37 @@ class SandboxSupervisorSettings(BaseSettings):
     #: — a configured-but-unloadable profile is a security misconfig, not a
     #: transient fault, so the supervisor refuses to start.
     seccomp_profile_path: str | None = None
+    #: Stream HX-10-F1 — static hostname→IP entries emitted as ``--add-host``
+    #: on every sandbox container, format ``name=ip[,name2=ip2…]`` (e.g.
+    #: ``credential-proxy.internal=172.30.0.10``). Needed under gVisor:
+    #: runsc's netstack has no Docker embedded DNS (google/gvisor#7469), so
+    #: name resolution must come from ``/etc/hosts``. Empty = no flags (dev /
+    #: runc). A malformed value raises at startup — like the seccomp path,
+    #: a configured-but-broken addressing entry is a misconfig, not a
+    #: transient fault: silently skipping it would strand the sandbox with
+    #: no proxy route under runsc.
+    extra_hosts: str = ""
     #: Host identifier recorded on each sandbox_instance row. M0 single-node.
     node_name: str = "local"
+
+    @property
+    def parsed_extra_hosts(self) -> dict[str, str]:
+        """``extra_hosts`` parsed to ``{hostname: ip}``; raises on bad syntax."""
+        result: dict[str, str] = {}
+        for entry in self.extra_hosts.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            hostname, sep, ip = entry.partition("=")
+            hostname, ip = hostname.strip(), ip.strip()
+            if not sep or not hostname or not ip:
+                msg = (
+                    f"malformed HELIX_SANDBOX_EXTRA_HOSTS entry {entry!r} "
+                    "(expected 'hostname=ip[,hostname2=ip2…]')"
+                )
+                raise ValueError(msg)
+            result[hostname] = ip
+        return result
 
     # ----------------------------------------------------------- resources
     default_cpu: float = Field(default=1.0, gt=0, le=16)

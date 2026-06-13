@@ -195,3 +195,42 @@ def test_argv_keeps_core_hardening_under_all_shapes() -> None:
         assert "no-new-privileges" in [
             argv[i + 1] for i, tok in enumerate(argv) if tok == "--security-opt"
         ]
+
+
+# ---------------------------------------------------------------------------
+# Stream HX-10-F1 — extra_hosts (--add-host) for gVisor proxy addressing
+# ---------------------------------------------------------------------------
+
+
+def test_no_extra_hosts_emits_no_add_host_flag() -> None:
+    provider = SandboxRuntimeProvider(oci_runtime="runc")
+    argv = provider.docker_run_argv(image="img", container_name="c")
+    assert "--add-host" not in argv
+
+
+def test_extra_hosts_emit_add_host_pairs_in_order() -> None:
+    provider = SandboxRuntimeProvider(
+        oci_runtime="runsc",
+        extra_hosts=(
+            ("credential-proxy.internal", "172.30.0.10"),
+            ("collector.internal", "172.30.0.11"),
+        ),
+    )
+    argv = provider.docker_run_argv(image="img", container_name="c")
+    first = argv.index("--add-host")
+    assert argv[first : first + 2] == ["--add-host", "credential-proxy.internal:172.30.0.10"]
+    second = argv.index("--add-host", first + 2)
+    assert argv[second : second + 2] == ["--add-host", "collector.internal:172.30.0.11"]
+    # /etc/hosts entries must be in place regardless of runtime flag order;
+    # the runsc runtime flag still lands after them.
+    assert argv.index("--runtime") > second
+
+
+def test_factory_forwards_extra_hosts() -> None:
+    provider = make_sandbox_runtime_provider(
+        "runsc",
+        extra_hosts={"credential-proxy.internal": "172.30.0.10"},
+    )
+    assert provider.extra_hosts == (("credential-proxy.internal", "172.30.0.10"),)
+    # Default stays empty — runc dev path emits no flags (regression).
+    assert make_sandbox_runtime_provider("runc").extra_hosts == ()
