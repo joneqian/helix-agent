@@ -188,9 +188,9 @@
 - [x] **A.6 Postgres 自动备份 + WAL**（落实 P0 #17；设计：22-disaster-recovery）— `docs/dr/RUNBOOK.md` RPO/RTO 文档 + K15 PG 恢复演练 testcontainers 集成测试
 
 **可观测三件套**（日志 + trace + 指标必须同步建，否则后续代码 metric emit 缺失；统一设计：20-observability）
-- [~] **A.7 结构化日志规范**（落实 P0 #10）— 字段标准 + redaction 中间层。`ObservabilityMiddleware` 骨架在；字段规范文档化待 M0 收尾补
-- [~] **A.8 W3C Trace Context 规范**（落实 P0 #11）+ OpenTelemetry SDK 接入。OTel SDK 接入 + propagation 原语 + control-plane 入站提取已有；**待补**（设计见 20-observability §5.8）：`HTTPSupervisorClient` 出站注入 + sandbox-supervisor 入站提取 + 跨服务 e2e 测。注入纪律=仅信任内部 hop（→supervisor），外部 egress/沙箱边界不注
-- [~] **A.9 指标体系**（落实 P0 #12）— Prometheus + 业务指标 + 技术指标 schema。`helix_*` counter/histogram validator 已锁；metrics schema 文档化待 M0 收尾补
+- [x] **A.7 结构化日志规范**（落实 P0 #10）— 字段标准 + redaction 中间层。`HelixJsonFormatter` 强制 10 字段 schema（`_MANDATORY_FIELDS`）+ `ExtrasRedactor`（按 `tenant_config.pii_fields`）+ 缺失字段写 null+WARNING；字段规范成文于 20-observability §5.3（补全 `run_id` + null 语义 + redaction 说明）
+- [x] **A.8 W3C Trace Context 规范**（落实 P0 #11）+ OpenTelemetry SDK 接入。OTel SDK + propagation 原语 + control-plane 入站提取 + **#600**：`HTTPSupervisorClient` 出站注入 + sandbox-supervisor `TraceContextMiddleware` 入站提取 + 跨服务 e2e 测（inject/extract 两半交汇于 traceparent wire 契约）。注入纪律=仅信任内部 hop（→supervisor），外部 egress/沙箱边界不注（设计 20-observability §5.8）
+- [~] **A.9 指标体系**（落实 P0 #12）— Prometheus + 业务指标 + 技术指标 schema。`helix_*` counter/histogram validator 已锁 + ~90 指标已 emit。**待补 = as-built catalog**（20-observability §5.2 设计期清单已与实现漂移：名漂移 `helix_llm_tokens_total`→`helix_llm_token_usage_total` 等 + 含 M1 未实现项 subagent/hitl/eval；§5.2 已加漂移 banner）。doc shape 待定（M0-shipped vs M1-target 标注 / 独立 as-built 参考）——非纯文档誊抄，留方向决策
 
 **网络与可靠性基础**（统一设计：28-reliability-primitives）
 - [~] **A.10 全链路 TLS**（落实 P0 #9 in-transit）— Stream B 暴露 endpoint 前必须生效；mTLS 前提。应用层 mTLS (MTLSVerifier + XFCC) 已有；docker-compose nginx TLS 终止待补
