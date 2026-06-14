@@ -25,7 +25,7 @@ WAIT_SERVICES := $(DEV_DATA) $(DEV_APP) $(DEV_LANGFUSE)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build langfuse-reset dev-info
+.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build dev-bootstrap-admin langfuse-reset dev-info
 
 help: ## 列出可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -40,8 +40,31 @@ dev-up: dev-build ## 起全量 dev 栈(full+auth+observability,排除 green)
 	# keycloak 单独起、不 --wait:它的 healthcheck 4s 超时会误报 unhealthy
 	# (实际可用),--wait 会卡死。约 30s 后 :8080 就绪。
 	$(COMPOSE) $(PROFILES) up -d keycloak
+	# 自动提权 dev 用户为 system_admin(P-6 破鸡生蛋)。非致命:Keycloak
+	# 抖动时打印告警但不挡起栈,可事后手动 make dev-bootstrap-admin。
+	@$(MAKE) -s dev-bootstrap-admin || echo "⚠ bootstrap-admin 失败,栈仍可用;就绪后手动: make dev-bootstrap-admin"
 	@echo ""
 	@$(MAKE) -s dev-info
+
+# dev 用户的 Keycloak id 在 realm 导入时随机生成(realm json 未固定),所以
+# 查一次而非硬编码。client_credentials 用 api-internal 服务账号(带 view-users)。
+# bootstrap_admin 在容器内跑:用容器的 HELIX_AGENT_DB_DSN(pgbouncer)+ 已装包,
+# 免 host 的 uv/DB 端口依赖。幂等(重复跑 OK),所以可安全挂进 dev-up。
+dev-bootstrap-admin: ## 提权 dev 用户为 system_admin(幂等;P-6 破鸡生蛋)
+	@echo "bootstrap-admin: 等 Keycloak 就绪 + 取 dev 用户 id..."
+	@SUB=""; for i in $$(seq 1 30); do \
+	  SA=$$(curl -sf http://localhost:8080/realms/helix-agent/protocol/openid-connect/token \
+	    -d grant_type=client_credentials -d client_id=helix-agent-api-internal \
+	    -d client_secret=dev-internal-secret-rotate-me 2>/dev/null \
+	    | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])' 2>/dev/null) || { sleep 2; continue; }; \
+	  SUB=$$(curl -sf "http://localhost:8080/admin/realms/helix-agent/users?username=dev&exact=true" \
+	    -H "Authorization: Bearer $$SA" 2>/dev/null \
+	    | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])' 2>/dev/null) || { sleep 2; continue; }; \
+	  [ -n "$$SUB" ] && break; sleep 2; \
+	done; \
+	if [ -z "$$SUB" ]; then echo "FAILED: 取不到 dev 用户 id(Keycloak 未就绪?)"; exit 1; fi; \
+	echo "dev subject_id = $$SUB"; \
+	$(COMPOSE) $(PROFILES) exec -T control-plane-blue python -m control_plane.bootstrap_admin --subject-id $$SUB
 
 dev-down: ## 停所有 dev 服务(留容器 + 数据卷)
 	$(COMPOSE) $(PROFILES) stop $(WAIT_SERVICES) keycloak

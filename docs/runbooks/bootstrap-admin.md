@@ -1,5 +1,10 @@
 # Bootstrap 第一个平台管理员(system_admin)
 
+> **本地 dev 已自动化**:`infra/Makefile` 的 `make dev-up` 末尾自动跑 `make dev-bootstrap-admin`
+> (幂等),把 dev 用户提权为 system_admin —— 本 runbook §1–2 的手动步骤已封装进该 target
+> (查 dev 用户 id → 容器内跑 `bootstrap_admin`)。单独补跑:`cd infra && make dev-bootstrap-admin`。
+> 下文是机制说明 + 生产/手动路径。
+
 > Stream P / Mini-ADR P-6。解决**鸡生蛋**:建 platform-scope role binding 需要
 > `is_system_admin`(`api/role_bindings.py`),而 `resolve_system_admin` 又只在该
 > binding 已存在时才报 `is_system_admin=True` —— 空 `role_binding` 表里没人能授第一个 admin。
