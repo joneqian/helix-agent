@@ -47,7 +47,9 @@ from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
 from helix_agent.runtime.storage import ObjectStore, ObjectStoreBackend, S3CompatibleConfig
 from helix_agent.runtime.stream_bridge import InMemoryStreamBridge, StreamBridge
 from orchestrator import (
+    ActionJudge,
     BuiltAgent,
+    LLMActionJudge,
     LLMCaller,
     LLMOutputJudge,
     MemoryEnv,
@@ -359,6 +361,29 @@ async def _make_output_judge(
     return LLMOutputJudge(caller=caller)
 
 
+async def _make_action_judge(
+    spec: AgentSpec,
+    *,
+    tenant_id: UUID,
+    credentials_resolver: CredentialsResolver,
+    secret_store: SecretStore,
+    judge_config_service: PlatformJudgeConfigService | None = None,
+) -> ActionJudge | None:
+    """Stream PI-3b-2 — build the action judge when the manifest opts in
+    (``defenses.action_screen != "off"``), over the platform judge model (or
+    the agent's own — see :func:`_build_judge_caller`)."""
+    if spec.spec.defenses.action_screen == "off":
+        return None
+    caller = await _build_judge_caller(
+        spec,
+        tenant_id=tenant_id,
+        credentials_resolver=credentials_resolver,
+        secret_store=secret_store,
+        judge_config_service=judge_config_service,
+    )
+    return LLMActionJudge(caller=caller)
+
+
 def make_agent_builder(
     secret_store: SecretStore,
     checkpointer: BaseCheckpointSaver[Any],
@@ -487,6 +512,18 @@ def make_agent_builder(
             if credentials_resolver is not None and tenant_id is not None
             else None
         )
+        # Stream PI-3b-2 — model-backed action judge, same gating + model source.
+        action_judge = (
+            await _make_action_judge(
+                spec,
+                tenant_id=tenant_id,
+                credentials_resolver=credentials_resolver,
+                secret_store=secret_store,
+                judge_config_service=platform_judge_config_service,
+            )
+            if credentials_resolver is not None and tenant_id is not None
+            else None
+        )
         return await build_agent(
             spec,
             secret_store=secret_store,
@@ -503,6 +540,8 @@ def make_agent_builder(
             audit_logger=audit_logger,
             # Stream PI-2b-3 — gated model-backed output judge.
             output_judge=output_judge,
+            # Stream PI-3b-2 — gated model-backed action judge.
+            action_judge=action_judge,
         )
 
     return _build
