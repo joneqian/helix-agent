@@ -739,6 +739,19 @@ export interface TranslationKeys {
     embedding_err_INVALID_RERANK_PAIR: string;
     embedding_err_RERANK_PROVIDER_KEY_MISSING: string;
     embedding_err_INVALID_RERANK_MODEL: string;
+    judge_heading: string;
+    judge_help_title: string;
+    judge_help_body: string;
+    judge_current: string;
+    judge_unconfigured: string;
+    judge_provider_label: string;
+    judge_model_label: string;
+    judge_save: string;
+    judge_saved: string;
+    judge_clear: string;
+    judge_err_INVALID_JUDGE_PAIR: string;
+    judge_err_JUDGE_PROVIDER_KEY_MISSING: string;
+    judge_err_INVALID_JUDGE_MODEL: string;
   };
   settings_iam: {
     sa_page_title: string;
@@ -2171,6 +2184,21 @@ const en: TranslationKeys = {
     embedding_err_INVALID_RERANK_PAIR: "Set both rerank provider and model, or neither.",
     embedding_err_RERANK_PROVIDER_KEY_MISSING: "The rerank provider has no configured key.",
     embedding_err_INVALID_RERANK_MODEL: "That model can't be used for rerank.",
+    judge_heading: "Output Judge",
+    judge_help_title: "What is the judge model?",
+    judge_help_body:
+      "A separate model that reviews agent replies (and, for tool-using agents, tool calls) for signs of prompt-injection hijacking or secret leakage — a safety backstop above the rule-based screen. Pick a cheap, fast model: it is called often. Leave it unset to reuse each agent's own primary model (more accurate, but pricier and slower). It only runs when an agent's manifest enables output_judge / action_screen.",
+    judge_current: "Current judge model",
+    judge_unconfigured: "Not set — judges reuse each agent's own model.",
+    judge_provider_label: "Judge provider",
+    judge_model_label: "Judge model",
+    judge_save: "Save",
+    judge_saved: "Judge configuration saved.",
+    judge_clear: "Clear (use agent's own model)",
+    judge_err_INVALID_JUDGE_PAIR: "Set both judge provider and model, or neither to clear.",
+    judge_err_JUDGE_PROVIDER_KEY_MISSING:
+      "This provider has no configured key — add it under Providers above first.",
+    judge_err_INVALID_JUDGE_MODEL: "That model can't be used as a judge (pick a chat model).",
   },
   settings_iam: {
     sa_page_title: "Service Accounts",

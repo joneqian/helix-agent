@@ -58,6 +58,7 @@ import { listTenants, type TenantSummary } from "../api/tenants";
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { PlatformEmbeddingSection } from "./settings_platform/PlatformEmbeddingSection";
+import { PlatformJudgeSection } from "./settings_platform/PlatformJudgeSection";
 
 const { Text } = Typography;
 
@@ -528,6 +529,11 @@ export function SettingsPlatformConfig() {
             {t("settings_platform.embedding_heading")}
           </h2>
           <PlatformEmbeddingSection />
+
+          <h2 style={{ fontSize: 15, margin: "20px 0 8px" }}>
+            {t("settings_platform.judge_heading")}
+          </h2>
+          <PlatformJudgeSection />
         </>
       )}
 
