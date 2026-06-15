@@ -62,6 +62,17 @@ x-control-plane-base: &control-plane-base
     HELIX_AGENT_EVAL_WORKER_INTERVAL_S: ${HELIX_AGENT_EVAL_WORKER_INTERVAL_S:-300}
     HELIX_AGENT_EVAL_AGENT_PROVIDER: ${HELIX_AGENT_EVAL_AGENT_PROVIDER:-anthropic}
     HELIX_AGENT_EVAL_AGENT_MODEL: ${HELIX_AGENT_EVAL_AGENT_MODEL:-claude-sonnet-4-6}
+    # 4.4 — Layer B skill-evolution flywheel. OFF by default. Set true in
+    # infra/.env to drain curation candidates: distil a DRAFT skill (aux LLM)
+    # → real graph replay baseline-vs-treatment → grounded verdict → promote.
+    # The aux provider must be one this tenant has a platform credential for.
+    # Intervals are short here for E2E (curation feeds the evolution worker).
+    HELIX_AGENT_ENABLE_SKILL_EVOLUTION_WORKER: ${HELIX_AGENT_ENABLE_SKILL_EVOLUTION_WORKER:-false}
+    HELIX_AGENT_ENABLE_SKILL_ROLLBACK_MONITOR: ${HELIX_AGENT_ENABLE_SKILL_ROLLBACK_MONITOR:-false}
+    HELIX_AGENT_SKILL_EVOLUTION_WORKER_INTERVAL_S: ${HELIX_AGENT_SKILL_EVOLUTION_WORKER_INTERVAL_S:-600}
+    HELIX_AGENT_CURATION_WORKER_INTERVAL_S: ${HELIX_AGENT_CURATION_WORKER_INTERVAL_S:-300}
+    HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_PROVIDER: ${HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_PROVIDER:-anthropic}
+    HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_MODEL: ${HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_MODEL:-claude-sonnet-4-6}
   volumes:
     # The directory always exists (committed .example); the .local inside it
     # is git-ignored, so this bind mount never breaks `up` when a dev hasn't
