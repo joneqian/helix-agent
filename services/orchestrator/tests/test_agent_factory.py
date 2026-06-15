@@ -362,7 +362,10 @@ async def test_build_agent_returns_built_agent() -> None:
         built = await _build(_spec(), secret_store=_secret_store(), checkpointer=cp)
     assert isinstance(built, BuiltAgent)
     assert isinstance(built.graph, CompiledStateGraph)
-    assert built.system_prompt == "you are a test agent"
+    # PI-1: spotlighting is on by default, so the base template is the prefix
+    # and the untrusted-content clause is appended.
+    assert built.system_prompt.startswith("you are a test agent")
+    assert "## Untrusted content" in built.system_prompt
     # Default WorkflowSpec.max_iterations.
     assert built.max_steps == 12
 
