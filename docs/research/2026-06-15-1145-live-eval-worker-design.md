@@ -131,6 +131,24 @@ worker 内建一个固定 **eval harness AgentSpec**，不依赖租户配过 age
 
 诚实预期：deepseek 等模型 judge 有不确定性（PI 期已观察），首跑 safe_rate 可能 < 1；这正是 B 要暴露的真实信号——届时据实报告 + 据此排后续防御工作，不调参美化。
 
+## 6.5 As-built（实现期细化）
+
+实现时几处偏离初稿，据实记录（设计文档假设可能过期规则）：
+
+1. **eval agent tool-less（v1）**：初稿 §2.3 写 `action_screen=block`，但 dev 无零依赖工具、
+   给 eval agent 挂 egress/sandbox 工具要平台 deps。v1 eval spec **不带工具**，只开输出防御链
+   （spotlight+output_screen+output_judge）。后果：① action_screen 不触发（无工具）——但该档已由
+   PI-3b live verify 独立证过，非本 worker 职责；② 对抗集 image-exfil/tool-exfil 两案缺通道会"假安全"，
+   故 `_UNHOSTABLE_ADVERSARIAL_CASES` **显式跳过+log**（非静默砍）。tool 维度 = 后续件（eval agent 长出确定性工具后重纳）。
+2. **trace 抓取不用 `capture_spans`**：该函数调 `init_tracing` 且退出不还原。实测 `init_tracing` 对
+   已有 SDK provider 是 **additive**（`add_span_processor`，不替换），但 `capture_spans` 每次调用都加一个
+   processor（泄漏）。改为 harness init **挂一个** InMemory exporter + 每次 trace eval 包 `helix.eval.run`
+   根 span 按 trace_id 过滤（隔离并发真 run，真导出无损）。
+3. **worker summary 不改**：worker `_execute` 硬编码 `{"pass_count","total"}`，不取 engine 的 aggregate。
+   保持零 worker 改动；safe_rate = pass_count/total 可派生，每 case `scores.safe`/`violations` 落库。
+4. **eval 模型 = settings**：`eval_agent_provider`/`eval_agent_model`（默认 anthropic/claude-sonnet-4-6）。
+   E2E 前须设为平台配了凭证的 provider。
+
 ## 7. 不做（范围闸）
 
 - 不让 job 指定任意租户 agent（评固定 eval harness agent；按 agent_id 评租户 agent 是后续件，结果不可比）。
