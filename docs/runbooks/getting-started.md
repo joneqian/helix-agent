@@ -60,6 +60,16 @@ HELIX_AGENT_ENABLE_EVAL_WORKER=true
 HELIX_AGENT_EVAL_WORKER_INTERVAL_S=15
 HELIX_AGENT_EVAL_AGENT_PROVIDER=deepseek
 HELIX_AGENT_EVAL_AGENT_MODEL=<该 provider 的模型名>
+
+# —— 4.4 skill-evolution 飞轮:从真实轨迹+反馈自动蒸馏/验证/升级 skill(可选,E2E 用)——
+# 默认 OFF。开后 SkillEvolutionWorker 排空 curation candidate:aux LLM 蒸 DRAFT
+# skill → 真 graph replay(有 skill vs 无 skill)→ grounding 判决 → 自动升级/留审。
+# AUX_PROVIDER 必须是本租户平台配了凭证的 provider。interval 设短为 E2E 快跑。
+HELIX_AGENT_ENABLE_SKILL_EVOLUTION_WORKER=true
+HELIX_AGENT_SKILL_EVOLUTION_WORKER_INTERVAL_S=15
+HELIX_AGENT_CURATION_WORKER_INTERVAL_S=15
+HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_PROVIDER=deepseek
+HELIX_AGENT_MEMORY_CONSOLIDATOR_DEFAULT_AUX_MODEL=<该 provider 的模型名>
 ```
 
 生成 KEK:
