@@ -13,6 +13,7 @@ from control_plane.runtime import (
     AgentRuntime,
     ResolvingEmbedder,
     ResolvingReranker,
+    _make_action_judge,
     _make_output_judge,
     make_agent_builder,
     make_image_resolver,
@@ -515,6 +516,74 @@ async def test_make_output_judge_uses_platform_config_provider() -> None:
     with pytest.raises(CredentialsResolverError):
         await _make_output_judge(
             _spec_with_judge("block"),
+            tenant_id=uuid4(),
+            credentials_resolver=_anthropic_credentials_resolver(),
+            secret_store=LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"}),
+            judge_config_service=_FakeJudgeConfig(("openai", "gpt-4o")),  # type: ignore[arg-type]
+        )
+
+
+# ---------------------------------------------------------------------------
+# Stream PI-3b-2 — _make_action_judge gating + construction
+# ---------------------------------------------------------------------------
+
+
+def _spec_with_action(mode: str) -> AgentSpec:
+    manifest = dict(_MINIMAL_MANIFEST)
+    manifest["spec"] = dict(
+        manifest["spec"],
+        model={
+            "provider": "anthropic",
+            "name": "claude-haiku-4-5",
+            "api_key_ref": f"secret://{_ANTHROPIC_KEY_NAME}",
+        },
+        defenses={"action_screen": mode},
+    )
+    return AgentSpec.model_validate(manifest)
+
+
+@pytest.mark.asyncio
+async def test_make_action_judge_off_returns_none() -> None:
+    judge = await _make_action_judge(
+        _spec_with_action("off"),
+        tenant_id=uuid4(),
+        credentials_resolver=_anthropic_credentials_resolver(),
+        secret_store=LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"}),
+    )
+    assert judge is None
+
+
+@pytest.mark.asyncio
+async def test_make_action_judge_block_builds_llm_action_judge() -> None:
+    from orchestrator import LLMActionJudge
+
+    judge = await _make_action_judge(
+        _spec_with_action("block"),
+        tenant_id=uuid4(),
+        credentials_resolver=_anthropic_credentials_resolver(),
+        secret_store=LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"}),
+    )
+    assert isinstance(judge, LLMActionJudge)
+
+
+@pytest.mark.asyncio
+async def test_make_action_judge_approval_also_builds() -> None:
+    from orchestrator import LLMActionJudge
+
+    judge = await _make_action_judge(
+        _spec_with_action("approval"),
+        tenant_id=uuid4(),
+        credentials_resolver=_anthropic_credentials_resolver(),
+        secret_store=LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"}),
+    )
+    assert isinstance(judge, LLMActionJudge)
+
+
+@pytest.mark.asyncio
+async def test_make_action_judge_uses_platform_config_provider() -> None:
+    with pytest.raises(CredentialsResolverError):
+        await _make_action_judge(
+            _spec_with_action("block"),
             tenant_id=uuid4(),
             credentials_resolver=_anthropic_credentials_resolver(),
             secret_store=LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"}),
