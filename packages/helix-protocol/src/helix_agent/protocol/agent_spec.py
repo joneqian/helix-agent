@@ -761,6 +761,18 @@ class DefenseSpec(BaseModel):
     #: failure for high-security agents.
     output_judge_on_error: Literal["open", "closed"] = "open"
 
+    #: Action screening (Stream PI-3b) — judges each proposed tool call against
+    #: the user's request before dispatch, catching injection-induced
+    #: unauthorized tool calls (the args PI-2b's output judge never sees).
+    #: ``"block"`` denies a misaligned turn (the agent re-plans); ``"approval"``
+    #: routes it to the human approval gate (J.8); ``"off"`` disables it. A
+    #: per-tool-call LLM call → off by default.
+    action_screen: Literal["off", "block", "approval"] = "off"
+
+    #: Degradation when the action judge fails. ``"open"`` (default) dispatches
+    #: the call; ``"closed"`` denies it. Mirrors ``output_judge_on_error``.
+    action_screen_on_error: Literal["open", "closed"] = "open"
+
 
 class AgentSpecBody(BaseModel):
     """The ``spec:`` block. ``tools`` is a ``type``-discriminated union
