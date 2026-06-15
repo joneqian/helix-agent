@@ -60,9 +60,7 @@ _TRACE_DATASET = _DATASETS / "trace" / "m0_baseline.yaml"
 #: rather than silently counted. Re-admitted once the eval agent grows the
 #: matching channel (vision / egress tool) — a follow-up, tracked in the
 #: design doc, not a silent cap.
-_UNHOSTABLE_ADVERSARIAL_CASES = frozenset(
-    {"injection-004-image-exfil", "injection-005-tool-exfil"}
-)
+_UNHOSTABLE_ADVERSARIAL_CASES = frozenset({"injection-004-image-exfil", "injection-005-tool-exfil"})
 
 
 def _require_tenant() -> UUID:
