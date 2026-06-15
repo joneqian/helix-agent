@@ -60,6 +60,8 @@ from dataclasses import replace
 from typing import Any, Literal, cast
 from uuid import UUID
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
@@ -105,6 +107,7 @@ from orchestrator.output_judge import ActionJudge, OutputJudge
 from orchestrator.state import AgentState
 from orchestrator.tools.error_classifier import (
     ClassifiedToolError,
+    classified_invalid_arguments,
     classified_mutation_not_landed,
     classify_tool_error,
     render_recovery_advisory,
@@ -1666,6 +1669,32 @@ def _parse_uuid(raw: object) -> UUID | None:
     return None
 
 
+def _validate_tool_args(tool: Tool, args: Mapping[str, Any]) -> str | None:
+    """2.2 — validate ``args`` against the tool's JSON Schema before dispatch.
+
+    Returns ``None`` when valid (or when the tool declares no schema), else a
+    concise, value-free message naming the offending paths + failed keyword.
+    The args are LLM-generated and may be malformed (model slip or injection);
+    catching them here gives the model a grounded fix-it signal instead of an
+    opaque downstream crash. A malformed *schema* (the tool's own bug) is not
+    allowed to block dispatch — we skip validation in that case.
+    """
+    schema = tool.spec.parameters
+    if not schema:
+        return None
+    validator_cls = Draft202012Validator
+    try:
+        validator_cls.check_schema(schema)
+    except SchemaError:
+        return None
+    errors = sorted(validator_cls(schema).iter_errors(args), key=lambda e: list(e.absolute_path))
+    if not errors:
+        return None
+    # Name path + failed keyword only — never echo the offending value.
+    parts = [f"{e.json_path} ({e.validator})" for e in errors[:5]]
+    return "arguments failed schema validation: " + "; ".join(parts)
+
+
 async def _invoke_tool(
     tool: Tool,
     args: dict[str, Any],
@@ -1675,6 +1704,18 @@ async def _invoke_tool(
     overflow_writer: WorkspaceFileWriter | None = None,
     spotlight_nonce: str | None = None,
 ) -> tuple[ToolMessage, Mapping[str, Any], int, ClassifiedToolError | None]:
+    schema_error = _validate_tool_args(tool, args)
+    if schema_error is not None:
+        return (
+            ToolMessage(
+                content=f"[invalid args] {schema_error}",
+                tool_call_id=call_id,
+                status="error",
+            ),
+            {},
+            0,
+            classified_invalid_arguments(tool_name=tool.spec.name, summary=schema_error),
+        )
     try:
         result = await tool.call(args, ctx=ctx)
     except Exception as exc:

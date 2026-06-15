@@ -112,6 +112,24 @@ def classify_tool_error(
     return _make(_classify_by_signal(error), tool_name, summary, spec)
 
 
+def classified_invalid_arguments(*, tool_name: str, summary: str) -> ClassifiedToolError:
+    """Build the ``invalid_arguments`` classification for a 2.2 pre-dispatch
+    schema-validation reject.
+
+    Like :func:`classified_mutation_not_landed`, there is no exception to
+    classify — the orchestrator rejected the ``tool_call`` args against the
+    tool's JSON Schema before ever calling it. ``retryable=False``: a blind
+    replay of the same bad args is pointless; the model must fix them.
+    """
+    return ClassifiedToolError(
+        tool_name=tool_name,
+        error_class="invalid_arguments",
+        summary=summary,
+        retryable=False,
+        advice=_ADVICE["invalid_arguments"],
+    )
+
+
 def classified_mutation_not_landed(
     *, tool_name: str, summary: str, path: str | None
 ) -> ClassifiedToolError:
