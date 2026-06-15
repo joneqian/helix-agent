@@ -50,6 +50,16 @@ HELIX_AGENT_SECRET_ENCRYPTION_KEY=<下方命令的输出,base64 32 字节 KEK>
 
 # —— 成员 onboarding:用真 Keycloak 建真账号(Stream R)——
 HELIX_AGENT_KEYCLOAK_ENABLED=true
+
+# —— 11.4/11.5 live eval worker:对真 agent 跑 adversarial/trace 评测(可选,E2E 用)——
+# 默认全 OFF(enqueue API 仍能排队,只是没人 drain)。要在 /eval-runs 跑
+# adversarial / trace_eval suite 时才开。EVAL_AGENT_PROVIDER 必须是本租户
+# 平台配了凭证的 provider(走 resolve_provider 取 key),否则 build 失败→job ERROR。
+# interval 设短(15s)是为 E2E 快排空;生产用默认 300。
+HELIX_AGENT_ENABLE_EVAL_WORKER=true
+HELIX_AGENT_EVAL_WORKER_INTERVAL_S=15
+HELIX_AGENT_EVAL_AGENT_PROVIDER=deepseek
+HELIX_AGENT_EVAL_AGENT_MODEL=<该 provider 的模型名>
 ```
 
 生成 KEK:
