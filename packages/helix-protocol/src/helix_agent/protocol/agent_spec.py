@@ -742,6 +742,12 @@ class DefenseSpec(BaseModel):
     #: system-prompt clause. ``"off"`` disables it. Model-agnostic, on by default.
     prompt_injection: Literal["spotlight", "off"] = "spotlight"
 
+    #: Output screening (Stream PI-2) — the backstop for inline injection that
+    #: spotlighting can't wrap. ``"block"`` scans each model response for
+    #: credential leaks / data-exfil forms and replaces a hit with a refusal;
+    #: ``"off"`` disables it. Rule-based, model-agnostic, on by default.
+    output_screen: Literal["block", "off"] = "block"
+
 
 class AgentSpecBody(BaseModel):
     """The ``spec:`` block. ``tools`` is a ``type``-discriminated union

@@ -680,6 +680,8 @@ async def build_agent(
         approval_timeout_s=spec.spec.policies.approval_timeout_s,
         memory_recall_mode=memory_recall_mode,
         spotlight_nonce=spotlight_nonce,
+        # Stream PI-2 — output screening backstop for inline injection.
+        output_screen=spec.spec.defenses.output_screen == "block",
         # Stream HX-13 — vendor-native tool-disclosure tier (catalog bit;
         # off-catalog / unannotated models stay on the HX-12 tier).
         tool_disclosure=_resolved_tool_disclosure(spec.spec.model),

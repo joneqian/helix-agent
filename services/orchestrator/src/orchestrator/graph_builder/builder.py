@@ -71,6 +71,7 @@ from helix_agent.common.observability import (
     helix_histogram,
     helix_span,
 )
+from helix_agent.common.output_screen import REFUSAL_TEXT, screen_output
 from helix_agent.common.spotlight import spotlight_untrusted
 from helix_agent.common.uplift_metrics import record_memory_inject_mode
 from helix_agent.protocol import AuditAction, AuditEntry, AuditResult, MemoryItem, Plan
@@ -241,6 +242,14 @@ _cm_effort_escalation_total = helix_counter(
     "Turns served by the escalated higher-effort caller (Stream CM-9).",
     ("signal",),
 )
+# Stream PI-2 — model responses blocked by output screening, by the violation
+# category that fired (``secret`` / ``exfil_url`` / ``canary``). A non-zero
+# rate here is the inline-injection backstop catching a leak the model emitted.
+_output_screen_blocked_total = helix_counter(
+    "helix_output_screen_blocked_total",
+    "Model responses blocked by PI-2 output screening, by violation category.",
+    ("category",),
+)
 
 #: Truncate raw exception strings before they go to the LLM. Avoids
 #: dumping multi-MB tracebacks into messages. Per-tool truncation
@@ -296,6 +305,10 @@ def build_react_graph(
     # results) are spotlighted (datamarked + nonce-fenced) before the model
     # sees them. ``None`` (default) keeps the pre-PI behaviour byte-identical.
     spotlight_nonce: str | None = None,
+    # Stream PI-2 — when True, each model response is screened for credential
+    # leaks / data-exfil forms and a hit is replaced with a refusal (the
+    # inline-injection backstop). ``False`` (default) keeps the path unchanged.
+    output_screen: bool = False,
 ) -> StateGraph[AgentState, None, AgentState, AgentState]:
     """Assemble the ReAct ``StateGraph`` and return it uncompiled.
 
@@ -563,6 +576,12 @@ def build_react_graph(
                 response = await token.run_cancellable(
                     active_caller(messages=messages, tools=tools)
                 )
+
+        # Stream PI-2 — output screening backstop. Catch a credential leak /
+        # exfil form the model emitted (e.g. driven by an inline injection
+        # spotlighting can't wrap) before it reaches the user or a tool.
+        if output_screen:
+            response = _screen_model_response(response)
 
         if after_llm_chain is not None:
             after_messages: list[BaseMessage] = [*messages, response]
@@ -1064,6 +1083,23 @@ def _extract_tool_calls(message: BaseMessage) -> list[dict[str, Any]]:
     if not raw:
         return []
     return cast(list[dict[str, Any]], raw)
+
+
+def _screen_model_response(response: AIMessage) -> AIMessage:
+    """Stream PI-2 — screen a model response; refuse a flagged one.
+
+    Returns ``response`` unchanged when clean, else a fresh refusal
+    :class:`AIMessage` carrying **no tool_calls** — a blocked response must
+    terminate the turn rather than proceed to a possibly-injected tool call.
+    The matched value is never logged (only the category that fired).
+    """
+    verdict = screen_output(str(response.content))
+    if not verdict.blocked:
+        return response
+    for category in verdict.categories:
+        _output_screen_blocked_total.labels(category=category).inc()
+    logger.warning("output_screen.blocked categories=%s", ",".join(verdict.categories))
+    return AIMessage(content=REFUSAL_TEXT)
 
 
 def _extract_post_llm_messages(
