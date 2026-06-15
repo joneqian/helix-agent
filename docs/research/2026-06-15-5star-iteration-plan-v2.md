@@ -32,10 +32,12 @@
 |---|---|---|---|---|
 | ~~2.2 schema 校验~~ | ✅★5 | **已交付（#647）**：tool_call args 派发前过 jsonschema Draft validator + invalid_arguments 归类 | M·M | — |
 | ~~4.1 工作记忆~~ | ✅★5 | **确认（无需改码）**：CM-2 廉价滑窗默认激活（`WorkingMemoryPolicy.enabled=True`，token-gated）+ 测 + metrics；重核当时保守标★4，实为 ★5 | M·H | — |
-| **11.4 trace-based eval** | ★4 | 接 `run_baseline._RUNNERS` + EvalWorker suite（设计文档已标"additive follow-up"） | H·H | S(<1h) |
-| **11.5 对抗集** | ★4 | 同上接 worker suite + 确定性 responder（PI-2a/3b 已扩集） | M·H | S–M |
+| **11.4 trace-based eval** | ★4→进行中 | **B 路径（用户拍板，非廉价 A）**：接生产 EvalWorker 对**真 agent+真模型**跑，TraceEvalEngine asserts 真 span 树。后端+admin-ui 已交付，待 E2E 真栈验证 | H·H | M |
+| **11.5 对抗集** | ★4→进行中 | **B 路径**：AdversarialEvalEngine 复用 safety_verdict 判真模型回复（输出防御链全开）。后端+admin-ui 已交付，待 E2E | M·H | M |
 
-> T0 进度：2.2 + 4.1 已 ★5；剩 11.4/11.5 接 worker suite。均分已升至 4.60。
+> T0 进度：2.2 + 4.1 已 ★5。11.4/11.5 用户改走 **B（真 agent eval in worker，非廉价 A 确定性 runner）**，
+> 见 `2026-06-15-1145-live-eval-worker-design.md`；代码已合，★5 判定待 E2E 真栈验证（safe_rate / trace-pass）。
+> 均分 4.60（B 验证通过后 11.4/11.5→★5 再 +2★）。
 
 ### T1 — Agent 能力护城河（★4/★3→★5，高 CAP）
 
