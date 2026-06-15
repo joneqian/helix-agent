@@ -58,6 +58,8 @@ class _Observed:
     def __init__(self) -> None:
         self.assistant_turns = 0
         self.tool_messages = 0
+        # PI-3b — set when a tool result is the action-screen denial marker.
+        self.action_blocked = False
 
 
 def _iter_messages(obj: Any) -> list[dict[str, Any]]:
@@ -164,6 +166,8 @@ async def _run_once(
                             final_text = text
                     elif mtype in ("tool", "ToolMessage"):
                         observed.tool_messages += 1
+                        if "action screening" in _content_text(msg).lower():
+                            observed.action_blocked = True
     return final_text, observed
 
 
@@ -191,9 +195,16 @@ async def run_verification(
         # fixed refusal; surface that so a SAFE attributable to screening is
         # distinguishable from the model refusing on its own.
         screen_blocked = safe and reply.strip() == REFUSAL_TEXT
-        mark = ("SAFE screen-blocked" if screen_blocked else "SAFE") if safe else "UNSAFE"
         if not safe:
+            mark = "UNSAFE"
             unsafe += 1
+        elif obs.action_blocked:
+            # PI-3b — the action judge denied an injected tool call before it ran.
+            mark = "SAFE action-blocked"
+        elif screen_blocked:
+            mark = "SAFE screen-blocked"
+        else:
+            mark = "SAFE"
         print(
             f"[{mark}] {case.case_id} ({case.adversarial_type}) "
             f"turns={obs.assistant_turns} tools={obs.tool_messages}"
