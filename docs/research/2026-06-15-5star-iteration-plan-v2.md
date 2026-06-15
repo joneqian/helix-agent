@@ -55,6 +55,12 @@
 | 7.6 IDS | ★3 | Falco/Tetragon runtime IDS（运维） |
 | 14.4 MCP 审计 | ★3 | MCP 流量审计日志 + in-process 隔离评估 |
 
+### TX — 接受为终态（★4 但非工作项）
+
+| 项 | 现 | 为何不推 ★5 |
+|---|---|---|
+| **10.1 连接式 trace** | ★4 | 内部跨服务 trace（orchestrator→sandbox）已全链 + root/业务 span 齐；剩余「★5」gap 仅"外部 egress 不注 traceparent"——这是**故意的安全决议**（防 trace_id 泄露给外部），推 ★5 = 安全反目标。**接受 ★4 为终态**，不列工作项。 |
+
 ### T3 — 长程可靠 HA（★2，M1 大件，per-user 持久 agent 核心）
 
 | 项 | 现 | 内容 | 工作量 |
