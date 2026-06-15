@@ -17,9 +17,9 @@
 
 → 优先级重心从「补沙箱安全」转向「**收割廉价 ★4→★5 + agent 能力项**」。
 
-## 当前非满分项（19 项；2.2/4.1 已收为 ★5）
+## 当前非满分项（17 项；2.2/4.1/11.4/11.5 已收为 ★5）
 
-★4（一步之遥，多为低成本）：11.4 · 11.5 · 4.4 · 1.3 · 7.3 · 7.4 · 10.1
+★4（一步之遥，多为低成本）：4.4 · 1.3 · 7.3 · 7.4 · 10.1
 ★3（真 gap）：3.3 · 7.2 · 8.5 · 7.6 · 14.4 · 13.2 · 16.4 · 16.3 · 10.5 · 12.4
 ★2（M1 大件）：9.4 · 9.5
 ✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
@@ -32,12 +32,12 @@
 |---|---|---|---|---|
 | ~~2.2 schema 校验~~ | ✅★5 | **已交付（#647）**：tool_call args 派发前过 jsonschema Draft validator + invalid_arguments 归类 | M·M | — |
 | ~~4.1 工作记忆~~ | ✅★5 | **确认（无需改码）**：CM-2 廉价滑窗默认激活（`WorkingMemoryPolicy.enabled=True`，token-gated）+ 测 + metrics；重核当时保守标★4，实为 ★5 | M·H | — |
-| **11.4 trace-based eval** | ★4→进行中 | **B 路径（用户拍板，非廉价 A）**：接生产 EvalWorker 对**真 agent+真模型**跑，TraceEvalEngine asserts 真 span 树。后端+admin-ui 已交付，待 E2E 真栈验证 | H·H | M |
-| **11.5 对抗集** | ★4→进行中 | **B 路径**：AdversarialEvalEngine 复用 safety_verdict 判真模型回复（输出防御链全开）。后端+admin-ui 已交付，待 E2E | M·H | M |
+| ~~11.4 trace-based eval~~ | ✅★5 | **B 路径已交付+E2E 实证**（#649/#652）：TraceEvalEngine 对真 agent+真模型跑，asserts 真 OTel span 树。本机真栈 **passed 3/3** | H·H | — |
+| ~~11.5 对抗集~~ | ✅★5 | **B 路径已交付+E2E 实证**（#649/#652）：AdversarialEvalEngine 复用 safety_verdict 判真模型回复（输出防御链全开）。本机真栈 **5/6**（机制证实；1 真发现 injection-003 泄漏） | M·H | — |
 
-> T0 进度：2.2 + 4.1 已 ★5。11.4/11.5 用户改走 **B（真 agent eval in worker，非廉价 A 确定性 runner）**，
-> 见 `2026-06-15-1145-live-eval-worker-design.md`；代码已合，★5 判定待 E2E 真栈验证（safe_rate / trace-pass）。
-> 均分 4.60（B 验证通过后 11.4/11.5→★5 再 +2★）。
+> T0 全清：2.2 + 4.1 + 11.4 + 11.5 已 ★5。11.4/11.5 用户拍板走 **B（真 agent eval in worker，非廉价 A 确定性 runner）**，
+> 见 `2026-06-15-1145-live-eval-worker-design.md` §8 E2E 实证；代码 #649/#652 已合，本机真栈（deepseek eval agent）
+> trace passed 3/3 / adversarial 5/6（机制证实，1 真防御观测非假阴）。**均分 4.60→4.63（+2★，398/430）**。
 
 ### T1 — Agent 能力护城河（★4/★3→★5，高 CAP）
 
