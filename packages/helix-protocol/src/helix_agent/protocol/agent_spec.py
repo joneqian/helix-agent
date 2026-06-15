@@ -732,6 +732,17 @@ class SubAgentSpec(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class DefenseSpec(BaseModel):
+    """Stream PI-1 — runtime prompt-injection defenses applied at agent build."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Spotlighting (datamarking + delimiting, arXiv 2403.14720) of untrusted
+    #: channels — retrieved memory / RAG, and tool results — plus the matching
+    #: system-prompt clause. ``"off"`` disables it. Model-agnostic, on by default.
+    prompt_injection: Literal["spotlight", "off"] = "spotlight"
+
+
 class AgentSpecBody(BaseModel):
     """The ``spec:`` block. ``tools`` is a ``type``-discriminated union
     (Mini-ADR E-14); the orchestrator's ``build_tool_registry`` maps
@@ -745,6 +756,7 @@ class AgentSpecBody(BaseModel):
     model: ModelSpec
     system_prompt: SystemPromptSpec
     dynamic_context: DynamicContextSpec = Field(default_factory=DynamicContextSpec)
+    defenses: DefenseSpec = Field(default_factory=DefenseSpec)
     tools: list[ToolSpecEntry] = Field(default_factory=list)
     subagents: list[SubAgentSpec] = Field(
         default_factory=list,

@@ -132,7 +132,8 @@ async def test_build_agent_no_skills_no_resolver_works(cp: BaseCheckpointSaver[o
     """An empty ``spec.skills`` builds cleanly without a resolver."""
     spec = AgentSpec.model_validate(_MINIMAL_SPEC)
     built = await _build(spec, secret_store=_secret_store(), checkpointer=cp)
-    assert built.system_prompt == "you are an agent"
+    # PI-1: spotlighting on by default appends the untrusted-content clause.
+    assert built.system_prompt.startswith("you are an agent")
 
 
 @pytest.mark.asyncio

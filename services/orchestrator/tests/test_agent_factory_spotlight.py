@@ -1,0 +1,31 @@
+"""Spotlighting system-prompt clause wiring — Stream PI-1.
+
+``_assemble_system_prompt`` appends the spotlighting clause when the agent's
+``defenses.prompt_injection`` resolves to ``spotlight`` (the manifest default).
+Channel content-wrapping (memory/RAG, tool results) is PI-1b.
+"""
+
+from __future__ import annotations
+
+from helix_agent.common.spotlight import SPOTLIGHT_SYSTEM_CLAUSE
+from orchestrator.agent_factory import _assemble_system_prompt
+
+
+def test_spotlight_appends_clause_to_base() -> None:
+    prompt = _assemble_system_prompt(base="BASE", skill_fragments=[], spotlight=True)
+    assert prompt.startswith("BASE")
+    assert SPOTLIGHT_SYSTEM_CLAUSE in prompt
+
+
+def test_no_spotlight_leaves_base_unchanged() -> None:
+    prompt = _assemble_system_prompt(base="BASE", skill_fragments=[], spotlight=False)
+    assert prompt == "BASE"
+    assert SPOTLIGHT_SYSTEM_CLAUSE not in prompt
+
+
+def test_spotlight_clause_coexists_with_skill_blocks() -> None:
+    prompt = _assemble_system_prompt(
+        base="BASE", skill_fragments=["<skill>BODY</skill>"], spotlight=True
+    )
+    assert SPOTLIGHT_SYSTEM_CLAUSE in prompt
+    assert "BODY" in prompt

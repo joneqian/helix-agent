@@ -413,7 +413,8 @@ async def test_make_agent_builder_no_skills_still_builds() -> None:
         credentials_resolver=_anthropic_credentials_resolver(),
     )
     built = await builder(_spec_with_skills(None), tenant_id=uuid4())
-    assert built.system_prompt == "you help"
+    # PI-1: spotlighting on by default appends the untrusted-content clause.
+    assert built.system_prompt.startswith("you help")
 
 
 @pytest.mark.asyncio

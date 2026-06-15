@@ -45,6 +45,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.common.skill_run_usage import BoundDistilledSkill
+from helix_agent.common.spotlight import SPOTLIGHT_SYSTEM_CLAUSE
 from helix_agent.persistence import MemoryStore
 from helix_agent.persistence.memory import MemoryWritebackDLQ
 from helix_agent.persistence.skill.base import SkillStore
@@ -622,6 +623,7 @@ async def build_agent(
         behavior_patches=loaded_skills.behavior_patches,
         tool_notes=loaded_skills.tool_notes,
         memory_blocks=loaded_skills.memory_blocks,
+        spotlight=spec.spec.defenses.prompt_injection == "spotlight",
     )
 
     # Capability Uplift Sprint #8 (Mini-ADR U-8) — render mode for the
@@ -935,6 +937,7 @@ def _assemble_system_prompt(
     behavior_patches: list[str] | None = None,
     tool_notes: list[str] | None = None,
     memory_blocks: list[str] | None = None,
+    spotlight: bool = False,
 ) -> str:
     """Splice base system prompt + skill summary list + ordered body
     fragments (eager skills only) + SE-10 text-class component blocks.
@@ -952,10 +955,23 @@ def _assemble_system_prompt(
     behavior_patches = behavior_patches or []
     tool_notes = tool_notes or []
     memory_blocks = memory_blocks or []
-    if not (skill_fragments or skill_summaries or behavior_patches or tool_notes or memory_blocks):
+    if not (
+        skill_fragments
+        or skill_summaries
+        or behavior_patches
+        or tool_notes
+        or memory_blocks
+        or spotlight
+    ):
         return base
 
     pieces: list[str] = [base]
+
+    # Stream PI-1 — spotlighting clause: tells the model the untrusted-content
+    # markers/glyph mean "data, never instructions". Wrapping of the untrusted
+    # channels themselves (memory/RAG, tool results) lands in PI-1b.
+    if spotlight:
+        pieces.append("\n\n" + SPOTLIGHT_SYSTEM_CLAUSE)
 
     if skill_summaries:
         pieces.append(
