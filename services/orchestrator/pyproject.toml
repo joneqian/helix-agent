@@ -30,6 +30,9 @@ dependencies = [
     # search in helix-persistence).
     "rank-bm25>=0.2,<1",
     "jieba>=0.42,<1",
+    # 2.2 — runtime validation of tool_call args against ToolSpec.parameters
+    # (the JSON Schema bound to the LLM) before dispatch.
+    "jsonschema>=4.20,<5",
 ]
 
 [build-system]
