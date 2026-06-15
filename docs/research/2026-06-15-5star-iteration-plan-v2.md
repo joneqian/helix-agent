@@ -17,11 +17,12 @@
 
 → 优先级重心从「补沙箱安全」转向「**收割廉价 ★4→★5 + agent 能力项**」。
 
-## 当前非满分项（21 项，重核后）
+## 当前非满分项（19 项；2.2/4.1 已收为 ★5）
 
-★4（一步之遥，多为低成本）：11.4 · 11.5 · 4.4 · 1.3 · 4.1 · 7.3 · 7.4 · 10.1 · **2.2(新)**
+★4（一步之遥，多为低成本）：11.4 · 11.5 · 4.4 · 1.3 · 7.3 · 7.4 · 10.1
 ★3（真 gap）：3.3 · 7.2 · 8.5 · 7.6 · 14.4 · 13.2 · 16.4 · 16.3 · 10.5 · 12.4
 ★2（M1 大件）：9.4 · 9.5
+✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
 
 ## 重排后的层级
 
@@ -29,12 +30,12 @@
 
 | 项 | 现 | 内容 | BV·CAP | 工作量 |
 |---|---|---|---|---|
+| ~~2.2 schema 校验~~ | ✅★5 | **已交付（#647）**：tool_call args 派发前过 jsonschema Draft validator + invalid_arguments 归类 | M·M | — |
+| ~~4.1 工作记忆~~ | ✅★5 | **确认（无需改码）**：CM-2 廉价滑窗默认激活（`WorkingMemoryPolicy.enabled=True`，token-gated）+ 测 + metrics；重核当时保守标★4，实为 ★5 | M·H | — |
 | **11.4 trace-based eval** | ★4 | 接 `run_baseline._RUNNERS` + EvalWorker suite（设计文档已标"additive follow-up"） | H·H | S(<1h) |
-| **11.5 对抗集** | ★4 | 同上接 worker suite + model-backed responder（PI-2a/3b 已扩集） | M·H | S–M |
-| **2.2 schema 校验** | ★4 | tool_call args 派发前过 jsonschema Draft validator（纯防御纵深，低成本） | M·M | S |
-| **4.1 工作记忆** | ★4 | CM-2 滑窗已接线+测；核 ★4→★5 残余 gap（可能已达 ★5，确认即升） | M·H | XS |
+| **11.5 对抗集** | ★4 | 同上接 worker suite + 确定性 responder（PI-2a/3b 已扩集） | M·H | S–M |
 
-> T0 四项全 ≤1 天，做完 4 项升 5★，均分 +~0.05。**ROI 最高，无依赖，建议先清。**
+> T0 进度：2.2 + 4.1 已 ★5；剩 11.4/11.5 接 worker suite。均分已升至 4.60。
 
 ### T1 — Agent 能力护城河（★4/★3→★5，高 CAP）
 
