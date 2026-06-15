@@ -91,6 +91,7 @@ from orchestrator.context import (
 )
 from orchestrator.errors import MaxStepsExceededError
 from orchestrator.graph_builder._approval import (
+    ApprovalTarget,
     apply_resume_decision,
     build_approval_request,
     find_approval_target,
@@ -100,7 +101,7 @@ from orchestrator.graph_builder.memory import MemoryNode, PreCompactionFlush
 from orchestrator.graph_builder.planner import PlannerNode, render_plan
 from orchestrator.graph_builder.reflect import ReflectNode
 from orchestrator.llm import LLMCaller
-from orchestrator.output_judge import OutputJudge
+from orchestrator.output_judge import ActionJudge, OutputJudge
 from orchestrator.state import AgentState
 from orchestrator.tools.error_classifier import (
     ClassifiedToolError,
@@ -259,6 +260,14 @@ _output_judge_total = helix_counter(
     "PI-2b output-judge rulings by verdict (aligned/misaligned/leak/error).",
     ("verdict",),
 )
+# Stream PI-3b — action-judge rulings on proposed tool calls
+# (``aligned`` / ``misaligned`` / ``error``). A misaligned call is denied
+# (block mode) or routed to the approval gate (approval mode).
+_action_screen_total = helix_counter(
+    "helix_action_screen_total",
+    "PI-3b action-judge rulings on tool calls (aligned/misaligned/error).",
+    ("verdict",),
+)
 
 #: Truncate raw exception strings before they go to the LLM. Avoids
 #: dumping multi-MB tracebacks into messages. Per-tool truncation
@@ -325,6 +334,13 @@ def build_react_graph(
     # fail-open (default) vs fail-closed degradation when the judge call fails.
     output_judge: OutputJudge | None = None,
     output_judge_on_error: Literal["open", "closed"] = "open",
+    # Stream PI-3b — when set + ``action_screen`` is on, each proposed tool
+    # call is judged for alignment before dispatch; a misaligned turn is denied
+    # ("block") or routed to the approval gate ("approval"). ``None`` / "off"
+    # keeps the dispatch path unchanged.
+    action_judge: ActionJudge | None = None,
+    action_screen: Literal["off", "block", "approval"] = "off",
+    action_screen_on_error: Literal["open", "closed"] = "open",
 ) -> StateGraph[AgentState, None, AgentState, AgentState]:
     """Assemble the ReAct ``StateGraph`` and return it uncompiled.
 
@@ -716,6 +732,47 @@ def build_react_graph(
             # arg-rewritten) calls; clear the resume channel on return.
             tool_calls = resume_outcome.tool_calls
         elif not state.get("pending_approval"):
+            # Stream PI-3b — action screening: judge each proposed tool call
+            # against the user's request before dispatch. A misaligned turn is
+            # denied (block) or routed to the approval gate (approval).
+            if action_screen != "off" and action_judge is not None:
+                bad_idx = await _first_misaligned_action(
+                    tool_calls,
+                    state["messages"],
+                    judge=action_judge,
+                    on_error=action_screen_on_error,
+                    token=token,
+                )
+                if bad_idx is not None:
+                    if action_screen == "approval":
+                        configurable = config.get("configurable") or {}
+                        thread_id = str(configurable.get("run_id") or "run")
+                        return {
+                            "pending_approval": build_approval_request(
+                                ApprovalTarget(
+                                    index=bad_idx,
+                                    tool_call=tool_calls[bad_idx],
+                                    is_agent_initiated=False,
+                                ),
+                                thread_id=thread_id,
+                                timeout_s=approval_timeout_s,
+                            )
+                        }
+                    # block — deny the whole turn (one error ToolMessage per
+                    # call so no tool_call is left orphaned); the agent re-plans.
+                    return {
+                        "messages": [
+                            ToolMessage(
+                                content=(
+                                    "[blocked] action screening: a tool call did not match "
+                                    "your request and was not run"
+                                ),
+                                tool_call_id=str(call.get("id") or ""),
+                                status="error",
+                            )
+                            for call in tool_calls
+                        ]
+                    }
             target = find_approval_target(tool_calls, _gated_tools)
             if target is not None:
                 configurable = config.get("configurable") or {}
@@ -1177,6 +1234,42 @@ async def _judge_model_response(
         return AIMessage(content=REFUSAL_TEXT)
     _output_judge_total.labels(verdict="aligned").inc()
     return response
+
+
+async def _first_misaligned_action(
+    tool_calls: list[dict[str, Any]],
+    messages: Sequence[BaseMessage],
+    *,
+    judge: ActionJudge,
+    on_error: Literal["open", "closed"],
+    token: CancellationToken,
+) -> int | None:
+    """Stream PI-3b — judge every proposed tool call; return the index of the
+    first misaligned one (or ``None`` when all align).
+
+    Records a per-call ``aligned`` / ``misaligned`` / ``error`` metric. A judge
+    failure routes through ``on_error``: ``"open"`` treats the call as aligned
+    (best-effort backstop), ``"closed"`` treats it as misaligned. Never logs
+    the args.
+    """
+    user_request = _latest_human_text(messages)
+    first_bad: int | None = None
+    for index, call in enumerate(tool_calls):
+        name = str(call.get("name", ""))
+        args = call.get("args") or {}
+        try:
+            verdict = await token.run_cancellable(
+                judge.judge_action(user_request=user_request, tool_name=name, tool_args=args)
+            )
+        except Exception:
+            _action_screen_total.labels(verdict="error").inc()
+            bad = on_error == "closed"
+        else:
+            bad = verdict.blocked
+            _action_screen_total.labels(verdict="misaligned" if bad else "aligned").inc()
+        if bad and first_bad is None:
+            first_bad = index
+    return first_bad
 
 
 def _extract_post_llm_messages(

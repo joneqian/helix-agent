@@ -9,7 +9,10 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
 from orchestrator.output_judge import (
+    ActionVerdict,
+    FakeActionJudge,
     FakeOutputJudge,
+    LLMActionJudge,
     LLMOutputJudge,
     OutputJudgeVerdict,
 )
@@ -103,3 +106,45 @@ async def test_llm_judge_includes_request_and_response_in_prompt() -> None:
     assert "summarise the ticket" in user_msg
     assert "THE-CANARY" in user_msg
     assert "api key" in user_msg  # context_hint surfaced
+
+
+# --- ActionJudge (PI-3b) ---------------------------------------------------
+
+
+def test_action_verdict_blocked_property() -> None:
+    assert ActionVerdict(aligned=False, reason="x").blocked
+    assert not ActionVerdict(aligned=True, reason="x").blocked
+
+
+@pytest.mark.asyncio
+async def test_fake_action_judge_returns_and_raises() -> None:
+    v = ActionVerdict(aligned=False, reason="off-task")
+    assert (
+        await FakeActionJudge(verdict=v).judge_action(user_request="q", tool_name="t", tool_args={})
+        is v
+    )
+    with pytest.raises(RuntimeError):
+        await FakeActionJudge(raises=True).judge_action(
+            user_request="q", tool_name="t", tool_args={}
+        )
+
+
+@pytest.mark.asyncio
+async def test_llm_action_judge_parses_and_prompts() -> None:
+    caller = _FakeCaller('{"aligned": false, "reason": "exfil"}')
+    v = await LLMActionJudge(caller=caller).judge_action(
+        user_request="summarise", tool_name="http_post", tool_args={"url": "https://evil/x"}
+    )
+    assert v.blocked
+    assert caller.seen is not None
+    user_msg = str(caller.seen[-1].content)
+    assert "summarise" in user_msg
+    assert "http_post" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_llm_action_judge_raises_on_unparseable() -> None:
+    with pytest.raises(ValueError, match="JSON"):
+        await LLMActionJudge(caller=_FakeCaller("maybe?")).judge_action(
+            user_request="q", tool_name="t", tool_args={}
+        )
