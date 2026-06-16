@@ -18,15 +18,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from helix_agent.protocol import Plan
 from helix_agent.runtime.cancellation import CancellationToken
+from orchestrator.tools._budget import WorkerSpawnBudget
 from orchestrator.tools.ranking import build_document, rank_tools
-
-if TYPE_CHECKING:
-    from orchestrator.tools.spawn_worker import WorkerSpawnBudget
 
 #: Stream TE-1 — a tool's effect on the world. Descriptive metadata only in
 #: TE-1; intended to drive the side-effect-aware scheduler / approval gate

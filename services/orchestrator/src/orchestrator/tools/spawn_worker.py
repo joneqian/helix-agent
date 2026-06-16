@@ -27,20 +27,29 @@ deadline, and the per-tenant quota engine bound cost structurally.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from helix_agent.common.observability import helix_counter
 from helix_agent.runtime.cancellation import RunCancelledError
+from orchestrator.tools._budget import WorkerSpawnBudget
 from orchestrator.tools._child_run import run_child_to_result
 from orchestrator.tools.registry import ToolBlockedError, ToolContext, ToolResult, ToolSpec
 from orchestrator.trajectory import TrajectoryRecorder
+
+# Re-exported for back-compat: callers import WorkerSpawnBudget from here.
+__all__ = [
+    "SPAWN_WORKER_TOOL_NAME",
+    "SpawnWorkerTool",
+    "WorkerAgentBuilder",
+    "WorkerBuildFn",
+    "WorkerSpawnBudget",
+]
 
 if TYPE_CHECKING:
     from helix_agent.protocol import AgentSpec
@@ -59,37 +68,6 @@ _workers_blocked = helix_counter(
 
 #: The spawn_worker tool name handed to the parent LLM.
 SPAWN_WORKER_TOOL_NAME = "spawn_worker"
-
-
-@dataclass
-class WorkerSpawnBudget:
-    """Per-run spawn budget — a cumulative count cap + a concurrency gate.
-
-    Created once per run (in ``sse.run_agent``) from the platform settings
-    and threaded through :class:`ToolContext` so every ``spawn_worker`` call
-    in the run shares it. ``max_per_run`` bounds total spawns across all
-    turns; the semaphore bounds how many workers run at once.
-    """
-
-    max_per_run: int
-    max_concurrent: int
-    _spawned: int = 0
-    _sem: asyncio.Semaphore = field(init=False)
-
-    def __post_init__(self) -> None:
-        self._sem = asyncio.Semaphore(self.max_concurrent)
-
-    def try_reserve(self) -> bool:
-        """Count one spawn against the per-run cap; ``False`` if exhausted."""
-        if self._spawned >= self.max_per_run:
-            return False
-        self._spawned += 1
-        return True
-
-    @asynccontextmanager
-    async def concurrency(self) -> AsyncIterator[None]:
-        async with self._sem:
-            yield
 
 
 @runtime_checkable
