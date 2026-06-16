@@ -53,8 +53,13 @@ class RoleBindingRow(Base):
     # Stream 8.5 — ABAC narrowing conditions (resource_ids / labels /
     # owner_only) serialized as JSONB. NULL ⇒ unconditioned (type-wide grant).
     # Only valid on tenant-scope rows; the CHECK below enforces NULL for
-    # platform-scope bindings.
-    conditions: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # platform-scope bindings. ``none_as_null=True`` is REQUIRED: without it
+    # SQLAlchemy stores Python ``None`` as a JSONB ``null`` value (not SQL
+    # NULL), so ``conditions IS NULL`` is false and the platform-scope CHECK
+    # rejects every conditionless platform binding.
+    conditions: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     granted_by: Mapped[str] = mapped_column(Text, nullable=False)
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

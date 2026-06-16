@@ -40,7 +40,9 @@ def test_empty_conditions_match_any() -> None:
 def test_resource_ids_allowlist_hit_and_miss() -> None:
     c = BindingConditions(resource_ids=("agent-foo", "agent-bar"))
     assert conditions_match(c, attrs=ResourceAttrs(resource_id="agent-foo"), subject_id=_SUBJECT)
-    assert not conditions_match(c, attrs=ResourceAttrs(resource_id="agent-zzz"), subject_id=_SUBJECT)
+    assert not conditions_match(
+        c, attrs=ResourceAttrs(resource_id="agent-zzz"), subject_id=_SUBJECT
+    )
     # Unknown id fails closed against a non-empty allowlist.
     assert not conditions_match(c, attrs=ResourceAttrs(resource_id=None), subject_id=_SUBJECT)
 
@@ -50,7 +52,9 @@ def test_labels_superset_match() -> None:
     assert conditions_match(
         c, attrs=ResourceAttrs(labels={"team": "支持", "env": "dev"}), subject_id=_SUBJECT
     )
-    assert not conditions_match(c, attrs=ResourceAttrs(labels={"team": "运维"}), subject_id=_SUBJECT)
+    assert not conditions_match(
+        c, attrs=ResourceAttrs(labels={"team": "运维"}), subject_id=_SUBJECT
+    )
     assert not conditions_match(c, attrs=ResourceAttrs(labels={}), subject_id=_SUBJECT)
 
 
