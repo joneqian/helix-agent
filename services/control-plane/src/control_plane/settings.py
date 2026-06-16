@@ -350,7 +350,7 @@ class Settings(BaseSettings):
     #: Master switch for the orphaned-run recovery sweep.
     enable_orphan_sweep: bool = Field(default=True)
     #: How often the sweep scans for runs whose ownership lease expired. Should
-    #: be a few × the run lease TTL so a brief GC pause never trips it.
+    #: be a few times the run lease TTL so a brief GC pause never trips it.
     orphan_sweep_interval_s: int = Field(default=15, gt=0)
     #: Max orphans handled per sweep cycle.
     orphan_sweep_batch_size: int = Field(default=20, gt=0)

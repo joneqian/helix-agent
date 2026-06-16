@@ -559,9 +559,7 @@ class SqlRunStore(RunStore):
             result = await session.execute(
                 update(AgentRunRow)
                 .where(AgentRunRow.id == run_id, AgentRunRow.tenant_id == tenant_id)
-                .values(
-                    claimed_by=claimed_by, lease_until=lease_until, heartbeat_at=heartbeat_at
-                )
+                .values(claimed_by=claimed_by, lease_until=lease_until, heartbeat_at=heartbeat_at)
             )
             await session.commit()
         return int(getattr(result, "rowcount", 0) or 0) > 0

@@ -30,12 +30,8 @@ _SWEEP_INDEX = "ix_agent_run_lease_sweep"
 
 def upgrade() -> None:
     op.add_column("agent_run", sa.Column("claimed_by", sa.Text(), nullable=True))
-    op.add_column(
-        "agent_run", sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True)
-    )
-    op.add_column(
-        "agent_run", sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True)
-    )
+    op.add_column("agent_run", sa.Column("lease_until", sa.DateTime(timezone=True), nullable=True))
+    op.add_column("agent_run", sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True))
     op.add_column(
         "agent_run",
         sa.Column("reclaim_count", sa.Integer(), nullable=False, server_default=sa.text("0")),

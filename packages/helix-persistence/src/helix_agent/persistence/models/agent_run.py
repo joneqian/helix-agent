@@ -52,9 +52,7 @@ class AgentRunRow(Base):
     # Stream 9.4 — how many times the orphan sweep has reclaimed this run. The
     # sweep gives up (marks the run errored) past a cap so a run that crashes
     # its owner process every time (OOM / segfault) can't respawn forever.
-    reclaim_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    reclaim_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     __table_args__ = (
         CheckConstraint(f"status IN {_STATUS_VALUES}", name="agent_run_status_valid"),
