@@ -27,7 +27,6 @@ deadline, and the per-tenant quota engine bound cost structurally.
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -54,8 +53,6 @@ __all__ = [
 if TYPE_CHECKING:
     from helix_agent.protocol import AgentSpec
     from orchestrator.agent_factory import BuiltAgent
-
-logger = logging.getLogger(__name__)
 
 _workers_spawned = helix_counter(
     "helix_dynamic_worker_spawned_total",
