@@ -713,6 +713,8 @@ async def build_agent(
         action_judge=(action_judge if spec.spec.defenses.action_screen != "off" else None),
         action_screen=spec.spec.defenses.action_screen,
         action_screen_on_error=spec.spec.defenses.action_screen_on_error,
+        # Stream 7.4 — outbound DLP redaction; gated by the manifest.
+        output_dlp=spec.spec.defenses.output_dlp == "redact",
         # Stream HX-13 — vendor-native tool-disclosure tier (catalog bit;
         # off-catalog / unannotated models stay on the HX-12 tier).
         tool_disclosure=_resolved_tool_disclosure(spec.spec.model),
