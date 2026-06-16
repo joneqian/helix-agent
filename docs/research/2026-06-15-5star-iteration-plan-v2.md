@@ -17,11 +17,11 @@
 
 → 优先级重心从「补沙箱安全」转向「**收割廉价 ★4→★5 + agent 能力项**」。
 
-## 当前非满分项（10 项；2.2/4.1/11.4/11.5/3.3/4.4/1.3/7.3/7.4/8.5/13.2/14.4 已收为 ★5）
+## 当前非满分项（9 项；2.2/4.1/11.4/11.5/3.3/4.4/1.3/7.3/7.4/8.5/13.2/14.4/9.4 已收为 ★5）
 
 ★4（一步之遥，多为低成本）：10.1（TX 终态，不推）（~~1.3~~ 已 ★5 #666/#667；~~7.3~~~~7.4~~ 已 ★5 #669）
 ★3（真 gap）：7.2 · 7.6 · 16.4 · 16.3 · 10.5 · 12.4（~~8.5~~ #671 / ~~13.2~~ #673 / ~~14.4~~ #675 已 ★5）
-★2（M1 大件）：9.4 · 9.5
+★2（M1 大件）：9.5（~~9.4~~ 已 ★5 live #677+#678）
 ✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
 
 ## 重排后的层级
@@ -39,8 +39,9 @@
 > 见 `2026-06-15-1145-live-eval-worker-design.md` §8 E2E 实证；代码 #649/#652 已合，本机真栈（deepseek eval agent）
 > trace passed 3/3 / adversarial 5/6（机制证实，1 真防御观测非假阴）。
 >
-> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ **14.4（★3→★5，+2，410/430）**。
-> **均分 4.60→4.77（95.3%），共 +14★。T1 全清。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ 14.4（★3→★5，+2，410）→ **9.4（★2→★5 live，+3，413/430）**。
+> **均分 4.60→4.80（96.0%），共 +17★。T1 全清；首个 M1 大件 9.4 提前 live 收口。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> 9.4 见 `2026-06-16-9.4-9.5-ha-failover-design.md` §7（#677+#678）：Postgres 租约+孤儿 sweep+自动热接力,蓝绿双实例真栈 kill blue mid-run→green 续跑到 success(5 项断言全绿);live 暴露 failover 硬依赖 postgres checkpointer + 续跑 seq 撞键(已修)。
 > 14.4 见 `2026-06-16-14.4-mcp-defense-audit-design.md`（#675）：核代码发现「无流量审计」部分过期，补 MCP 专属流量审计（server/response_chars/is_error）+ in-process 隔离威胁评估 + 前端流量徽章。
 > 7.3/7.4 见 `2026-06-16-7.3-7.4-input-dlp-harvest-design.md`（#669）：7.3 PI-1c 结构化 `untrusted_content` 通道治内联注入根，**live 实证**通道把 001/003 内联注入从 LEAK 翻 SAFE（负对照排除假阳性）；7.4 出站 DLP 条件输出 redact PII。
 > 8.5 见 `2026-06-16-8.5-rbac-abac-design.md`（#671）：细粒度 RBAC-ABAC（RoleBinding conditions=resource_ids/labels/owner_only，agents 路由实例级授权，集成实证条件 operator allow/deny）。
@@ -75,8 +76,8 @@
 
 | 项 | 现 | 内容 | 工作量 |
 |---|---|---|---|
-| **9.4 自动 failover** | ★2 | mid-run 热接力 / 跨进程恢复（J-41） | XL |
-| **9.5 分布式任务队列** | ★2 | Celery 等替进程内 asyncio（J.10） | XL |
+| ~~9.4 自动 failover~~ | ✅★5 | **已交付+live 实证（#677+#678）**：Postgres 租约（`claimed_by`/`lease_until`/`heartbeat_at`）+ 孤儿 sweep（reclaim CAS 恰一赢家）+ 自动热接力（`adopt`+`run_agent(graph_input=None)` 从 durable checkpoint 续跑）。蓝绿双实例真栈 kill blue mid-run→green 续跑到 `status=success`，5 项断言全绿。house 风格（Postgres-first，零 Celery/broker）。live 暴露真依赖：failover 硬要 `checkpointer_backend=postgres`（dev 默认 memory→`EmptyInputError`）+ 续跑 seq 撞键（已修 `RunEventStore.next_seq`） |
+| **9.5 分布式任务队列** | ★2 | Celery 等替进程内 asyncio（J.10）——9.4 落地证明 Postgres 租约+sweep 已覆盖「崩溃恢复」语义,9.5 纯「分布式调度规模化」M1 | XL |
 
 ### T4 — 测试债 + 运维韧性 + 变现（价值最低 / 用户后置，最后）
 
@@ -94,7 +95,7 @@
 1. **旧 P1 eval 平台已交付**（11.3/11.6 ★5）→ 移出优先攻坚；剩 11.4/11.5 仅"接线"降为 T0 廉价收割。
 2. **旧 P3/P4 沙箱安全已自愈**（7.2/3/4/6 全升档）→ 从「攻坚区」降为「补到满分的收尾」。
 3. **新增 T0 廉价收割层**：4 项 ★4→★5 全 ≤1 天，最高 ROI，旧 v1 没单列。
-4. **HA（9.4/9.5）仍 M1 大头**，per-user 持久 agent 形态的核心，但成本 XL，放 T3。
+4. **HA：9.4 自动 failover 已提前 ★5 live 收口**（#677+#678，Postgres 租约+热接力，非 XL 大件——house 风格复用现成 checkpoint+CAS）；剩 9.5 分布式队列规模化仍 M1。
 5. **变现 12.4 仍用户后置**，T4 末位。
 
 ## 建议执行序
