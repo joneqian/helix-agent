@@ -1,0 +1,21 @@
+# Stream 9.4 HA-failover live E2E — second control-plane instance (green).
+#
+# ``make dev-up`` deliberately EXCLUDES green because its default host port 8001
+# collides with the sandbox supervisor. The failover test needs a *second* live
+# control-plane sharing the same Postgres so green's OrphanSweep can reclaim a
+# run orphaned by killing blue. This overlay remaps green off the contended port
+# (8000-base + 2) so it can run alongside the rest of the full stack.
+#
+# Usage (after ``make dev-up`` has built the image + migrated):
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.ha-e2e.yml \
+#       --profile full up -d --no-deps control-plane-green
+#   uv run python tools/ha/verify_failover.py
+#
+# The verify script reaches green only via ``docker exec`` (metrics over the
+# container loopback) + Postgres, so the 8002 mapping is a convenience, not a
+# dependency.
+services:
+  control-plane-green:
+    ports: !override
+      - "8002:8000"

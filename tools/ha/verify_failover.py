@@ -201,13 +201,29 @@ def _audit_failover_count(pg_container: str, run_id: str) -> tuple[int, str]:
     return int(count), result
 
 
-async def _metric_reclaimed(green_url: str) -> float:
-    async with httpx.AsyncClient(base_url=green_url, timeout=10.0) as client:
-        resp = await client.get("/metrics")
-        resp.raise_for_status()
-        for line in resp.text.splitlines():
-            if line.startswith("helix_run_orphan_reclaimed_total"):
-                return float(line.rsplit(" ", 1)[-1])
+def _metric_reclaimed(green_container: str) -> float:
+    """Read green's reclaimed counter from inside the container.
+
+    Green has no host port in the dev stack (host ``:8001`` is taken by the
+    sandbox supervisor, so ``make dev-up`` excludes green); failover itself is
+    DB-driven and needs none. We scrape ``/metrics`` over the container loopback.
+    """
+    code = (
+        "import urllib.request;"
+        "print(urllib.request.urlopen('http://127.0.0.1:8000/metrics', timeout=5).read().decode())"
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", green_container, "python", "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return 0.0
+    for line in out.splitlines():
+        if line.startswith("helix_run_orphan_reclaimed_total"):
+            return float(line.rsplit(" ", 1)[-1])
     return 0.0
 
 
@@ -222,7 +238,7 @@ async def _amain(args: argparse.Namespace) -> int:
         thread_id = await _create_session(blue, name, version)
         print(f"session: {thread_id}")
 
-    metric_before = await _metric_reclaimed(args.green_url)
+    metric_before = _metric_reclaimed(args.green_container)
 
     # --- start the run on blue, then wait for it to own the lease -------
     run_task = asyncio.create_task(_start_run_bg(args.blue_url, token, thread_id))
@@ -243,7 +259,7 @@ async def _amain(args: argparse.Namespace) -> int:
     new_owner = terminal["claimed_by"]
     reclaim_count = int(terminal["reclaim_count"])
     audit_count, audit_result = _audit_failover_count(args.pg_container, run_id)
-    metric_after = await _metric_reclaimed(args.green_url)
+    metric_after = _metric_reclaimed(args.green_container)
 
     # --- verdict --------------------------------------------------------
     checks = {
@@ -273,12 +289,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--blue-url", default="http://localhost:8000", help="blue control-plane URL"
     )
-    parser.add_argument(
-        "--green-url", default="http://localhost:8001", help="green control-plane URL"
-    )
     parser.add_argument("--agent", default=None, help="target agent as name@version (else auto)")
     parser.add_argument(
         "--blue-container", default="helix-control-plane-blue", help="blue container to kill"
+    )
+    parser.add_argument(
+        "--green-container",
+        default="helix-control-plane-green",
+        help="green container (no host port; metrics scraped via docker exec)",
     )
     parser.add_argument("--pg-container", default="helix-postgres", help="Postgres container")
     parser.add_argument(
