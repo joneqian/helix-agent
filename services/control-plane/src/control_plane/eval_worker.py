@@ -162,15 +162,18 @@ class EvalWorker:
         with _bypass_rls():
             queued = await self._store.list_by_status_all_tenants(EvalRunStatus.QUEUED)
         for run in queued:
-            summary.claimed += 1
             with _tenant_scope(run.tenant_id):
+                # Stream 9.5 — CAS claim so only one instance (blue/green) runs
+                # this queued eval; a peer that won already flipped it out of
+                # ``queued`` and our claim returns False → skip (no duplicate).
+                if not await self._store.claim(run_id=run.id, tenant_id=run.tenant_id):
+                    continue
+                summary.claimed += 1
                 await self._execute(run, summary)
         return summary
 
     async def _execute(self, run: EvalRunRecord, summary: EvalWorkerRunSummary) -> None:
-        await self._store.set_status(
-            run_id=run.id, tenant_id=run.tenant_id, status=EvalRunStatus.RUNNING
-        )
+        # ``claim`` (run_once) already flipped the row to RUNNING via CAS.
         try:
             outcomes = await self._engine.run(run.suite)
         except Exception:

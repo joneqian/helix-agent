@@ -48,6 +48,17 @@ class EvalRunStore(abc.ABC):
         ``finished_at`` on a terminal status. Return ``True`` iff the run existed."""
 
     @abc.abstractmethod
+    async def claim(self, *, run_id: UUID, tenant_id: UUID) -> bool:
+        """Atomically claim a queued run for execution; ``True`` iff won.
+
+        Stream 9.5 — CAS on ``status='queued'`` (→ ``running`` + stamp
+        ``started_at``) so exactly one eval worker executes a run when several
+        instances (blue/green) scan the queue concurrently. The loser sees
+        ``False`` (rowcount 0) and skips. Without this two workers both
+        ``list``-then-run the same queued run → duplicate execution.
+        """
+
+    @abc.abstractmethod
     async def list_by_status_all_tenants(self, status: EvalRunStatus) -> list[EvalRunRecord]:
         """Cross-tenant list by status — backs the worker claim scan.
 

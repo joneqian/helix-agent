@@ -174,3 +174,26 @@ async def test_append_and_list_case_results() -> None:
     assert [r.case_id for r in results] == ["case-1", "case-2"]
     # Cross-tenant read of the same run id returns nothing.
     assert await store.list_case_results(run_id=run.id, tenant_id=uuid4()) == []
+
+
+@pytest.mark.asyncio
+async def test_claim_cas_exactly_one_winner() -> None:
+    """Stream 9.5 — two workers race a queued eval; the CAS lets one win."""
+    store = InMemoryEvalRunStore()
+    tenant = uuid4()
+    run = await store.create_run(_run(tenant))
+
+    first = await store.claim(run_id=run.id, tenant_id=tenant)
+    second = await store.claim(run_id=run.id, tenant_id=tenant)
+    assert first is True
+    assert second is False  # already running — the loser skips
+    row = await store.get_run(run_id=run.id, tenant_id=tenant)
+    assert row is not None and row.status is EvalRunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_claim_cross_tenant_is_noop() -> None:
+    store = InMemoryEvalRunStore()
+    tenant, other = uuid4(), uuid4()
+    run = await store.create_run(_run(tenant))
+    assert await store.claim(run_id=run.id, tenant_id=other) is False
