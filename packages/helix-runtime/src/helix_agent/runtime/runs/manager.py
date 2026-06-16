@@ -243,6 +243,39 @@ class RunManager:
             logger.info("run.status_change id=%s status=%s", run_id, status)
             return True
 
+    async def adopt(
+        self,
+        *,
+        run_id: UUID,
+        thread_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID | None = None,
+    ) -> RunRecord:
+        """Stream 9.4 — register an already-durable run this instance reclaimed.
+
+        Unlike :meth:`create`, it does NOT write the store (the orphan row
+        already exists; the sweep's reclaim CAS just took ownership of it). It
+        only builds the in-memory :class:`RunRecord` (status RUNNING) so the
+        re-spawned worker's heartbeat + terminal status writes route through the
+        usual path. ``is_resume=True`` so the worker observes the durable-resume
+        timing on its first chunk from the checkpoint.
+        """
+        async with self._lock:
+            if run_id in self._runs:
+                return self._runs[run_id]
+            record = RunRecord(
+                run_id=run_id,
+                thread_id=thread_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                status=RunStatus.RUNNING,
+                on_disconnect=DisconnectMode.CONTINUE,
+                is_resume=True,
+            )
+            self._runs[run_id] = record
+            logger.info("run.adopt id=%s thread=%s by=%s", run_id, thread_id, self._instance_id)
+            return record
+
     async def heartbeat(self, run_id: UUID) -> bool:
         """Stream 9.4 — renew the run's lease; ``True`` iff this instance still owns it.
 

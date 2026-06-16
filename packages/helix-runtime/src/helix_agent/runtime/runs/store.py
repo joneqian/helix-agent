@@ -363,7 +363,11 @@ class InMemoryRunStore(RunStore):
         ):
             return False
         self._rows[run_id] = replace(
-            row, claimed_by=new_owner, lease_until=lease_until, heartbeat_at=heartbeat_at
+            row,
+            claimed_by=new_owner,
+            lease_until=lease_until,
+            heartbeat_at=heartbeat_at,
+            reclaim_count=row.reclaim_count + 1,
         )
         return True
 
@@ -385,6 +389,7 @@ def _row_to_dto(row: AgentRunRow) -> RunInfo:
         claimed_by=row.claimed_by,
         lease_until=row.lease_until,
         heartbeat_at=row.heartbeat_at,
+        reclaim_count=row.reclaim_count,
     )
 
 
@@ -413,6 +418,7 @@ class SqlRunStore(RunStore):
                     claimed_by=info.claimed_by,
                     lease_until=info.lease_until,
                     heartbeat_at=info.heartbeat_at,
+                    reclaim_count=info.reclaim_count,
                 )
             )
             await session.commit()
@@ -618,7 +624,12 @@ class SqlRunStore(RunStore):
                     AgentRunRow.lease_until.is_not(None),
                     AgentRunRow.lease_until < now,
                 )
-                .values(claimed_by=new_owner, lease_until=lease_until, heartbeat_at=heartbeat_at)
+                .values(
+                    claimed_by=new_owner,
+                    lease_until=lease_until,
+                    heartbeat_at=heartbeat_at,
+                    reclaim_count=AgentRunRow.reclaim_count + 1,
+                )
             )
             await session.commit()
         return int(getattr(result, "rowcount", 0) or 0) > 0

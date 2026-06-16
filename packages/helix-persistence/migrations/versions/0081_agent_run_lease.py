@@ -36,6 +36,10 @@ def upgrade() -> None:
     op.add_column(
         "agent_run", sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True)
     )
+    op.add_column(
+        "agent_run",
+        sa.Column("reclaim_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
+    )
     op.create_index(
         _SWEEP_INDEX,
         "agent_run",
@@ -46,6 +50,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(_SWEEP_INDEX, table_name="agent_run")
+    op.drop_column("agent_run", "reclaim_count")
     op.drop_column("agent_run", "heartbeat_at")
     op.drop_column("agent_run", "lease_until")
     op.drop_column("agent_run", "claimed_by")

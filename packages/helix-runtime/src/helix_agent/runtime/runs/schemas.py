@@ -88,3 +88,6 @@ class RunInfo:
     claimed_by: str | None = None
     lease_until: datetime | None = None
     heartbeat_at: datetime | None = None
+    #: Stream 9.4 — orphan-sweep reclaim counter; the sweep stops respawning a
+    #: run past a cap (a run that crashes its owner every time).
+    reclaim_count: int = 0
