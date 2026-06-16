@@ -59,6 +59,15 @@ class InMemoryEvalRunStore(EvalRunStore):
         self._runs[run_id] = row.model_copy(update=updates)
         return True
 
+    async def claim(self, *, run_id: UUID, tenant_id: UUID) -> bool:
+        row = self._runs.get(run_id)
+        if row is None or row.tenant_id != tenant_id or row.status is not EvalRunStatus.QUEUED:
+            return False
+        self._runs[run_id] = row.model_copy(
+            update={"status": EvalRunStatus.RUNNING, "started_at": datetime.now(UTC)}
+        )
+        return True
+
     async def list_by_status_all_tenants(self, status: EvalRunStatus) -> list[EvalRunRecord]:
         rows = [r for r in self._runs.values() if r.status is status]
         rows.sort(key=lambda r: r.created_at)

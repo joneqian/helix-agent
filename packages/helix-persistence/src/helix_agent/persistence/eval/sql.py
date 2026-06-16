@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.eval.base import EvalRunStore
@@ -113,6 +113,22 @@ class SqlEvalRunStore(EvalRunStore):
                 row.summary = summary
             await session.commit()
             return True
+
+    async def claim(self, *, run_id: UUID, tenant_id: UUID) -> bool:
+        # Atomic CAS — exactly one worker wins. ``status='queued'`` is the
+        # guard; the loser's UPDATE matches zero rows (already running).
+        async with self._sf() as session:
+            result = await session.execute(
+                update(EvalRunRow)
+                .where(
+                    EvalRunRow.id == run_id,
+                    EvalRunRow.tenant_id == tenant_id,
+                    EvalRunRow.status == EvalRunStatus.QUEUED.value,
+                )
+                .values(status=EvalRunStatus.RUNNING.value, started_at=datetime.now(UTC))
+            )
+            await session.commit()
+        return int(getattr(result, "rowcount", 0) or 0) > 0
 
     async def list_by_status_all_tenants(self, status: EvalRunStatus) -> list[EvalRunRecord]:
         async with self._sf() as session:
