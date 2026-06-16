@@ -149,7 +149,5 @@ async def test_next_seq_pages_beyond_list_limit() -> None:
     run_id = uuid4()
     total = MAX_LIST_LIMIT + 7
     for seq in range(total):
-        await store.append(
-            make_event_record(run_id=run_id, seq=seq, event_name="updates", data={})
-        )
+        await store.append(make_event_record(run_id=run_id, seq=seq, event_name="updates", data={}))
     assert await store.next_seq(run_id=run_id) == total
