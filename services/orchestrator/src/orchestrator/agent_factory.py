@@ -501,6 +501,10 @@ async def build_agent(
         # subagent_depth gates the structural recursion cap.
         subagents=spec.spec.subagents,
         subagent_depth=subagent_depth,
+        # 1.3 Orchestrator-Worker — the spawn_worker tool synthesizes ephemeral
+        # workers from this parent spec; parent_spec binds the worker builder.
+        parent_spec=spec,
+        dynamic_workers=spec.spec.dynamic_workers,
         # Stream J.5 — a ``knowledge:`` block activates the knowledge_search tool.
         knowledge=spec.spec.knowledge,
         # Stream J.6 Path B — a ``vision:`` block activates the ask_image tool.

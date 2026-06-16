@@ -23,7 +23,9 @@ from typing import TYPE_CHECKING
 
 from helix_agent.persistence import ArtifactStore
 from helix_agent.protocol import (
+    AgentSpec,
     BuiltinToolSpec,
+    DynamicWorkersSpec,
     HTTPToolSpec,
     KnowledgeSpec,
     MCPToolSpec,
@@ -51,13 +53,17 @@ from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
 from orchestrator.tools.registry import ToolRegistry
 from orchestrator.tools.sandbox import ExecPythonTool, SupervisorClient
 from orchestrator.tools.skill_authoring import SKILL_AUTHORING_BUILTINS
+from orchestrator.tools.spawn_worker import SpawnWorkerTool, WorkerBuildFn
 from orchestrator.tools.subagent import MAX_SUBAGENT_DEPTH, ChildAgentBuilder, SubAgentTool
 from orchestrator.tools.vision import AskImageTool
 from orchestrator.tools.web_search import DEFAULT_MAX_RESULTS, TavilyClient, WebSearchTool
 from orchestrator.trajectory import TrajectoryRecorder
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     # Imported under TYPE_CHECKING only to avoid an ``llm → tools`` cycle.
+    from orchestrator.agent_factory import BuiltAgent
     from orchestrator.llm import LLMCaller
 
 logger = logging.getLogger(__name__)
@@ -135,6 +141,12 @@ class ToolEnv:
     #: ``subagents`` with this left ``None`` raises
     #: :class:`AgentFactoryError` (wired in J.4 PR4).
     child_agent_builder: ChildAgentBuilder | None = None
+    #: 1.3 Orchestrator-Worker — synthesizes + builds an ephemeral worker
+    #: from a parent spec, backing the ``spawn_worker`` tool. Injected by the
+    #: control-plane (it owns ``build_agent`` + worker-spec synthesis).
+    #: ``None`` → no ``spawn_worker`` tool (also how the platform
+    #: ``enable_dynamic_workers=False`` switch is expressed).
+    worker_build_fn: WorkerBuildFn | None = None
     #: Hybrid knowledge retriever backing the ``knowledge_search`` tool
     #: a manifest's ``knowledge:`` block activates (Stream J.5). Injected
     #: by the control-plane (it configures the embedder / rerank LLM). A
@@ -167,6 +179,8 @@ async def build_tool_registry(
     image_variant: str | None = None,
     subagents: Sequence[SubAgentSpec] = (),
     subagent_depth: int = 0,
+    parent_spec: AgentSpec | None = None,
+    dynamic_workers: DynamicWorkersSpec | None = None,
     knowledge: KnowledgeSpec | None = None,
     vision: VisionSpec | None = None,
     vl_caller: LLMCaller | None = None,
@@ -215,6 +229,7 @@ async def build_tool_registry(
         elif isinstance(entry, MCPToolSpec):
             await _register_mcp(registry, entry, tool_env)
     _register_subagents(registry, subagents, tool_env, subagent_depth)
+    _register_spawn_worker(registry, tool_env, parent_spec, dynamic_workers, subagent_depth)
     _register_knowledge_search(registry, knowledge, tool_env)
     _register_ask_image(registry, vision, tool_env, vl_caller)
     # Stream HX-12 (Mini-ADR HX-I3) — small-pool escape hatch: when the
@@ -373,6 +388,45 @@ def _register_subagents(
                 trajectory_recorder=env.trajectory_recorder,
             )
         )
+
+
+def _register_spawn_worker(
+    registry: ToolRegistry,
+    env: ToolEnv,
+    parent_spec: AgentSpec | None,
+    dynamic_workers: DynamicWorkersSpec | None,
+    subagent_depth: int,
+) -> None:
+    """Register the ``spawn_worker`` tool — 1.3 dynamic Orchestrator-Worker.
+
+    Gated by: the per-agent opt-out (``dynamic_workers.enabled``), a wired
+    worker builder (``ToolEnv.worker_build_fn`` — ``None`` when the platform
+    ``enable_dynamic_workers`` switch is off or in tests), and the same
+    structural depth cap as static sub-agents (a worker built at
+    :data:`MAX_SUBAGENT_DEPTH` carries no further spawn tool). Unlike
+    ``subagents``, a missing builder is **not** an error — the feature is
+    default-on but optional, so an unwired deployment simply runs without it.
+    """
+    if dynamic_workers is not None and not dynamic_workers.enabled:
+        return
+    if env.worker_build_fn is None or parent_spec is None:
+        return
+    if subagent_depth >= MAX_SUBAGENT_DEPTH:
+        logger.warning("tools.spawn_worker_depth_cap depth=%d not_registered", subagent_depth)
+        return
+    build_fn = env.worker_build_fn
+    child_depth = subagent_depth + 1
+
+    async def _builder(*, tenant_id: UUID, role: str | None, depth: int) -> BuiltAgent:
+        return await build_fn(parent_spec, tenant_id=tenant_id, role=role, depth=depth)
+
+    registry.register(
+        SpawnWorkerTool(
+            builder=_builder,
+            child_depth=child_depth,
+            trajectory_recorder=env.trajectory_recorder,
+        )
+    )
 
 
 def _register_builtin(

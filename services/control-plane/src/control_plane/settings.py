@@ -433,6 +433,27 @@ class Settings(BaseSettings):
     #: but loose enough to cap write amplification under high fan-out.
     skill_activity_throttle_s: int = Field(default=3_600, gt=0)
 
+    # --------------------------------------------------- dynamic workers (1.3 Orchestrator-Worker)
+    #: Platform master switch for dynamic ephemeral worker spawning (the
+    #: ``spawn_worker`` tool). A manifest's ``dynamic_workers.enabled`` can
+    #: opt an agent out, but cannot turn the feature on when this is False.
+    enable_dynamic_workers: bool = Field(default=True)
+    #: Max workers running concurrently within one parent run. Industry
+    #: standard is 3 (deer-flow / hermes / Claude Code 3-5); >10 sees
+    #: cost grow ~linearly with diminishing returns.
+    dynamic_worker_max_concurrent: int = Field(default=3, gt=0, le=16)
+    #: Cumulative worker spawns allowed across one parent run (all turns).
+    #: References bound by depth+concurrency only; helix is a billed
+    #: multi-tenant backend so this is an explicit runaway safety net.
+    dynamic_worker_max_per_run: int = Field(default=16, gt=0, le=256)
+    #: Per-worker ReAct iteration cap (worker workflow.max_iterations is
+    #: clamped to this).
+    dynamic_worker_max_iterations: int = Field(default=8, gt=0, le=64)
+    #: Tool-name allowlist a spawned worker may inherit from its parent
+    #: (intersected with the parent's tools). Empty = inherit the parent's
+    #: tools verbatim (still a subset of what the parent itself had).
+    dynamic_worker_allowed_toolsets: list[str] = Field(default_factory=list)
+
     # --------------------------------------------------- memory consolidator (Sprint #7)
     #: Capability Uplift Sprint #7 (Mini-ADR U-34) — MemoryConsolidator
     #: sweep cadence. Default 14400 = every 4 hours (4 sweeps / day).

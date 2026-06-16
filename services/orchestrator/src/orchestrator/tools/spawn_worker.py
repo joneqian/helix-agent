@@ -1,0 +1,217 @@
+"""Dynamic worker spawning — 1.3 Orchestrator-Worker (``spawn_worker`` tool).
+
+Where :class:`~orchestrator.tools.subagent.SubAgentTool` delegates to a
+*statically declared* deployed agent (``spec.subagents``), this tool lets the
+orchestrator **create an ephemeral worker at run time** from a generated
+task + focus — the 2026-mainstream Orchestrator-Worker shape (Anthropic
+multi-agent research / Claude Code Task tool / hermes ``delegate_task``).
+
+The worker:
+
+* is built from a *synthesized* spec (the control-plane's
+  :class:`WorkerAgentBuilder` derives it from the parent — inheriting the
+  parent's model + sandbox isolation, with a generated worker system
+  prompt), **not** resolved from a deployed ``agent_ref``;
+* runs to completion via the shared child-run core
+  (:func:`~orchestrator.tools._child_run.run_child_to_result`), reusing the
+  depth cap, cancellation/deadline propagation, L7 trajectory, and
+  final-answer extraction;
+* is discarded when done — the parent synthesizes its result.
+
+Bounds are platform-global (see ``control_plane.settings``): a per-run spawn
+count + a per-run concurrency semaphore live on :class:`WorkerSpawnBudget`,
+created once per run and threaded through :class:`ToolContext`. When no
+budget is wired (tests / eval), the worker still runs — depth, iteration cap,
+deadline, and the per-tenant quota engine bound cost structurally.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from uuid import UUID
+
+from helix_agent.common.observability import helix_counter
+from helix_agent.runtime.cancellation import RunCancelledError
+from orchestrator.tools._budget import WorkerSpawnBudget
+from orchestrator.tools._child_run import run_child_to_result
+from orchestrator.tools.registry import ToolBlockedError, ToolContext, ToolResult, ToolSpec
+from orchestrator.trajectory import TrajectoryRecorder
+
+# Re-exported for back-compat: callers import WorkerSpawnBudget from here.
+__all__ = [
+    "SPAWN_WORKER_TOOL_NAME",
+    "SpawnWorkerTool",
+    "WorkerAgentBuilder",
+    "WorkerBuildFn",
+    "WorkerSpawnBudget",
+]
+
+if TYPE_CHECKING:
+    from helix_agent.protocol import AgentSpec
+    from orchestrator.agent_factory import BuiltAgent
+
+_workers_spawned = helix_counter(
+    "helix_dynamic_worker_spawned_total",
+    "Dynamic workers spawned via the spawn_worker tool.",
+)
+_workers_blocked = helix_counter(
+    "helix_dynamic_worker_blocked_total",
+    "spawn_worker calls refused (per-run budget exhausted).",
+)
+
+#: The spawn_worker tool name handed to the parent LLM.
+SPAWN_WORKER_TOOL_NAME = "spawn_worker"
+
+
+@runtime_checkable
+class WorkerAgentBuilder(Protocol):
+    """Builds an ephemeral worker :class:`BuiltAgent` from a generated role.
+
+    Injected into :class:`~orchestrator.tools.ToolEnv` by the control-plane
+    (it owns the worker-spec synthesis + ``build_agent`` path). Unlike
+    :class:`~orchestrator.tools.subagent.ChildAgentBuilder` there is no
+    ``agent_ref`` — the worker spec is synthesized from the parent at
+    ``depth``. ``role`` (the LLM's ``focus`` argument) shapes the worker's
+    generated system prompt.
+    """
+
+    async def __call__(
+        self,
+        *,
+        tenant_id: UUID,
+        role: str | None,
+        depth: int,
+    ) -> BuiltAgent:
+        """Build an ephemeral worker for ``tenant_id`` at ``depth``."""
+
+
+@runtime_checkable
+class WorkerBuildFn(Protocol):
+    """Control-plane callable that synthesizes + builds a worker from a parent.
+
+    Carried on :class:`~orchestrator.tools.ToolEnv` (injected by the
+    control-plane, which owns ``build_agent`` + the worker-spec synthesis).
+    ``build_tool_registry`` binds the parent ``AgentSpec`` to produce the
+    per-build :class:`WorkerAgentBuilder` the ``SpawnWorkerTool`` holds.
+    ``None`` on the env means the feature is unwired (no ``spawn_worker``
+    tool registered) — also how the platform ``enable_dynamic_workers=False``
+    switch is expressed.
+    """
+
+    async def __call__(
+        self,
+        parent_spec: AgentSpec,
+        *,
+        tenant_id: UUID,
+        role: str | None,
+        depth: int,
+    ) -> BuiltAgent:
+        """Synthesize a worker spec from ``parent_spec`` + ``role`` and build it."""
+
+
+@dataclass(frozen=True)
+class SpawnWorkerTool:
+    """The ``spawn_worker`` tool — 1.3 dynamic Orchestrator-Worker."""
+
+    builder: WorkerAgentBuilder
+    #: The worker's build-time recursion depth (parent depth + 1).
+    child_depth: int
+    trajectory_recorder: TrajectoryRecorder | None = None
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=SPAWN_WORKER_TOOL_NAME,
+            description=(
+                "Spawn an ephemeral worker sub-agent to complete a focused subtask "
+                "in isolation, then return its result. Use this to decompose work "
+                "you can parallelize or that benefits from a fresh, focused context. "
+                "The worker runs fresh with only 'task' as its instruction — it sees "
+                "none of this conversation — and is discarded when done."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "The subtask to delegate, described in full and "
+                            "self-contained (the worker sees nothing else)."
+                        ),
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": (
+                            "Optional role / specialty for the worker (e.g. "
+                            "'code reviewer', 'researcher') — shapes its system prompt."
+                        ),
+                    },
+                },
+                "required": ["task"],
+            },
+            # Sibling workers share neither thread nor sandbox session, so the
+            # scheduler may run them concurrently (bounded by the budget).
+            is_parallel_safe=True,
+        )
+
+    async def call(self, args: Mapping[str, Any], *, ctx: ToolContext) -> ToolResult:
+        if ctx.tenant_id is None:
+            msg = "spawn_worker cannot run without a tenant binding"
+            raise ToolBlockedError(msg)
+        if ctx.deadline_at is not None and ctx.deadline_at - time.monotonic() <= 0:
+            raise RunCancelledError("spawn_worker declined: global deadline already expired")
+
+        task = self._require_task(args)
+        focus = args.get("focus")
+        role = focus.strip() if isinstance(focus, str) and focus.strip() else None
+
+        budget = ctx.worker_spawn_budget
+        if budget is not None and not budget.try_reserve():
+            _workers_blocked.inc()
+            return ToolResult(
+                content=(
+                    "[spawn_worker refused: this run reached its worker budget "
+                    f"({budget.max_per_run}); complete the work with the results you have]"
+                ),
+                meta={"spawn_worker_blocked": True, "reason": "per_run_budget"},
+            )
+
+        child = await self.builder(tenant_id=ctx.tenant_id, role=role, depth=self.child_depth)
+        _workers_spawned.inc()
+        async with _maybe_concurrency(budget):
+            return await run_child_to_result(
+                child=child,
+                task=task,
+                ctx=ctx,
+                child_depth=self.child_depth,
+                label=SPAWN_WORKER_TOOL_NAME,
+                agent_ref=f"dynamic:{role or 'general'}",
+                trajectory_recorder=self.trajectory_recorder,
+                trajectory_metadata={
+                    "subagent_name": SPAWN_WORKER_TOOL_NAME,
+                    "dynamic": True,
+                    "role": role,
+                    "child_depth": self.child_depth,
+                },
+                extra_meta={"dynamic": True, "role": role},
+            )
+
+    def _require_task(self, args: Mapping[str, Any]) -> str:
+        raw = args.get("task")
+        if not isinstance(raw, str) or not raw.strip():
+            msg = "spawn_worker requires a non-empty 'task' string"
+            raise ValueError(msg)
+        return raw.strip()
+
+
+@asynccontextmanager
+async def _maybe_concurrency(budget: WorkerSpawnBudget | None) -> AsyncIterator[None]:
+    if budget is None:
+        yield
+        return
+    async with budget.concurrency():
+        yield
