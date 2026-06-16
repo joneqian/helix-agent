@@ -281,9 +281,7 @@ def _get_run_event_store(request: Request) -> RunEventStore | None:
     return store
 
 
-def _idempotent_continuation(
-    approval: Any | None, idempotency_key: str | None
-) -> UUID | None:
+def _idempotent_continuation(approval: Any | None, idempotency_key: str | None) -> UUID | None:
     """Stream 13.2 — the continuation to replay for an idempotent retry, or None.
 
     Returns the stored ``continuation_run_id`` only when the caller supplied a
