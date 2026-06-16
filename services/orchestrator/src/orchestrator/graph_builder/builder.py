@@ -1648,6 +1648,10 @@ def _build_tool_context(config: RunnableConfig, *, plan: Plan | None = None) -> 
     # manifest carries no ``policies.run_deadline_s``.
     deadline_raw = configurable.get("deadline_at")
     deadline_at = float(deadline_raw) if isinstance(deadline_raw, int | float) else None
+    # 1.3 Orchestrator-Worker — the per-run spawn budget is created once in
+    # ``sse.run_agent`` and lives in config["configurable"]; ``None`` when the
+    # feature is unwired. Read verbatim (mirrors cancellation_token).
+    worker_spawn_budget = configurable.get("worker_spawn_budget")
     return ToolContext(
         tenant_id=tenant_id,
         run_id=run_id,
@@ -1655,6 +1659,7 @@ def _build_tool_context(config: RunnableConfig, *, plan: Plan | None = None) -> 
         cancellation_token=cancellation_token(config),
         plan=plan,
         deadline_at=deadline_at,
+        worker_spawn_budget=worker_spawn_budget,
     )
 
 

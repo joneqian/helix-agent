@@ -179,7 +179,7 @@ from control_plane.skill_evolution_limits import CircuitBreaker
 from control_plane.skill_evolution_worker import SkillEvolutionWorker
 from control_plane.skill_rollback_monitor import RollbackMonitor
 from control_plane.skill_run_usage_recorder import StoreSkillRunUsageRecorder
-from control_plane.subagent_runtime import make_child_agent_builder
+from control_plane.subagent_runtime import make_child_agent_builder, make_worker_build_fn
 from control_plane.tenancy import TenantConfigService
 from control_plane.tenant_mcp_pool import TenantMcpPoolService
 from control_plane.tenant_secret_overlay import TenantOverlayCredentialsResolver
@@ -913,6 +913,18 @@ def create_app(
                 resolved_agent_runtime.trajectory_recorder = TrajectoryRecorder(
                     object_store=object_store
                 )
+                # 1.3 Orchestrator-Worker — per-run spawn budget bounds (the
+                # builder is wired separately above). ``new_worker_spawn_budget``
+                # returns a fresh budget per run at the run_agent call sites.
+                resolved_agent_runtime.dynamic_workers_enabled = (
+                    resolved_settings.enable_dynamic_workers
+                )
+                resolved_agent_runtime.dynamic_worker_max_concurrent = (
+                    resolved_settings.dynamic_worker_max_concurrent
+                )
+                resolved_agent_runtime.dynamic_worker_max_per_run = (
+                    resolved_settings.dynamic_worker_max_per_run
+                )
                 # Stream J.12 — the curation worker reads the L7
                 # trajectory ObjectStore, so it is constructed here
                 # where the store exists (mirrors MemoryDLQWorker).
@@ -1025,10 +1037,35 @@ def create_app(
                     # tenant's MCP registry changes, like the top-level cache.
                     register_invalidation=resolved_agent_runtime.register_invalidation_hook,
                 )
+                # 1.3 Orchestrator-Worker — the spawn_worker builder (synthesizes
+                # ephemeral workers from the parent). ``None`` when the platform
+                # switch is off → no spawn_worker tool registered anywhere.
+                worker_build_fn = (
+                    make_worker_build_fn(
+                        secret_store=resolved_secret_store,
+                        checkpointer=checkpointer,
+                        base_tool_env=base_tool_env,
+                        max_iterations=resolved_settings.dynamic_worker_max_iterations,
+                        allowed_toolsets=list(resolved_settings.dynamic_worker_allowed_toolsets),
+                        middleware_env=middleware_env,
+                        memory_env=memory_env,
+                        credentials_resolver=credentials_resolver,
+                        tenant_mcp_pool_provider=_tenant_mcp_pool_provider,
+                        skill_store=resolved_skill_store,
+                        skill_activity_recorder=skill_activity_recorder,
+                        tenant_config_service=resolved_tenant_config_service,
+                    )
+                    if resolved_settings.enable_dynamic_workers
+                    else None
+                )
                 resolved_agent_runtime.agent_builder = make_agent_builder(
                     resolved_secret_store,
                     checkpointer,
-                    tool_env=replace(base_tool_env, child_agent_builder=child_agent_builder),
+                    tool_env=replace(
+                        base_tool_env,
+                        child_agent_builder=child_agent_builder,
+                        worker_build_fn=worker_build_fn,
+                    ),
                     middleware_env=middleware_env,
                     memory_env=memory_env,
                     # Stream O (Mini-ADR O-14) — per-tenant MCP server allowlist.

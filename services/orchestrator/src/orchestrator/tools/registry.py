@@ -18,12 +18,15 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from helix_agent.protocol import Plan
 from helix_agent.runtime.cancellation import CancellationToken
 from orchestrator.tools.ranking import build_document, rank_tools
+
+if TYPE_CHECKING:
+    from orchestrator.tools.spawn_worker import WorkerSpawnBudget
 
 #: Stream TE-1 — a tool's effect on the world. Descriptive metadata only in
 #: TE-1; intended to drive the side-effect-aware scheduler / approval gate
@@ -181,6 +184,12 @@ class ToolContext:
     #: doing expensive work and short-circuits with a cancel. ``None``
     #: when no deadline is configured.
     deadline_at: float | None = None
+    #: 1.3 Orchestrator-Worker — the per-run dynamic-worker spawn budget
+    #: (cumulative count cap + concurrency semaphore), created once per run
+    #: and shared across every ``spawn_worker`` call. ``None`` when the
+    #: feature is unwired (tests / eval) — workers still run, bounded by
+    #: depth + iteration cap + deadline + the per-tenant quota engine.
+    worker_spawn_budget: WorkerSpawnBudget | None = None
 
 
 #: Stream K.K8 — keys a tool is allowed to write back to ``AgentState``

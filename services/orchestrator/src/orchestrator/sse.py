@@ -67,6 +67,7 @@ from helix_agent.runtime.cancellation import (
     CancellationToken,
     RunCancelledError,
 )
+from orchestrator.tools.spawn_worker import WorkerSpawnBudget
 from helix_agent.runtime.runs import (
     RunEventStore,
     RunManager,
@@ -246,6 +247,7 @@ async def run_agent(
     approval_store: ApprovalStore | None = None,
     event_store: RunEventStore | None = None,
     tool_replay_safe: Callable[[str], bool] | None = None,
+    worker_spawn_budget: WorkerSpawnBudget | None = None,
 ) -> None:
     """Drive ``graph`` to completion, publishing events to ``bridge``.
 
@@ -288,6 +290,10 @@ async def run_agent(
             # tool dispatch emits a TOOL_CALL / TOOL_BLOCKED row. A live
             # object (not checkpoint-serialisable), like the cancel token.
             AUDIT_LOGGER_KEY: audit_logger,
+            # 1.3 Orchestrator-Worker — the per-run spawn budget (count cap +
+            # concurrency gate), shared across every spawn_worker call. A live
+            # object like the cancel token; ``None`` when the feature is off.
+            "worker_spawn_budget": worker_spawn_budget,
         },
     }
     # Stream M Gate — session E2E duration. Started before ``set_status``

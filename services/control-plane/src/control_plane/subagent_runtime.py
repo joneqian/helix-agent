@@ -24,11 +24,86 @@ from helix_agent.common.credentials import CredentialsResolver
 from helix_agent.common.skill_activity import SkillActivityRecorder
 from helix_agent.persistence.agent_spec import AgentSpecStore
 from helix_agent.persistence.skill import SkillStore
+from helix_agent.protocol import AgentSpec, SystemPromptSpec, ToolSpecEntry
 from helix_agent.runtime.secret_store import SecretStore
 from orchestrator import BuiltAgent, MemoryEnv, MiddlewareEnv, ToolEnv, build_agent
 from orchestrator.tools import ChildAgentBuilder
+from orchestrator.tools.spawn_worker import WorkerBuildFn
 
 logger = logging.getLogger(__name__)
+
+
+def _worker_system_prompt(role: str | None) -> str:
+    """Generated system prompt for an ephemeral worker (1.3).
+
+    A fresh, focused worker prompt (Claude Code / hermes shape) — the worker
+    sees only this + the delegated task, none of the parent conversation.
+    """
+    focus = f" Your focus for this task: {role}." if role else ""
+    return (
+        "You are a worker sub-agent spawned to complete a single, focused subtask "
+        "in isolation." + focus + " Do the task fully and return a concise, complete "
+        "result as your final message — it is reported straight back to the "
+        "orchestrator, which sees none of your intermediate work."
+    )
+
+
+def _filter_worker_tools(
+    tools: list[ToolSpecEntry], allowed: list[str]
+) -> list[ToolSpecEntry]:
+    """A worker inherits its parent's tools, optionally narrowed by the
+    platform allowlist. Empty allowlist = inherit verbatim (still a subset
+    of what the parent itself had). A non-empty allowlist keeps only entries
+    whose builtin ``name`` or tool ``type`` is listed."""
+    if not allowed:
+        return list(tools)
+    keep: list[ToolSpecEntry] = []
+    for t in tools:
+        ident = getattr(t, "name", None) or getattr(t, "type", None)
+        if ident in allowed:
+            keep.append(t)
+    return keep
+
+
+def synthesize_worker_spec(
+    parent: AgentSpec,
+    *,
+    role: str | None,
+    max_iterations: int,
+    allowed_toolsets: list[str],
+) -> AgentSpec:
+    """Derive an ephemeral worker :class:`AgentSpec` from ``parent`` (1.3).
+
+    Inherits the parent's model + sandbox isolation + tenant_config +
+    defenses (the security boundary is NOT relaxed). Replaces the system
+    prompt with a generated worker prompt, narrows tools to the platform
+    allowlist, clamps iterations to the platform cap, and strips stateful /
+    delegation blocks (memory / triggers / skills / static subagents /
+    reflection / routing / knowledge) — the worker is stateless and
+    ephemeral. ``dynamic_workers`` stays default-on so a worker may itself
+    spawn while below the depth cap.
+    """
+    body = parent.spec
+    worker_body = body.model_copy(
+        update={
+            "system_prompt": SystemPromptSpec(template=_worker_system_prompt(role)),
+            "tools": _filter_worker_tools(body.tools, allowed_toolsets),
+            "subagents": [],
+            "memory": None,
+            "triggers": [],
+            "skills": [],
+            "reflection": None,
+            "routing": None,
+            "knowledge": None,
+            "workflow": body.workflow.model_copy(
+                update={"max_iterations": min(body.workflow.max_iterations, max_iterations)}
+            ),
+        }
+    )
+    worker_meta = parent.metadata.model_copy(
+        update={"name": f"{parent.metadata.name}-worker"}
+    )
+    return parent.model_copy(update={"metadata": worker_meta, "spec": worker_body})
 
 
 class SubAgentNotFoundError(Exception):
@@ -149,4 +224,80 @@ def make_child_agent_builder(
     # delegate to a grandchild. Assigned after _build is defined; the
     # closure reads it only at call time, by which point it is bound.
     child_tool_env = replace(base_tool_env, child_agent_builder=_build)
+    return _build
+
+
+def make_worker_build_fn(
+    *,
+    secret_store: SecretStore,
+    checkpointer: BaseCheckpointSaver[Any],
+    base_tool_env: ToolEnv,
+    max_iterations: int,
+    allowed_toolsets: list[str],
+    middleware_env: MiddlewareEnv | None = None,
+    memory_env: MemoryEnv | None = None,
+    credentials_resolver: CredentialsResolver | None = None,
+    tenant_mcp_pool_provider: TenantMcpPoolProvider | None = None,
+    skill_store: SkillStore | None = None,
+    skill_activity_recorder: SkillActivityRecorder | None = None,
+    tenant_config_service: TenantConfigService | None = None,
+) -> WorkerBuildFn:
+    """Build the :class:`WorkerBuildFn` the orchestrator's ``ToolEnv`` carries
+    for the ``spawn_worker`` tool (1.3 dynamic Orchestrator-Worker).
+
+    Mirrors :func:`make_child_agent_builder` but **synthesizes** the worker
+    spec from the parent (:func:`synthesize_worker_spec`) instead of resolving
+    a deployed ``agent_ref`` — there is no store lookup, the worker is
+    ephemeral. The build reuses the same plumbing (provider key / skill
+    resolvers, tenant MCP pool, ``build_agent`` at ``subagent_depth=depth``).
+    Not cached: each worker carries a per-call role/prompt.
+    """
+
+    async def _build(
+        parent_spec: AgentSpec,
+        *,
+        tenant_id: UUID,
+        role: str | None,
+        depth: int,
+    ) -> BuiltAgent:
+        worker_spec = synthesize_worker_spec(
+            parent_spec,
+            role=role,
+            max_iterations=max_iterations,
+            allowed_toolsets=allowed_toolsets,
+        )
+        provider_key_resolver = (
+            make_provider_key_resolver(resolver=credentials_resolver, tenant_id=tenant_id)
+            if credentials_resolver is not None
+            else None
+        )
+        skill_resolver = (
+            make_skill_resolver(store=skill_store, tenant_config_service=tenant_config_service)
+            if skill_store is not None and tenant_config_service is not None
+            else None
+        )
+        call_tool_env = worker_tool_env
+        if tenant_mcp_pool_provider is not None:
+            tenant_pool = await tenant_mcp_pool_provider(tenant_id)
+            if tenant_pool.names():
+                call_tool_env = replace(worker_tool_env, tenant_mcp_pool=tenant_pool)
+        built = await build_agent(
+            worker_spec,
+            secret_store=secret_store,
+            checkpointer=checkpointer,
+            tool_env=call_tool_env,
+            middleware_env=middleware_env,
+            memory_env=memory_env,
+            subagent_depth=depth,
+            tenant_id=tenant_id,
+            provider_key_resolver=provider_key_resolver,
+            skill_resolver=skill_resolver,
+            skill_activity_recorder=skill_activity_recorder,
+        )
+        logger.info("control_plane.worker.built role=%s depth=%d", role or "general", depth)
+        return built
+
+    # The worker's own ToolEnv carries this same build_fn so a worker can in
+    # turn spawn a grandchild worker (bounded by the depth cap).
+    worker_tool_env = replace(base_tool_env, worker_build_fn=_build)
     return _build

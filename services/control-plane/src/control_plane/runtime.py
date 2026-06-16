@@ -151,11 +151,32 @@ class AgentRuntime:
     #: fuel, and the J.13 eval gate's input). Set in the app lifespan once the
     #: ObjectStore is open; ``None`` keeps trajectory recording off (no store).
     trajectory_recorder: TrajectoryRecorder | None = None
+    #: 1.3 Orchestrator-Worker — per-run dynamic-worker spawn bounds. Set in
+    #: the app lifespan from platform settings. ``enabled=False`` makes
+    #: :meth:`new_worker_spawn_budget` return ``None`` (no per-run caps; the
+    #: feature itself is also gated by ``ToolEnv.worker_build_fn``).
+    dynamic_workers_enabled: bool = False
+    dynamic_worker_max_concurrent: int = 3
+    dynamic_worker_max_per_run: int = 16
     _cache: dict[_CacheKey, BuiltAgent] = field(default_factory=dict, repr=False)
     #: Extra per-tenant cache invalidators fanned out by ``invalidate_tenant``
     #: — the sub-agent builder registers its own cache here (Stream V-D, audit
     #: #1) since it caches built agents independently of ``_cache``.
     _invalidation_hooks: list[Callable[[UUID], None]] = field(default_factory=list, repr=False)
+
+    def new_worker_spawn_budget(self) -> Any:
+        """A fresh per-run :class:`WorkerSpawnBudget`, or ``None`` when dynamic
+        workers are disabled. Created per run (the semaphore + count are
+        per-run state), passed into ``run_agent``. Lazy-imports the
+        orchestrator type to keep this module's import graph light."""
+        if not self.dynamic_workers_enabled:
+            return None
+        from orchestrator.tools.spawn_worker import WorkerSpawnBudget
+
+        return WorkerSpawnBudget(
+            max_per_run=self.dynamic_worker_max_per_run,
+            max_concurrent=self.dynamic_worker_max_concurrent,
+        )
 
     async def get_agent(
         self,

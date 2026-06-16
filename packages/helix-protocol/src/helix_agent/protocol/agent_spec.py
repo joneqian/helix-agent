@@ -349,6 +349,34 @@ class RoutingSpec(BaseModel):
     rules: list[RouteRule] = Field(default_factory=list)
 
 
+class DynamicWorkersSpec(BaseModel):
+    """Manifest ``dynamic_workers:`` block — 1.3 Orchestrator-Worker.
+
+    Controls whether the agent's LLM is handed the ``spawn_worker`` tool —
+    a dynamic, ephemeral worker the orchestrator *creates at run time* from
+    a generated task/role (vs the static ``subagents`` agent_ref list). The
+    worker inherits the parent's model + sandbox isolation, runs to
+    completion, and is discarded; the parent synthesizes its result.
+
+    Only an ``enabled`` opt-out lives here. The numeric safety bounds
+    (concurrency / per-run cap / iterations / tool allowlist) are
+    **platform-global settings**, not per-agent — a manifest must not be
+    able to raise the platform's shared-resource ceiling. Effective
+    registration is ``platform enable_dynamic_workers ∧ this.enabled ∧
+    depth < MAX_SUBAGENT_DEPTH ∧ a worker builder is wired``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "register the spawn_worker tool (default inherits the platform "
+            "switch = on); set false to opt a simple agent out"
+        ),
+    )
+
+
 class KnowledgeSpec(BaseModel):
     """Manifest ``knowledge:`` block — Stream J.5 RAG.
 
@@ -801,6 +829,13 @@ class AgentSpecBody(BaseModel):
     subagents: list[SubAgentSpec] = Field(
         default_factory=list,
         description="Stream J.4 — deployed agents this agent may delegate to (agent-as-tool)",
+    )
+    dynamic_workers: DynamicWorkersSpec = Field(
+        default_factory=DynamicWorkersSpec,
+        description=(
+            "1.3 Orchestrator-Worker — dynamic ephemeral worker spawning "
+            "(the spawn_worker tool). Default-on; bounds are platform settings."
+        ),
     )
     sandbox: SandboxSpec
     memory: MemorySpec | None = None
