@@ -17,10 +17,10 @@
 
 → 优先级重心从「补沙箱安全」转向「**收割廉价 ★4→★5 + agent 能力项**」。
 
-## 当前非满分项（11 项；2.2/4.1/11.4/11.5/3.3/4.4/1.3/7.3/7.4/8.5/13.2 已收为 ★5）
+## 当前非满分项（10 项；2.2/4.1/11.4/11.5/3.3/4.4/1.3/7.3/7.4/8.5/13.2/14.4 已收为 ★5）
 
 ★4（一步之遥，多为低成本）：10.1（TX 终态，不推）（~~1.3~~ 已 ★5 #666/#667；~~7.3~~~~7.4~~ 已 ★5 #669）
-★3（真 gap）：7.2 · 7.6 · 14.4 · 16.4 · 16.3 · 10.5 · 12.4（~~8.5~~ #671 / ~~13.2~~ #673 已 ★5）
+★3（真 gap）：7.2 · 7.6 · 16.4 · 16.3 · 10.5 · 12.4（~~8.5~~ #671 / ~~13.2~~ #673 / ~~14.4~~ #675 已 ★5）
 ★2（M1 大件）：9.4 · 9.5
 ✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
 
@@ -39,8 +39,9 @@
 > 见 `2026-06-15-1145-live-eval-worker-design.md` §8 E2E 实证；代码 #649/#652 已合，本机真栈（deepseek eval agent）
 > trace passed 3/3 / adversarial 5/6（机制证实，1 真防御观测非假阴）。
 >
-> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ **13.2（★3→★5，+2，408/430）**。
-> **均分 4.60→4.74（94.9%），共 +12★。T1 全清。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ **14.4（★3→★5，+2，410/430）**。
+> **均分 4.60→4.77（95.3%），共 +14★。T1 全清。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> 14.4 见 `2026-06-16-14.4-mcp-defense-audit-design.md`（#675）：核代码发现「无流量审计」部分过期，补 MCP 专属流量审计（server/response_chars/is_error）+ in-process 隔离威胁评估 + 前端流量徽章。
 > 7.3/7.4 见 `2026-06-16-7.3-7.4-input-dlp-harvest-design.md`（#669）：7.3 PI-1c 结构化 `untrusted_content` 通道治内联注入根，**live 实证**通道把 001/003 内联注入从 LEAK 翻 SAFE（负对照排除假阳性）；7.4 出站 DLP 条件输出 redact PII。
 > 8.5 见 `2026-06-16-8.5-rbac-abac-design.md`（#671）：细粒度 RBAC-ABAC（RoleBinding conditions=resource_ids/labels/owner_only，agents 路由实例级授权，集成实证条件 operator allow/deny）。
 > 13.2 见 `2026-06-16-13.2-resume-idempotency-design.md`（#673）：并发 resume 幂等——核代码发现 CAS 已 exactly-once（不盲从「补悲观锁」），补 idempotency_key 确定性恢复 + 真 PG 16 并发证 + 全流程 seam 测。
@@ -62,7 +63,7 @@
 | 7.2 gVisor | ★3 | 生产强制 + `isolation_level` 真实现（运维 + 代码） |
 | ~~8.5 RBAC-ABAC~~ | ✅★5 | **已交付+集成实证（#671）**：RoleBinding `conditions`（resource_ids URI 级 / labels 属性 / owner_only 归属）+ `authorize_resource` 加性语义 + agents 路由实例级采用 + IAM 页条件编辑器；关键修正=有条件 binding 不并入 `principal.roles` 防绕过；none_as_null JSONB 修 platform CHECK |
 | 7.6 IDS | ★3 | Falco/Tetragon runtime IDS（运维） |
-| 14.4 MCP 审计 | ★3 | MCP 流量审计日志 + in-process 隔离评估 |
+| ~~14.4 MCP 审计~~ | ✅★5 | **已交付（#675）**：核代码发现「无流量审计」部分过期（TE-2 已审计每工具含 MCP）；补 MCP 专属流量审计（`tool:call` 补 `mcp_server`/`response_chars` exfil 体积/`mcp_is_error`）+ in-process 隔离威胁评估（爆炸半径由信任边界 operator 非租户界定，M0 终态）+ 前端审计页 MCP 流量徽章（可扫体积）|
 
 ### TX — 接受为终态（★4 但非工作项）
 
