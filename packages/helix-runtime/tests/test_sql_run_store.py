@@ -394,7 +394,7 @@ async def test_concurrent_claim_queued_exactly_one_winner(run_store: SqlRunStore
     await run_store.create(replace(info, enqueued_input={"input": "go", "image_refs": []}))
     now = datetime.now(UTC)
 
-    async def _claim(n: int):
+    async def _claim(n: int) -> RunInfo | None:
         return await run_store.claim_queued(
             run_id=run_id,
             new_owner=f"worker-{n}",
