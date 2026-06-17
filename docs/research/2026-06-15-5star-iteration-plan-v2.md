@@ -21,7 +21,7 @@
 
 ★4（一步之遥，多为低成本）：10.1（TX 终态，不推）（~~1.3~~ 已 ★5 #666/#667；~~7.3~~~~7.4~~ 已 ★5 #669）
 ★3（真 gap）：7.2 · 7.6 · 16.4 · 12.4（~~8.5~~ #671 / ~~13.2~~ #673 / ~~14.4~~ #675 / ~~16.3~~ backpressure / ~~10.5~~ 烧录率 #680 已 ★5）
-★2（M1 大件）：9.5（~~9.4~~ 已 ★5 live #677+#678）
+★2（M1 大件）：—（~~9.4~~ 已 ★5 live #677+#678；~~9.5~~ 已 ★5 live #683+#684+#685）
 ✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
 
 ## 重排后的层级
@@ -39,8 +39,8 @@
 > 见 `2026-06-15-1145-live-eval-worker-design.md` §8 E2E 实证；代码 #649/#652 已合，本机真栈（deepseek eval agent）
 > trace passed 3/3 / adversarial 5/6（机制证实，1 真防御观测非假阴）。
 >
-> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ 14.4（+2，410）→ 9.4（★2→★5 live，+3，413）→ 16.3（+2，415）→ **10.5（★3→★5，+2，417/430）**（+15.3 测试债清，★5 不改分）。
-> **均分 4.60→4.85（97.0%），共 +21★。T1 全清；M1 大件 9.4 提前 live 收口；运维韧性三连（16.3/10.5/15.3，#679-681）。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ 14.4（+2，410）→ 9.4（★2→★5 live，+3，413）→ 16.3（+2，415）→ 10.5（★3→★5，+2，417）→ **9.5（★2→★5 live，+3，420/430）**（+15.3 测试债清，★5 不改分）。
+> **均分 4.60→4.88（97.7%），共 +24★。T1 全清；M1 大件 9.4+9.5 双双 live 收口；运维韧性三连（16.3/10.5/15.3，#679-681）。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
 > 16.3/10.5/15.3 见 `2026-06-15-capability-reassessment.md` §3「运维韧性三连」：16.3 应用层 backpressure 过载守卫（503 甩负）/ 10.5 SLO 多窗烧录率（Google SRE，promtool 双验）/ 15.3 sanitize 纯函数直接单测（含跨递归位置）。
 > 9.4 见 `2026-06-16-9.4-9.5-ha-failover-design.md` §7（#677+#678）：Postgres 租约+孤儿 sweep+自动热接力,蓝绿双实例真栈 kill blue mid-run→green 续跑到 success(5 项断言全绿);live 暴露 failover 硬依赖 postgres checkpointer + 续跑 seq 撞键(已修)。
 > 14.4 见 `2026-06-16-14.4-mcp-defense-audit-design.md`（#675）：核代码发现「无流量审计」部分过期，补 MCP 专属流量审计（server/response_chars/is_error）+ in-process 隔离威胁评估 + 前端流量徽章。
@@ -78,7 +78,7 @@
 | 项 | 现 | 内容 | 工作量 |
 |---|---|---|---|
 | ~~9.4 自动 failover~~ | ✅★5 | **已交付+live 实证（#677+#678）**：Postgres 租约（`claimed_by`/`lease_until`/`heartbeat_at`）+ 孤儿 sweep（reclaim CAS 恰一赢家）+ 自动热接力（`adopt`+`run_agent(graph_input=None)` 从 durable checkpoint 续跑）。蓝绿双实例真栈 kill blue mid-run→green 续跑到 `status=success`，5 项断言全绿。house 风格（Postgres-first，零 Celery/broker）。live 暴露真依赖：failover 硬要 `checkpointer_backend=postgres`（dev 默认 memory→`EmptyInputError`）+ 续跑 seq 撞键（已修 `RunEventStore.next_seq`） |
-| **9.5 分布式任务队列** | ★2 | Celery 等替进程内 asyncio（J.10）——9.4 落地证明 Postgres 租约+sweep 已覆盖「崩溃恢复」语义,9.5 纯「分布式调度规模化」M1 | XL |
+| ~~9.5 分布式任务队列~~ | ✅★5 | **已交付+live 实证（#683+#684+#685）**：house 风格分布式 run 队列（零 Celery/broker），`RunStatus.QUEUED`+`enqueued_input` 持久化 + `POST /runs mode=queue`（202 入队）+ 每实例 `RunQueueWorker` CAS-claim（`claim_queued` UPDATE…WHERE status='queued' RETURNING → 恰一赢家），与同步 SSE `mode=stream` 并行共存。Phase 2a EvalWorker claim CAS；Phase 2b 核代码发现真 gap 比 assessment 严重——`reserve`/`commit`/`release` 本身无行锁 read-check-write（READ COMMITTED ledger 双退款/丢失更新），reaper 每实例跑当前即真 bug，修 `FOR UPDATE` 串行化+`ON CONFLICT greatest` 原子算术+`expire_reserved` 返回赢家布尔（真 PG 16 并发证）。live：blue `mode=queue` 入队→kill blue→green RunQueueWorker 认领执行到 `success`，owner=green/`reclaim_count=0`/dequeued 0→1，4 项全绿 | XL |
 
 ### T4 — 测试债 + 运维韧性 + 变现（价值最低 / 用户后置，最后）
 
