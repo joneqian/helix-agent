@@ -983,6 +983,21 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [x] **Y3 Rate Card**（PR #407）：`model_rate_card` 表（NULL-tenant FORCE RLS + 整数 micro-USD + markup_bps + 时序 effective_from/until + plan_tier 最具体优先 + resolve 半开窗）+ store（双实现）+ admin API（system_admin/bypass）+ `billing` RBAC + audit ResourceType + `token_usage.provider` 列（additive,中间件填充）+ 迁移 `0059`
 - [x] **Y4 成本派生 + billing ledger**（PR #408）：`tenant_billing_ledger`（tenant-scoped RLS；不扩展 token_budget_ledger；base/markup/billed 拆分内部存）+ `billing-rollup-job` 服务（按 row `observed_at` 当时生效 rate **逐行**定价→聚合 bucket→幂等 upsert-overwrite；provider 反查 + 歧义/无 rate 标 unpriced）+ `token_usage` windowed read + 迁移 `0060`。**Stream Y 收官**
 
+#### Stream Y-MK — 平台级 per-provider 多 key failover（2026-06-17 拍板；分支 `llm/multi-key-failover`）— 设计 [STREAM-Y-MULTIKEY-DESIGN](./streams/STREAM-Y-MULTIKEY-DESIGN.md) — [memory:project_ymk_provider_multikey_failover]
+
+**触发**：单 provider 只能配一把 key，被限流/欠费/撤销即整条 run 挂。**用户拍板语义**：key 限流/欠费/撤销→跳同 provider 兄弟 key；该 provider 全 key 死→跳下个 provider；"请求报错"=只指 5xx/网络/超时（400 fail-fast 不翻 E.11 #21）；优先级 failover 无加权；平台级先行（租户多 key=二期 Y-MK-2）。**关键复用**：E.11 LLMRouter + per-key breaker 早为多 key 设计，缺的只是装配。
+
+- [x] **L1 错误轴**：`LLMKeyUnavailableError`（欠费/quota/撤销，不 retry 但记 breaker）+ middleware 拦截
+- [x] **L2 router 两级链**：`ProviderHandle.group` + group-aware 游走（key 级跳兄弟 / provider 级跳过兄弟 / 400 fail-fast）；non-OAuth 401 改 key 级
+- [x] **L3 status 分类器**：`_errors.classify_http_error`（402/429-quota/403-billing→账号死轴），openai/anthropic 接入
+- [x] **L4 存储 1:1→1:N**：`platform_provider_secret` 加 key_id+priority 复合主键 + migration `0084`（in-place backfill default）；真 PG 集成 4/4
+- [x] **L5 解析 + 装配**：service `effective_provider_secret_refs[_for]`（priority 聚合，DB 权威）+ `TenantOverlay.resolve_provider_keys`（helix-common 禁改照 HX-8）+ `make_provider_key_resolver` 返 list + `build_llm_router` 展开兄弟 handle
+- [x] **L6a 操作端 API**：`PUT/DELETE /v1/platform/credentials/providers/{provider}/keys/{key_id}` + GET catalog `keys[]` + 软删兄弟保留
+- [x] **L6b admin-ui**：平台凭证页 provider 行可展开 key 列表 + 添加密钥弹窗（key_id+优先级）+ SDK/i18n 双语/Storybook/vitest/e2e
+- [ ] **L6c（二期可选）**：`token_usage` 加 `provider_key_id` label（多账号按 key 对账发票）
+
+**完成 = 平台为每 provider 配多把 key，run 在限流/欠费/撤销时自动切兄弟 key，全死才切 provider**；全 TDD（MK-1..15）+ 真 PG 集成。
+
 ### Stream Z — Chargeback / 用量面（计费层出口）— 设计 [STREAM-Z-DESIGN](./streams/STREAM-Z-DESIGN.md)
 
 租户看自己用量/成本，system_admin 看跨租户分账，成本可观测。**硬约束：租户面只暴露 billed，绝不回显 base/markup**。发票推迟 M2。

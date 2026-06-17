@@ -4,7 +4,7 @@
 provider 的所有 key 都不可用时才切到下一个 provider。解决"单 key 被限流 / 欠费 /
 撤销即整条 run 挂掉"的可用性缺口。
 
-- 状态: 后端全交付(L1–L5 + 操作端 CRUD API);admin-ui + 计量 label 待办
+- 状态: 已交付(L1–L6b 全完成);仅计量 `provider_key_id` label 作二期可选(L6c)
 - 范围: **平台级**(`platform_provider_secret`)。租户级 override 多 key、加权负载均衡 = 二期 (Y-MK-2)。
 - 关联: Stream E.11 (LLMRouter fallback) / Stream P (platform secrets) / Stream Y-1/Y-2 (BYOK 移除、平台凭证唯一源)。
 
@@ -157,10 +157,10 @@ ORM `PlatformProviderSecretRow` + 协议 `PlatformProviderSecretRecord` 加 `key
 - [x] 无 TODO;测试覆盖 MK-1..15 全绿(unit),sql store + migration 走 integration(本地真 PG 4/4)。
 - [x] ruff / mypy(CI 域)全绿;改动文件无 lint。
 - [x] 操作端多 key CRUD API + 测试(L6a)。
-- [ ] uv.lock 无漂移(无依赖变更,待 push 前核)。
-- [ ] admin-ui 多 key 页 + .stories + i18n 双语 + SE-8 接线(L6b,待办)。
-- [ ] 计量 `token_usage` 加 `provider_key_id` label(二期可选)。
-- [ ] docs/ITERATION-PLAN.md 登记 Y-MK 并勾选;状态置"已交付"。
+- [x] uv.lock 无漂移(无依赖变更)。
+- [x] admin-ui 多 key 页 + .stories + i18n 双语 + SE-8 接线(L6b)。
+- [ ] 计量 `token_usage` 加 `provider_key_id` label(L6c 二期可选)。
+- [x] docs/ITERATION-PLAN.md 登记 Y-MK 并勾选;状态置"已交付"。
 - [x] CLAUDE 内存: 多 key failover 两级语义 + 错误轴 落档。
 
 ## 7. 已交付实现索引(commit)
@@ -170,3 +170,4 @@ ORM `PlatformProviderSecretRow` + 协议 `PlatformProviderSecretRecord` 加 `key
 - L4 存储 1:N + migration `0084_provider_secret_multikey`
 - L5 解析视图 `effective_provider_secret_refs[_for]` + `resolve_provider_keys` + `build_llm_router` 展开
 - L6a 操作端 CRUD `PUT/DELETE /v1/platform/credentials/providers/{provider}/keys/{key_id}`
+- L6b admin-ui `SettingsPlatformConfig.tsx` 多 key 展开 + 添加密钥(+ SDK/i18n/stories/tests/e2e)
