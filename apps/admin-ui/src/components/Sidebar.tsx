@@ -20,6 +20,7 @@ import {
   Plug,
   Receipt,
   Sparkles,
+  ShieldCheck,
   UserCircle2,
   Users,
   Building,
@@ -56,6 +57,7 @@ const NAV_ITEMS: NavItem[] = [
 const SETTINGS_ITEMS: NavItem[] = [
   { key: "settings-tenants", labelKey: "nav.tenants", icon: <Building size={16} strokeWidth={1.5} />, path: "/settings/tenants" },
   { key: "settings-platform", labelKey: "nav.platform_credentials", icon: <KeyRound size={16} strokeWidth={1.5} />, path: "/settings/platform" },
+  { key: "settings-platform-users", labelKey: "nav.platform_users", icon: <ShieldCheck size={16} strokeWidth={1.5} />, path: "/settings/platform-users" },
   { key: "settings-mcp-catalog", labelKey: "nav.mcp_catalog", icon: <Boxes size={16} strokeWidth={1.5} />, path: "/settings/mcp-catalog" },
   { key: "settings-platform-skills", labelKey: "nav.platform_skills", icon: <Sparkles size={16} strokeWidth={1.5} />, path: "/settings/platform-skills" },
   { key: "settings-api-keys", labelKey: "nav.api_keys", icon: <Key size={16} strokeWidth={1.5} />, path: "/settings/api-keys" },

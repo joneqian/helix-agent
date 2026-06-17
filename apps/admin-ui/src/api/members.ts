@@ -59,14 +59,22 @@ export interface ListMembersParams {
   status?: MemberStatus;
   limit?: number;
   offset?: number;
+  /** ``true`` requests the cross-tenant aggregate (``tenant_id="*"``);
+   *  requires system_admin server-side (403 otherwise). Read-only. */
+  crossTenant?: boolean;
 }
 
 export async function listMembers(
   params: ListMembersParams = {},
 ): Promise<MemberList> {
-  const { status, limit, offset } = params;
+  const { status, limit, offset, crossTenant } = params;
   return getJson<MemberList>("/v1/members", {
-    params: { status, limit, offset },
+    params: {
+      status,
+      limit,
+      offset,
+      ...(crossTenant ? { tenant_id: "*" } : {}),
+    },
   });
 }
 

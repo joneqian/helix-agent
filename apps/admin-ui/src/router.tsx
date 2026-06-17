@@ -14,6 +14,7 @@ import { SettingsApiKeys } from "./pages/SettingsApiKeys";
 import { SettingsAudit } from "./pages/SettingsAudit";
 import { SettingsMembers } from "./pages/SettingsMembers";
 import { SettingsPlatformConfig } from "./pages/SettingsPlatformConfig";
+import { SettingsPlatformUsers } from "./pages/SettingsPlatformUsers";
 import { SettingsRoleBindings } from "./pages/SettingsRoleBindings";
 import { SettingsServiceAccounts } from "./pages/SettingsServiceAccounts";
 import { SettingsTenantConfig } from "./pages/SettingsTenantConfig";
@@ -61,6 +62,7 @@ export function AppRouter() {
       <Route path="/settings/tenants" element={<SettingsTenants />} />
       <Route path="/settings/credentials" element={<SettingsTenantCredentials />} />
       <Route path="/settings/platform" element={<SettingsPlatformConfig />} />
+      <Route path="/settings/platform-users" element={<SettingsPlatformUsers />} />
       <Route path="/settings/mcp-catalog" element={<SettingsMcpCatalog />} />
       <Route path="/settings/platform-skills" element={<SettingsPlatformSkills />} />
       <Route path="/settings/audit" element={<SettingsAudit />} />
