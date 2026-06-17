@@ -1,4 +1,14 @@
-# Stream 9.4 — HA-failover live E2E
+# Stream 9.4 / 9.5 — HA live E2E
+
+Two live-proof harnesses share this dir:
+
+- **`verify_failover.py`** (Stream 9.4) — orphaned-run automatic hot-handoff.
+- **`verify_queue.py`** (Stream 9.5) — distributed run-queue cross-instance drain
+  (see [§ Stream 9.5](#stream-95--distributed-run-queue-live-e2e) below).
+
+---
+
+## Stream 9.4 — HA-failover live E2E
 
 Proves the orphaned-run **automatic hot-handoff** end to end against a real
 two-instance dev stack. CI can't cover this: it needs two live control-plane
@@ -46,3 +56,47 @@ Exit code is non-zero if failover did not complete cleanly. Lease fields
 from Postgres via `docker exec helix-postgres psql` (the dev superuser bypasses
 RLS); green's metrics are scraped over its container loopback via `docker exec`,
 so green needs no reachable host port.
+
+---
+
+## Stream 9.5 — distributed run-queue live E2E
+
+Proves the **distributed run queue**: a run submitted to one instance is drained
+to completion by a *different* instance, exactly once. CI can't cover this — its
+tests monkeypatch `run_agent` and run a single in-memory store.
+
+### What it proves
+
+1. A run is submitted to **blue** with `mode=queue` → blue returns `202` and
+   persists a `status='queued'` row owned by no process (no `claimed_by`).
+2. **blue**'s own queue worker is disabled (overlay), so the row can only be
+   claimed by green. blue is then killed — proving the work survives the
+   submitter's death.
+3. **green**'s `RunQueueWorker` CAS-claims the queued run (`status='queued'` →
+   `running` + lease → exactly-one winner), rebuilds the agent, and executes it
+   from the persisted `enqueued_input`.
+4. The run reaches `success` owned by **green** with `reclaim_count == 0` (a
+   queue claim, not a failover reclaim), and green's
+   `helix_run_queue_dequeued_total` metric incremented.
+
+### Prerequisites
+
+- Dev stack built with this branch (`make dev-up` — rebuilds the control-plane
+  image from the working tree and runs the `0082_agent_run_queue` migration).
+- **blue + green** brought up with the queue-e2e overlay (blue's queue worker
+  off, green remapped to `8002`):
+
+  ```bash
+  docker compose -f infra/docker-compose.yml -f infra/docker-compose.queue-e2e.yml \
+      --profile full up -d --no-deps control-plane-blue control-plane-green
+  ```
+
+- An **active domestic-model agent** and a dev-login bearer token.
+
+### Run
+
+```bash
+export HELIX_API_TOKEN=<a dev-login bearer token>   # never logged
+uv run python tools/ha/verify_queue.py               # auto-picks a domestic agent
+uv run python tools/ha/verify_queue.py --agent my-agent@1.0.0
+```
