@@ -170,9 +170,13 @@ async def test_list_all_tenants_crosses_tenants_via_set_role(
         assert [r.tenant_id for r in a_rows] == [tenant_a]
 
         # Cross-tenant platform-admin read — same code path the API uses.
+        # The integration suite shares one Postgres container, so other tests
+        # seed their own tenant_member rows; assert our two tenants are present
+        # (subset), not exact-equality on the whole table.
         with _bypass_rls():
-            all_rows = await store.list_all_tenants()
-        assert {r.tenant_id for r in all_rows} == {tenant_a, tenant_b}
-        assert len(all_rows) == 2
+            all_rows = await store.list_all_tenants(limit=1000)
+        mine = [r for r in all_rows if r.tenant_id in {tenant_a, tenant_b}]
+        assert {r.tenant_id for r in mine} == {tenant_a, tenant_b}
+        assert len(mine) == 2
     finally:
         await engine.dispose()

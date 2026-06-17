@@ -65,12 +65,17 @@ export function TenantScopeProvider({ children }: { children: ReactNode }) {
   // Demote stale scope when a non-system-admin lands with a cached
   // ``"*"`` value (eg. operator left a JWT in localStorage from a
   // previous system-admin session on this machine).
+  //
+  // Gate on ``serverResolved``: until ``/v1/me`` returns, the optimistic
+  // identity reports ``isSystemAdmin=false``, which would wrongly demote a
+  // real system_admin who reloaded on the ``"*"`` scope (scope flashes /
+  // is lost). Only demote once the server truth confirms a non-admin.
   useEffect(() => {
-    if (!isSystemAdmin && scope === SCOPE_ALL) {
+    if (identity?.serverResolved && !identity.isSystemAdmin && scope === SCOPE_ALL) {
       setScopeState(SCOPE_HOME);
       writeStored(SCOPE_HOME);
     }
-  }, [isSystemAdmin, scope]);
+  }, [identity, scope]);
 
   const setScope = useCallback(
     (next: TenantScopeValue) => {
