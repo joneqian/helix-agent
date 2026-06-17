@@ -247,9 +247,7 @@ class AgentRuntime:
 class _ProviderKeysCapable(Protocol):
     """A resolver that can return the ordered key list for a provider (Y-MK)."""
 
-    async def resolve_provider_keys(
-        self, *, tenant_id: UUID, provider: Provider
-    ) -> list[str]: ...
+    async def resolve_provider_keys(self, *, tenant_id: UUID, provider: Provider) -> list[str]: ...
 
 
 def make_provider_key_resolver(

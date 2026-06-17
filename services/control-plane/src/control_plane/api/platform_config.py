@@ -204,9 +204,7 @@ def build_platform_config_router() -> APIRouter:
         tool_counts = _tool_usage_counts(specs)
 
         def _provider_entry(provider: str) -> dict[str, object]:
-            keys = sorted(
-                db_prov_keys.get(provider, []), key=lambda r: (r.priority, r.key_id)
-            )
+            keys = sorted(db_prov_keys.get(provider, []), key=lambda r: (r.priority, r.key_id))
             # Backward-compat scalar fields reflect the primary key: prefer
             # 'default', else the best (lowest-priority) row.
             primary = next((k for k in keys if k.key_id == "default"), keys[0] if keys else None)
@@ -216,9 +214,7 @@ def build_platform_config_router() -> APIRouter:
                 "secret_ref": (
                     primary.secret_ref if primary is not None else env_provs.get(provider)
                 ),
-                "enabled": (
-                    primary.enabled if primary is not None else provider in env_provs
-                ),
+                "enabled": (primary.enabled if primary is not None else provider in env_provs),
                 "keys": [
                     {
                         "key_id": k.key_id,
@@ -314,8 +310,14 @@ def build_platform_config_router() -> APIRouter:
     ) -> dict[str, object]:
         """Upsert the provider's ``default`` key (Stream P; Y-MK key_id='default')."""
         return await _do_upsert_provider(
-            provider=provider, key_id="default", payload=payload, principal=principal,
-            store=store, service=service, audit=audit, secret_store=secret_store,
+            provider=provider,
+            key_id="default",
+            payload=payload,
+            principal=principal,
+            store=store,
+            service=service,
+            audit=audit,
+            secret_store=secret_store,
         )
 
     @router.put("/providers/{provider}/keys/{key_id}")
@@ -331,8 +333,14 @@ def build_platform_config_router() -> APIRouter:
     ) -> dict[str, object]:
         """Stream Y-MK — upsert one named key of a provider for multi-key failover."""
         return await _do_upsert_provider(
-            provider=provider, key_id=key_id, payload=payload, principal=principal,
-            store=store, service=service, audit=audit, secret_store=secret_store,
+            provider=provider,
+            key_id=key_id,
+            payload=payload,
+            principal=principal,
+            store=store,
+            service=service,
+            audit=audit,
+            secret_store=secret_store,
         )
 
     @router.put("/tools/{tool}")
@@ -445,9 +453,9 @@ def build_platform_config_router() -> APIRouter:
                     if agent_store is not None
                     else []
                 )
-                in_use = _provider_usage_counts(
-                    specs, embedding_provider=embedding_provider
-                ).get(cast(Provider, provider), 0)
+                in_use = _provider_usage_counts(specs, embedding_provider=embedding_provider).get(
+                    cast(Provider, provider), 0
+                )
                 if in_use > 0:
                     raise HTTPException(
                         status_code=409,

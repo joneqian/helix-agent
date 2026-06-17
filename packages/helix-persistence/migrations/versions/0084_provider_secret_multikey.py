@@ -32,9 +32,7 @@ _TABLE = "platform_provider_secret"
 def upgrade() -> None:
     op.add_column(
         _TABLE,
-        sa.Column(
-            "key_id", sa.Text(), nullable=False, server_default=sa.text("'default'")
-        ),
+        sa.Column("key_id", sa.Text(), nullable=False, server_default=sa.text("'default'")),
     )
     op.add_column(
         _TABLE,

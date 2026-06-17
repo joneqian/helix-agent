@@ -166,9 +166,7 @@ class PlatformSecretsService:
             db_by_provider.setdefault(row.provider, []).append(row)
         provider_refs: dict[Provider, list[str]] = {}
         for provider, rows in db_by_provider.items():
-            enabled = sorted(
-                (r for r in rows if r.enabled), key=lambda r: (r.priority, r.key_id)
-            )
+            enabled = sorted((r for r in rows if r.enabled), key=lambda r: (r.priority, r.key_id))
             if enabled:
                 provider_refs[provider] = [r.secret_ref for r in enabled]
         for provider, ref in env_providers.items():

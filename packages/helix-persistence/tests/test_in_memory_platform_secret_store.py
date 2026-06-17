@@ -137,12 +137,20 @@ async def test_tenant_tool_override_independent_namespace() -> None:
 async def test_provider_multiple_keys_independent_rows() -> None:
     store = InMemoryPlatformSecretStore()
     await store.upsert_provider(
-        provider="deepseek", key_id="acct-a", secret_ref="kms://a", enabled=True,
-        priority=10, actor_id="admin",
+        provider="deepseek",
+        key_id="acct-a",
+        secret_ref="kms://a",
+        enabled=True,
+        priority=10,
+        actor_id="admin",
     )
     await store.upsert_provider(
-        provider="deepseek", key_id="acct-b", secret_ref="kms://b", enabled=True,
-        priority=20, actor_id="admin",
+        provider="deepseek",
+        key_id="acct-b",
+        secret_ref="kms://b",
+        enabled=True,
+        priority=20,
+        actor_id="admin",
     )
     rows = await store.list_providers()
     assert len(rows) == 2  # two keys, same provider — distinct rows
@@ -171,12 +179,20 @@ async def test_provider_delete_one_key_keeps_siblings() -> None:
 async def test_provider_upsert_same_key_updates_in_place() -> None:
     store = InMemoryPlatformSecretStore()
     await store.upsert_provider(
-        provider="openai", key_id="k1", secret_ref="kms://old", enabled=True,
-        priority=100, actor_id="a",
+        provider="openai",
+        key_id="k1",
+        secret_ref="kms://old",
+        enabled=True,
+        priority=100,
+        actor_id="a",
     )
     await store.upsert_provider(
-        provider="openai", key_id="k1", secret_ref="kms://new", enabled=False,
-        priority=5, actor_id="b",
+        provider="openai",
+        key_id="k1",
+        secret_ref="kms://new",
+        enabled=False,
+        priority=5,
+        actor_id="b",
     )
     rows = await store.list_providers()
     assert len(rows) == 1

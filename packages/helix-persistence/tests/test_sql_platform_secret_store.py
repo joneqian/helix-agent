@@ -166,12 +166,20 @@ async def test_provider_multikey_round_trip(
     store, engine = platform_secret_store
     try:
         await store.upsert_provider(
-            provider="deepseek", key_id="acct-a", secret_ref="kms://a",
-            enabled=True, priority=10, actor_id="admin",
+            provider="deepseek",
+            key_id="acct-a",
+            secret_ref="kms://a",
+            enabled=True,
+            priority=10,
+            actor_id="admin",
         )
         await store.upsert_provider(
-            provider="deepseek", key_id="acct-b", secret_ref="kms://b",
-            enabled=True, priority=20, actor_id="admin",
+            provider="deepseek",
+            key_id="acct-b",
+            secret_ref="kms://b",
+            enabled=True,
+            priority=20,
+            actor_id="admin",
         )
         rows = [r for r in await store.list_providers() if r.provider == "deepseek"]
         assert {r.key_id for r in rows} == {"acct-a", "acct-b"}

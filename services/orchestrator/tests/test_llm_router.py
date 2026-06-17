@@ -429,9 +429,7 @@ async def test_stream_stale_emits_counter() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _kh(
-    provider: _ScriptedProvider, key: str, group: str
-) -> ProviderHandle:
+def _kh(provider: _ScriptedProvider, key: str, group: str) -> ProviderHandle:
     return ProviderHandle(provider=provider, key=key, group=group)
 
 
@@ -458,9 +456,7 @@ async def test_mk1_rate_limit_tries_sibling_key_not_next_provider() -> None:
 async def test_mk2_account_dead_tries_sibling_key() -> None:
     k1 = _ScriptedProvider(raise_with=LLMKeyUnavailableError("deepseek 402"))
     k2 = _ScriptedProvider(response=AIMessage(content="paid sibling"))
-    router = LLMRouter(
-        providers=[_kh(k1, "p:m#1", "p:m"), _kh(k2, "p:m#2", "p:m")]
-    )
+    router = LLMRouter(providers=[_kh(k1, "p:m#1", "p:m"), _kh(k2, "p:m#2", "p:m")])
     result = await router(messages=_msgs(), tools=[])
     assert result.content == "paid sibling"
     assert len(k1.calls) == 1
@@ -550,9 +546,7 @@ async def test_mk6_all_keys_all_providers_dead_raises_exhausted() -> None:
     last = LLMRateLimitError("b 429 final")
     a1 = _ScriptedProvider(raise_with=LLMKeyUnavailableError("a 402"))
     b1 = _ScriptedProvider(raise_with=last)
-    router = LLMRouter(
-        providers=[_kh(a1, "a:m#1", "a:m"), _kh(b1, "b:m#1", "b:m")]
-    )
+    router = LLMRouter(providers=[_kh(a1, "a:m#1", "a:m"), _kh(b1, "b:m#1", "b:m")])
     with pytest.raises(AllProvidersExhaustedError) as exc_info:
         await router(messages=_msgs(), tools=[])
     assert exc_info.value.last_exc is last

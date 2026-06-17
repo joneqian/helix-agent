@@ -285,9 +285,7 @@ async def test_build_llm_router_empty_keylist_raises() -> None:
         return []
 
     with pytest.raises(AgentFactoryError, match="resolved no platform credential"):
-        await build_llm_router(
-            model, secret_store=_secret_store(), provider_key_resolver=resolver
-        )
+        await build_llm_router(model, secret_store=_secret_store(), provider_key_resolver=resolver)
 
 
 @pytest.mark.asyncio
