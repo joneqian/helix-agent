@@ -81,6 +81,7 @@ from control_plane.api import (
 )
 from control_plane.api.model_catalog import PlatformConfiguredProviders
 from control_plane.approval_metrics import ApprovalGaugeWorker
+from control_plane.approval_timeout_sweep import ApprovalTimeoutSweep
 from control_plane.audit import (
     TenantConfigPiiResolver,
     build_default_audit_logger,
@@ -774,6 +775,22 @@ def create_app(
         if resolved_settings.enable_run_queue_worker
         else None
     )
+    # Stream 9.5 — approval timeout sweep. Auto-rejects pending approvals past
+    # their ``timeout_at`` (J.8 human-in-the-loop completion). Every instance
+    # runs it; ``mark_decided`` CAS serialises competing sweepers → exactly-once.
+    approval_timeout_sweep: ApprovalTimeoutSweep | None = (
+        ApprovalTimeoutSweep(
+            approval_store=resolved_approval_store,
+            thread_store=resolved_threads,
+            agent_spec_store=resolved_repo,
+            runtime=resolved_agent_runtime,
+            audit_logger=resolved_audit,
+            interval_s=resolved_settings.approval_timeout_sweep_interval_s,
+            batch_size=resolved_settings.approval_timeout_sweep_batch_size,
+        )
+        if resolved_settings.enable_approval_timeout_sweep
+        else None
+    )
     # Capability Uplift Sprint #4 (Mini-ADRs U-26 / U-27) — Curator
     # sweep + activity recorder. Curator is single-replica (same
     # rationale as the trigger scheduler); the recorder is process-
@@ -1167,6 +1184,9 @@ def create_app(
             if run_queue_worker is not None:
                 run_queue_worker.start()
                 _app.state.run_queue_worker = run_queue_worker
+            if approval_timeout_sweep is not None:
+                approval_timeout_sweep.start()
+                _app.state.approval_timeout_sweep = approval_timeout_sweep
             if skill_curator is not None:
                 skill_curator.start()
                 _app.state.skill_curator = skill_curator
@@ -1382,6 +1402,8 @@ def create_app(
                     await orphan_sweep.stop()
                 if run_queue_worker is not None:
                     await run_queue_worker.stop()
+                if approval_timeout_sweep is not None:
+                    await approval_timeout_sweep.stop()
                 if skill_curator is not None:
                     await skill_curator.stop()
                 if curation_worker is not None:

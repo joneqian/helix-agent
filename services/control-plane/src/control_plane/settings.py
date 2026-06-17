@@ -381,6 +381,16 @@ class Settings(BaseSettings):
     #: Max queued runs claimed + started per cycle.
     run_queue_batch_size: int = Field(default=10, gt=0)
 
+    #: Stream 9.5 — master switch for the approval timeout sweep (auto-rejects
+    #: pending approvals past ``timeout_at``). Every instance runs it; the
+    #: ``mark_decided`` CAS makes the auto-reject exactly-once across the pool.
+    enable_approval_timeout_sweep: bool = Field(default=True)
+    #: How often the sweep scans for expired approvals (minutes-scale lag is
+    #: fine next to the 24h approval timeout horizon).
+    approval_timeout_sweep_interval_s: float = Field(default=300.0, gt=0)
+    #: Max expired approvals auto-rejected per cycle.
+    approval_timeout_sweep_batch_size: int = Field(default=100, gt=0)
+
     #: Stream J.10 (Mini-ADR J-26 (2)) — max cron triggers a tenant may
     #: register. Caps the scheduler's per-sweep work + a runaway client.
     max_cron_triggers_per_tenant: int = Field(default=100, gt=0)

@@ -367,7 +367,6 @@ async def apply_approval_decision(
     """
     tenant_id: UUID = request.state.tenant_id
     actor_id: str = request.state.actor_id
-    trace_id = current_trace_id_hex()
 
     meta = await threads.get(thread_id, tenant_id=tenant_id)
     if meta is None:
@@ -385,6 +384,67 @@ async def apply_approval_decision(
             status_code=422, detail="modified_args is only valid with decision 'modify'"
         )
 
+    _status_for: dict[str, ApprovalStatus] = {
+        "approve": ApprovalStatus.APPROVED,
+        "reject": ApprovalStatus.REJECTED,
+        "modify": ApprovalStatus.MODIFIED,
+    }
+    return await resolve_approval_decision(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        caller_user_id=caller_user_id,
+        # Stream MCP-OAUTH (OA-3b) — per-user OAuth MCP pool key.
+        oauth_user_id=request.state.principal.subject_id,
+        thread_id=thread_id,
+        run_id=run_id,
+        graph_decision=decision,
+        db_status=_status_for[decision],
+        modified_args=modified_args,
+        reason=reason,
+        threads=threads,
+        audit=audit,
+        agent_repo=agent_repo,
+        runtime=runtime,
+        approvals=approvals,
+        idempotency_key=idempotency_key,
+    )
+
+
+async def resolve_approval_decision(
+    *,
+    tenant_id: UUID,
+    actor_id: str,
+    caller_user_id: UUID | None,
+    oauth_user_id: str | None,
+    thread_id: UUID,
+    run_id: UUID,
+    graph_decision: Literal["approve", "reject", "modify"],
+    db_status: ApprovalStatus,
+    modified_args: dict[str, Any] | None,
+    reason: str | None,
+    threads: Any,
+    audit: AuditLogger,
+    agent_repo: AgentSpecStore,
+    runtime: AgentRuntime,
+    approvals: ApprovalStore,
+    idempotency_key: str | None = None,
+) -> tuple[Any, UUID, bool]:
+    """Request-free core of a J.8 approval verdict — CAS + checkpoint + spawn.
+
+    Stream 9.5 — extracted from :func:`apply_approval_decision` so the
+    ``ApprovalTimeoutSweep`` worker shares the exact same continuation path as
+    the human endpoints. The caller is responsible for *authorising* the verdict
+    (the HTTP wrapper checks thread ownership; the timeout sweep is a trusted
+    system actor); this core does the ``mark_decided`` CAS (exactly-once across
+    instances), the ``APPROVAL_DECIDED`` audit, the checkpoint ``aupdate_state``,
+    and the detached continuation worker.
+
+    ``graph_decision`` is what the graph applies (a timeout maps to ``reject``);
+    ``db_status`` is the row's terminal status (``TIMEOUT`` for the sweep) — they
+    differ only for the auto-timeout path. Returns ``(run_record,
+    continuation_run_id, replayed)`` with the same semantics as the wrapper.
+    """
+    trace_id = current_trace_id_hex()
     approval = await approvals.get_by_run(run_id=run_id, tenant_id=tenant_id)
     if approval is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -404,23 +464,18 @@ async def apply_approval_decision(
     # atomically to the winning decision; a retry / lost-race caller reads it
     # back to replay the same continuation.
     continuation_run_id = uuid4()
-    _status_for = {
-        "approve": ApprovalStatus.APPROVED,
-        "reject": ApprovalStatus.REJECTED,
-        "modify": ApprovalStatus.MODIFIED,
-    }
     decided = await approvals.mark_decided(
         run_id=run_id,
         tenant_id=tenant_id,
-        status=_status_for[decision],
+        status=db_status,
         decided_by=actor_id,
         decided_at=datetime.now(UTC),
         modified_args=modified_args,
         idempotency_key=idempotency_key,
         continuation_run_id=continuation_run_id,
     )
-    # ``mark_decided`` returns False on a lost race — another resume
-    # (or the timeout job) decided it between our get + update.
+    # ``mark_decided`` returns False on a lost race — another resume, a peer
+    # timeout sweep, or the human endpoint decided it between our get + update.
     if not decided:
         # Stream 13.2 — re-read the winner's row; if it carries our key, replay
         # its continuation (idempotent). Otherwise it is a real conflict (409).
@@ -440,12 +495,14 @@ async def apply_approval_decision(
         trace_id=trace_id,
         details={
             "thread_id": str(thread_id),
-            "decision": decision,
+            "decision": graph_decision,
+            "status": db_status.value,
             "request_id": approval.request_id,
         },
     )
 
-    if meta.agent_name is None or meta.agent_version is None:
+    meta = await threads.get(thread_id, tenant_id=tenant_id)
+    if meta is None or meta.agent_name is None or meta.agent_version is None:
         raise HTTPException(status_code=409, detail="session is not bound to an agent")
     spec_record = await agent_repo.get(
         tenant_id=tenant_id, name=meta.agent_name, version=meta.agent_version
@@ -458,8 +515,7 @@ async def apply_approval_decision(
             name=meta.agent_name,
             version=meta.agent_version,
             spec=spec_record.spec,
-            # Stream MCP-OAUTH (OA-3b) — per-user OAuth MCP pool key.
-            user_id=request.state.principal.subject_id,
+            user_id=oauth_user_id,
         )
     except AgentFactoryError as exc:
         raise HTTPException(
@@ -479,7 +535,7 @@ async def apply_approval_decision(
         {
             "pending_approval": None,
             "approval_resume": {
-                "decision": decision,
+                "decision": graph_decision,
                 "modified_args": modified_args,
                 "reason": reason,
             },
