@@ -30,6 +30,7 @@ from control_plane.api.member_ops import (
 from control_plane.audit import emit
 from control_plane.keycloak import KeycloakAdminClient, KeycloakUnavailableError
 from control_plane.settings import Settings
+from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.auth import RoleBindingStore
 from helix_agent.persistence.tenant_member import TenantMemberStore
@@ -155,10 +156,28 @@ def build_members_router() -> APIRouter:
         status: Annotated[MemberStatus | None, Query()] = None,
         limit: Annotated[int, Query(ge=1, le=200)] = 100,
         offset: Annotated[int, Query(ge=0)] = 0,
+        tenant_id: Annotated[str | None, Query()] = None,
     ) -> dict[str, object]:
-        items = await member_repo.list_for_tenant(
-            tenant_id=principal.tenant_id, status=status, limit=limit, offset=offset
-        )
+        # Stream ACCT — ``tenant_id=*`` is the cross-tenant platform-admin view.
+        # Any other value is ignored (members are read in the principal's home
+        # tenant); only system_admin may cross tenants.
+        if tenant_id == "*":
+            if not principal.is_system_admin:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "CROSS_TENANT_FORBIDDEN",
+                        "message": "cross-tenant member list requires system_admin",
+                    },
+                )
+            async with bypass_rls_session():
+                items = await member_repo.list_all_tenants(
+                    status=status, limit=limit, offset=offset
+                )
+        else:
+            items = await member_repo.list_for_tenant(
+                tenant_id=principal.tenant_id, status=status, limit=limit, offset=offset
+            )
         return {
             "success": True,
             "data": {

@@ -167,3 +167,29 @@ async def test_list_for_tenant_filters_and_scopes() -> None:
     invited_only = await store.list_for_tenant(tenant_id=t1, status="invited")
     assert len(invited_only) == 1
     assert invited_only[0].email == "b@co.com"
+
+
+@pytest.mark.asyncio
+async def test_list_all_tenants_aggregates_across_tenants() -> None:
+    """Stream ACCT — cross-tenant roster for the platform admin view."""
+    store = InMemoryTenantMemberStore()
+    t1, t2 = uuid4(), uuid4()
+    await _invite(store, tenant=t1, email="a@t1.com")
+    await _invite(store, tenant=t2, email="b@t2.com")
+    await _invite(store, tenant=t2, email="c@t2.com")
+    rows = await store.list_all_tenants()
+    assert len(rows) == 3
+    assert {r.tenant_id for r in rows} == {t1, t2}
+
+
+@pytest.mark.asyncio
+async def test_list_all_tenants_filters_by_status() -> None:
+    store = InMemoryTenantMemberStore()
+    t1, t2 = uuid4(), uuid4()
+    m = await _invite(store, tenant=t1, email="a@t1.com")
+    await _invite(store, tenant=t2, email="b@t2.com")
+    await store.transition(
+        member_id=m.id, tenant_id=t1, to="active", now=datetime.now(UTC), subject_id=uuid4()
+    )
+    active = await store.list_all_tenants(status="active")
+    assert [r.id for r in active] == [m.id]
