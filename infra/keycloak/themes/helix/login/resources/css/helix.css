@@ -1,0 +1,124 @@
+/*
+ * Helix login brand overlay — Stream ACCT.
+ *
+ * Dark-first, cyan + violet accent, Inter type — mirrors the admin-ui design
+ * baseline so the login page reads as one product, not a Keycloak install.
+ * Pure CSS over the stock ``keycloak`` theme markup (KC 25). To swap in a real
+ * logo, drop a file in ``resources/img/`` and point ``--hx-logo`` at it.
+ */
+:root {
+  --hx-bg: #0b0f17;
+  --hx-bg-soft: #111726;
+  --hx-card: #151c2c;
+  --hx-border: #243043;
+  --hx-text: #e6ebf2;
+  --hx-text-dim: #9aa7b8;
+  --hx-cyan: #22d3ee;
+  --hx-violet: #8b5cf6;
+}
+
+/* ---- page background ---- */
+.login-pf,
+html,
+body {
+  background: var(--hx-bg) !important;
+}
+
+.login-pf body {
+  background:
+    radial-gradient(900px 500px at 15% -10%, rgba(34, 211, 238, 0.14), transparent 60%),
+    radial-gradient(900px 500px at 110% 10%, rgba(139, 92, 246, 0.16), transparent 55%),
+    var(--hx-bg) !important;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--hx-text);
+}
+
+/* ---- header / wordmark (realm displayName renders here) ---- */
+#kc-header,
+#kc-header-wrapper {
+  color: var(--hx-text);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: none;
+  background: linear-gradient(90deg, var(--hx-cyan), var(--hx-violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: 28px;
+}
+
+/* ---- card ---- */
+.card-pf {
+  background: var(--hx-card) !important;
+  border: 1px solid var(--hx-border) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45) !important;
+  color: var(--hx-text);
+}
+
+#kc-form-wrapper,
+#kc-content-wrapper,
+.login-pf-page .login-pf-header h1 {
+  color: var(--hx-text);
+}
+
+label,
+.control-label,
+#kc-page-title {
+  color: var(--hx-text) !important;
+}
+
+a {
+  color: var(--hx-cyan);
+}
+a:hover {
+  color: var(--hx-violet);
+}
+
+/* ---- inputs ---- */
+.form-control,
+input[type="text"],
+input[type="password"],
+input[type="email"] {
+  background: var(--hx-bg-soft) !important;
+  border: 1px solid var(--hx-border) !important;
+  color: var(--hx-text) !important;
+  border-radius: 9px !important;
+  height: 44px;
+}
+
+.form-control:focus {
+  border-color: var(--hx-cyan) !important;
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.25) !important;
+}
+
+/* ---- primary button ---- */
+.btn-primary,
+#kc-form-buttons .btn-primary,
+input[type="submit"].btn-primary {
+  background: linear-gradient(90deg, var(--hx-cyan), var(--hx-violet)) !important;
+  border: none !important;
+  border-radius: 9px !important;
+  height: 44px;
+  font-weight: 600;
+  color: #07101a !important;
+  transition: filter 0.15s ease;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+/* ---- de-Keycloak: hide stock footer / "powered by" chrome ---- */
+#kc-info,
+.login-pf-signup,
+.kc-social-section + hr {
+  color: var(--hx-text-dim);
+}
+
+#kc-attempted-username,
+.instruction,
+.pf-c-form__helper-text,
+.subtitle {
+  color: var(--hx-text-dim) !important;
+}

@@ -278,6 +278,8 @@ services:
       KC_HEALTH_ENABLED: "true"
     volumes:
       - ./keycloak/realm-helix-agent.json:/opt/keycloak/data/import/realm-helix-agent.json:ro
+      # Stream ACCT — 品牌登录主题(白标)。start-dev 关主题缓存,改 CSS 即热加载。
+      - ./keycloak/themes/helix:/opt/keycloak/themes/helix:ro
     ports:
       - "8080:8080"
     healthcheck:
