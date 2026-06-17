@@ -1,0 +1,44 @@
+# Stream 9.5 distributed run-queue live E2E — two control-plane instances where
+# BLUE only enqueues and GREEN drains, proving the cross-instance exactly-once
+# queue.
+#
+# What this overlay sets up that the default dev stack does not:
+#
+# 1. A *second* live control-plane (green) on host port 8002. ``make dev-up``
+#    excludes green because its default host port 8001 collides with the sandbox
+#    supervisor; here green is remapped to 8002 so it runs alongside the full
+#    stack (same remap as the 9.4 ha-e2e overlay).
+#
+# 2. BLUE's run-queue worker is DISABLED. ``POST /runs mode=queue`` on blue
+#    persists a ``status='queued'`` row owned by no process; with blue's worker
+#    off, that row can only be claimed by GREEN — so a successful run proves a
+#    *different* instance than the one that accepted the request drained it.
+#    (Green keeps the default worker on.) The queue path starts runs fresh from
+#    the persisted ``enqueued_input``, so — unlike failover RESUME — it needs no
+#    shared Postgres checkpointer; only the dev OIDC config is required so the
+#    dev ID token (iss=localhost, aud=admin-ui) is accepted (a colour brought up
+#    directly with an overlay does not inherit the operator's infra/.env).
+#
+# Usage (after ``make dev-up`` has built the image + migrated):
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.queue-e2e.yml \
+#       --profile full up -d --no-deps control-plane-blue control-plane-green
+#   uv run python tools/ha/verify_queue.py
+x-queue-oidc: &queue-oidc
+  HELIX_AGENT_OIDC_ISSUER: http://localhost:8080/realms/helix-agent
+  HELIX_AGENT_OIDC_JWKS_URI: http://keycloak:8080/realms/helix-agent/protocol/openid-connect/certs
+  HELIX_AGENT_OIDC_AUDIENCE: '["helix-agent-api-internal","helix-agent-admin-ui"]'
+
+services:
+  control-plane-blue:
+    environment:
+      <<: *queue-oidc
+      # Blue only enqueues — its queue worker is OFF so the run stays
+      # ``queued`` until GREEN (a different instance) claims it.
+      HELIX_AGENT_ENABLE_RUN_QUEUE_WORKER: "false"
+
+  control-plane-green:
+    ports: !override
+      - "8002:8000"
+    environment:
+      <<: *queue-oidc

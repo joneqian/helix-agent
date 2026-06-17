@@ -113,6 +113,10 @@ ignore = []
 # UUID-interpolated SQL against the dev DB (S608), streams a run with no overall
 # timeout (S113), and swallows the transport error from killing blue (S110).
 "tools/ha/verify_failover.py" = ["S110", "S113", "S603", "S607", "S608"]
+# Live distributed run-queue verify script (Stream 9.5) — same ops-harness
+# posture: shells out to docker/psql (S603/S607) and reads the agent_run row
+# with a UUID-interpolated query against the dev DB (S608).
+"tools/ha/verify_queue.py" = ["S603", "S607", "S608"]
 
 [tool.ruff.format]
 quote-style = "double"
