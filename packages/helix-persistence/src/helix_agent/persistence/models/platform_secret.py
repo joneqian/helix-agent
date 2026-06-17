@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Text, func, text
+from sqlalchemy import Boolean, DateTime, Integer, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,13 +25,21 @@ from helix_agent.persistence.base import Base
 
 
 class PlatformProviderSecretRow(Base):
-    """One row per platform-managed LLM provider credential (a secret ref)."""
+    """One row per platform-managed LLM provider credential (a secret ref).
+
+    Stream Y-MK — composite PK ``(provider, key_id)`` lets a provider hold
+    multiple keys for failover; ``priority`` orders them (lower tried first).
+    """
 
     __tablename__ = "platform_provider_secret"
 
     provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    key_id: Mapped[str] = mapped_column(
+        Text, primary_key=True, nullable=False, server_default=text("'default'")
+    )
     secret_ref: Mapped[str] = mapped_column(Text, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("100"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

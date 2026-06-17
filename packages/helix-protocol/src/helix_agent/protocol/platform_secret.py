@@ -30,12 +30,21 @@ def validate_secret_ref(value: str) -> str:
 
 
 class PlatformProviderSecretRecord(BaseModel):
-    """A platform-managed LLM provider credential (secret ref), as stored."""
+    """A platform-managed LLM provider credential (secret ref), as stored.
+
+    Stream Y-MK — a provider may hold **multiple keys** (separate billing
+    accounts / rate-limit pools). ``key_id`` disambiguates siblings within a
+    provider (primary key is ``(provider, key_id)``); ``priority`` orders
+    failover (lower = tried first). Legacy single-key rows carry
+    ``key_id="default"``.
+    """
 
     model_config = ConfigDict(extra="forbid")
     provider: Provider
+    key_id: str = "default"
     secret_ref: str
     enabled: bool = True
+    priority: int = 100
     created_at: datetime
     updated_at: datetime
     updated_by: str

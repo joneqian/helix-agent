@@ -29,26 +29,32 @@ class PlatformSecretStore(abc.ABC):
 
     @abc.abstractmethod
     async def list_providers(self) -> list[PlatformProviderSecretRecord]:
-        """All platform provider secret rows. Caller must bypass RLS."""
+        """All platform provider secret rows (Y-MK: one per ``(provider, key_id)``).
+        Caller must bypass RLS."""
 
     @abc.abstractmethod
-    async def get_provider(self, provider: Provider) -> PlatformProviderSecretRecord | None:
-        """One provider row, or None. Caller must bypass RLS."""
+    async def get_provider(
+        self, provider: Provider, key_id: str = "default"
+    ) -> PlatformProviderSecretRecord | None:
+        """One provider key row, or None. Caller must bypass RLS."""
 
     @abc.abstractmethod
     async def upsert_provider(
         self,
         *,
         provider: Provider,
+        key_id: str = "default",
         secret_ref: str,
         enabled: bool,
+        priority: int = 100,
         actor_id: str,
     ) -> PlatformProviderSecretRecord:
-        """Insert-or-update a provider secret ref. Caller must bypass RLS."""
+        """Insert-or-update one provider key (keyed by ``(provider, key_id)``).
+        Caller must bypass RLS."""
 
     @abc.abstractmethod
-    async def delete_provider(self, provider: Provider) -> bool:
-        """Delete a provider row; False if it did not exist. Caller must bypass RLS."""
+    async def delete_provider(self, provider: Provider, key_id: str = "default") -> bool:
+        """Delete one provider key row; False if absent. Caller must bypass RLS."""
 
     @abc.abstractmethod
     async def list_tools(self) -> list[PlatformToolSecretRecord]:

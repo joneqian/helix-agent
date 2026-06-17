@@ -25,7 +25,8 @@ class InMemoryPlatformSecretStore(PlatformSecretStore):
     """Dict-backed store; lock-guarded for asyncio safety."""
 
     def __init__(self) -> None:
-        self._providers: dict[Provider, PlatformProviderSecretRecord] = {}
+        # Y-MK — keyed by (provider, key_id) so a provider can hold many keys.
+        self._providers: dict[tuple[Provider, str], PlatformProviderSecretRecord] = {}
         self._tools: dict[Tool, PlatformToolSecretRecord] = {}
         self._tenant_providers: dict[tuple[UUID, Provider], TenantProviderSecretRecord] = {}
         self._tenant_tools: dict[tuple[UUID, Tool], TenantToolSecretRecord] = {}
@@ -35,36 +36,42 @@ class InMemoryPlatformSecretStore(PlatformSecretStore):
         async with self._lock:
             return list(self._providers.values())
 
-    async def get_provider(self, provider: Provider) -> PlatformProviderSecretRecord | None:
+    async def get_provider(
+        self, provider: Provider, key_id: str = "default"
+    ) -> PlatformProviderSecretRecord | None:
         async with self._lock:
-            return self._providers.get(provider)
+            return self._providers.get((provider, key_id))
 
     async def upsert_provider(
         self,
         *,
         provider: Provider,
+        key_id: str = "default",
         secret_ref: str,
         enabled: bool,
+        priority: int = 100,
         actor_id: str,
     ) -> PlatformProviderSecretRecord:
         now = _now()
         async with self._lock:
-            existing = self._providers.get(provider)
+            existing = self._providers.get((provider, key_id))
             created_at = existing.created_at if existing is not None else now
             record = PlatformProviderSecretRecord(
                 provider=provider,
+                key_id=key_id,
                 secret_ref=secret_ref,
                 enabled=enabled,
+                priority=priority,
                 created_at=created_at,
                 updated_at=now,
                 updated_by=actor_id,
             )
-            self._providers[provider] = record
+            self._providers[(provider, key_id)] = record
             return record
 
-    async def delete_provider(self, provider: Provider) -> bool:
+    async def delete_provider(self, provider: Provider, key_id: str = "default") -> bool:
         async with self._lock:
-            return self._providers.pop(provider, None) is not None
+            return self._providers.pop((provider, key_id), None) is not None
 
     async def list_tools(self) -> list[PlatformToolSecretRecord]:
         async with self._lock:
