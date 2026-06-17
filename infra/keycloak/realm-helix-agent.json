@@ -1,6 +1,7 @@
 {
   "realm": "helix-agent",
-  "displayName": "Helix-Agent",
+  "displayName": "Helix",
+  "loginTheme": "helix",
   "enabled": true,
   "sslRequired": "external",
   "registrationAllowed": false,
