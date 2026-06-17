@@ -86,6 +86,24 @@ class LLMRateLimitError(LLMError):
     """
 
 
+class LLMKeyUnavailableError(LLMError):
+    """Stream Y-MK — this API key / billing account is currently unusable.
+
+    Covers account-level failures that a *sibling key* on the same provider
+    can recover from: balance exhausted (e.g. DeepSeek HTTP 402 "Insufficient
+    Balance"), quota/billing exhausted (OpenAI 429 ``insufficient_quota`` /
+    403 billing), or a revoked static key (401 on a non-OAuth provider, after
+    the router's OAuth-refresh path declines it).
+
+    Unlike :class:`LLMRateLimitError` this is **not retried** — exponential
+    backoff cannot un-exhaust a dead account, so the middleware records the
+    failure (tripping the per-key breaker so the key is skipped during its
+    cooldown) and re-raises immediately. The E.11 :class:`LLMRouter` then
+    advances to the next key *of the same provider* before falling through to
+    the next provider (Stream Y-MK two-level chain).
+    """
+
+
 class LLMNetworkError(LLMError):
     """Connection / timeout / TLS error — treated as retryable server-side."""
 
@@ -294,6 +312,13 @@ class LLMErrorHandlingMiddleware:
 
             try:
                 await call_next(ctx)
+            except LLMKeyUnavailableError:
+                # Y-MK — dead account/key: not retryable (backoff can't
+                # un-exhaust balance/quota), but DOES count toward the breaker
+                # so the key is skipped during cooldown. The router advances to
+                # the next sibling key.
+                await breaker.record_failure()
+                raise
             except LLMClientError:
                 # 4xx: caller's fault, don't poison breaker.
                 await breaker.record_success()
