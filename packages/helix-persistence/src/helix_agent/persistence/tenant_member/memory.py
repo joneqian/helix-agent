@@ -79,6 +79,17 @@ class InMemoryTenantMemberStore(TenantMemberStore):
         rows.sort(key=lambda r: r.invited_at or datetime.min, reverse=True)
         return rows[offset : offset + limit]
 
+    async def list_all_tenants(
+        self,
+        *,
+        status: MemberStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[TenantMember]:
+        rows = [row for row in self._rows.values() if status is None or row.status == status]
+        rows.sort(key=lambda r: r.invited_at or datetime.min, reverse=True)
+        return rows[offset : offset + limit]
+
     async def set_keycloak_user_id(self, *, member_id: UUID, keycloak_user_id: str) -> None:
         row = self._rows.get(member_id)
         if row is None:

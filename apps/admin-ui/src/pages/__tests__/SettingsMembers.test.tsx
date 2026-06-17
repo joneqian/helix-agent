@@ -15,7 +15,6 @@ import "../../i18n";
 
 import { SettingsMembers } from "../SettingsMembers";
 import { AuthProvider } from "../../auth/AuthContext";
-import { TenantScopeProvider } from "../../tenant/TenantScopeContext";
 import { setStoredToken } from "../../api/client";
 import {
   listMembers,
@@ -29,6 +28,13 @@ vi.mock("../../api/members", () => ({
   resendMember: vi.fn(),
   revokeMember: vi.fn(),
   resetMemberPassword: vi.fn(),
+}));
+
+// TenantScope context — switchable per test (mirrors ArtifactsList).
+let mockScope: string | undefined;
+vi.mock("../../tenant/TenantScopeContext", () => ({
+  SCOPE_ALL: "*",
+  useTenantScope: () => ({ scope: mockScope, apiTenantScope: mockScope }),
 }));
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -53,19 +59,46 @@ const activeMember: TenantMember = {
 };
 
 function renderPage(): void {
+  mockScope = undefined;
   setStoredToken(makeJwt({ sub: "u1", tenant_id: "t1", roles: ["admin"] }));
   render(
     <MemoryRouter>
       <AuthProvider>
-        <TenantScopeProvider>
-          <App>
-            <SettingsMembers />
-          </App>
-        </TenantScopeProvider>
+        <App>
+          <SettingsMembers />
+        </App>
       </AuthProvider>
     </MemoryRouter>,
   );
 }
+
+/** Render in the cross-tenant aggregate (read-only) view (scope "*"). */
+function renderCrossTenant(): void {
+  mockScope = "*";
+  setStoredToken(
+    makeJwt({ sub: "u1", tenant_id: "t1", roles: ["system_admin"] }),
+  );
+  render(
+    <MemoryRouter>
+      <AuthProvider>
+        <App>
+          <SettingsMembers />
+        </App>
+      </AuthProvider>
+    </MemoryRouter>,
+  );
+}
+
+const crossTenantMembers: TenantMember[] = [
+  { ...activeMember },
+  {
+    ...activeMember,
+    id: "m-2",
+    tenant_id: "t2",
+    email: "bob@example.com",
+    display_name: "Bob",
+  },
+];
 
 afterEach(() => {
   setStoredToken(null);
@@ -117,5 +150,40 @@ describe("SettingsMembers — set password", () => {
 
     expect(screen.getByTestId("members-set-password-error")).toBeInTheDocument();
     expect(resetMemberPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsMembers — cross-tenant read-only view", () => {
+  it("requests the cross-tenant aggregate when scope is *", async () => {
+    vi.mocked(listMembers).mockResolvedValue({
+      items: crossTenantMembers,
+      total: 2,
+    });
+    renderCrossTenant();
+
+    await waitFor(() =>
+      expect(listMembers).toHaveBeenCalledWith(
+        expect.objectContaining({ crossTenant: true }),
+      ),
+    );
+  });
+
+  it("hides write surfaces and shows the read-only banner + tenant column", async () => {
+    vi.mocked(listMembers).mockResolvedValue({
+      items: crossTenantMembers,
+      total: 2,
+    });
+    renderCrossTenant();
+
+    expect(await screen.findByTestId("members-cross-banner")).toBeInTheDocument();
+    // No invite button, no per-row write actions in the aggregate view.
+    expect(screen.queryByTestId("members-invite-btn")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("members-table")).toHaveTextContent(
+        "bob@example.com",
+      ),
+    );
+    expect(screen.queryByTestId("members-set-password-m-1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("members-remove-m-1")).not.toBeInTheDocument();
   });
 });

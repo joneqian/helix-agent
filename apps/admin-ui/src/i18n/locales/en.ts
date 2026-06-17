@@ -43,6 +43,7 @@ export interface TranslationKeys {
     webhooks: string;
     tenants: string;
     platform_credentials: string;
+    platform_users: string;
     api_keys: string;
     credentials: string;
     service_accounts: string;
@@ -852,8 +853,10 @@ export interface TranslationKeys {
     col_name: string;
     col_role: string;
     col_status: string;
+    col_tenant: string;
     col_invited_at: string;
     col_actions: string;
+    cross_tenant_banner: string;
     status_invited: string;
     status_active: string;
     status_suspended: string;
@@ -889,6 +892,28 @@ export interface TranslationKeys {
     failed_to_load: string;
     empty: string;
     empty_cross: string;
+  };
+  settings_platform_users: {
+    page_title: string;
+    subtitle: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    failed_to_load: string;
+    col_subject: string;
+    col_role: string;
+    col_granted_by: string;
+    col_granted_at: string;
+    col_actions: string;
+    you: string;
+    grant: string;
+    granted: string;
+    revoke: string;
+    revoked: string;
+    revoke_confirm: string;
+    revoke_self_warning: string;
+    subject_label: string;
+    subject_hint: string;
+    subject_invalid: string;
   };
   triggers: {
     page_title: string;
@@ -1405,6 +1430,7 @@ export interface TranslationKeys {
     label_triggers: string;
     label_webhooks: string;
     label_settings_api_keys: string;
+    label_settings_platform_users: string;
     action_create_agent: string;
     action_create_api_key: string;
     action_open_settings: string;
@@ -1495,6 +1521,7 @@ const en: TranslationKeys = {
     webhooks: "Webhooks",
     tenants: "Tenants",
     platform_credentials: "Platform Credentials",
+    platform_users: "Platform Admins",
     api_keys: "API Keys",
     credentials: "Credentials",
     service_accounts: "Service Accounts",
@@ -2392,8 +2419,11 @@ const en: TranslationKeys = {
     col_name: "Name",
     col_role: "Role",
     col_status: "Status",
+    col_tenant: "Tenant",
     col_invited_at: "Invited at",
     col_actions: "Actions",
+    cross_tenant_banner:
+      "Cross-tenant view — read-only. Switch to a single tenant to invite or manage members.",
     status_invited: "Invited",
     status_active: "Active",
     status_suspended: "Suspended",
@@ -2431,6 +2461,32 @@ const en: TranslationKeys = {
     failed_to_load: "Failed to load members",
     empty: "No members in this tenant yet.",
     empty_cross: "No members across all tenants.",
+  },
+  settings_platform_users: {
+    page_title: "Platform Admins",
+    subtitle:
+      "Platform-level system_admin grants. Admins see every tenant and manage platform credentials, the MCP catalog and other cross-tenant settings. system_admin only.",
+    not_admin_title: "system_admin only",
+    not_admin_body:
+      "Platform admins are managed by existing system_admins. Ask one to grant you the role.",
+    failed_to_load: "Failed to load platform admins.",
+    col_subject: "Subject",
+    col_role: "Role",
+    col_granted_by: "Granted by",
+    col_granted_at: "Granted at",
+    col_actions: "Actions",
+    you: "You",
+    grant: "Grant admin",
+    granted: "Platform admin granted.",
+    revoke: "Revoke",
+    revoked: "Platform admin revoked.",
+    revoke_confirm: "Revoke this platform admin?",
+    revoke_self_warning:
+      "This is your own grant — revoking it removes your platform access.",
+    subject_label: "Subject UUID",
+    subject_hint:
+      "The Keycloak user UUID (the `sub` claim), not an email address.",
+    subject_invalid: "Enter a valid UUID (Keycloak `sub`).",
   },
   triggers: {
     page_title: "Triggers",
@@ -2986,6 +3042,7 @@ const en: TranslationKeys = {
     label_triggers: "Triggers",
     label_webhooks: "Webhooks",
     label_settings_api_keys: "Settings · API Keys",
+    label_settings_platform_users: "Settings · Platform Admins",
     action_create_agent: "Create new Agent…",
     action_create_api_key: "Create new API Key…",
     action_open_settings: "Open Settings",

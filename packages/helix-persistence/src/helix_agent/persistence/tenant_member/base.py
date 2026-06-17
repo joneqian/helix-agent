@@ -80,6 +80,23 @@ class TenantMemberStore(abc.ABC):
         """List a tenant's members, newest invite first, optionally by status."""
 
     @abc.abstractmethod
+    async def list_all_tenants(
+        self,
+        *,
+        status: MemberStatus | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[TenantMember]:
+        """Cross-tenant member roster — Stream ACCT (platform admin view).
+
+        Returns members across every tenant, newest invite first. ``tenant_member``
+        is FORCE-RLS, so the SQL implementation assumes the ``audit_reader``
+        BYPASSRLS role (the ledger / audit cross-tenant precedent); the caller
+        must be inside ``bypass_rls_session()`` so no tenant GUC is emitted.
+        Reserved for ``system_admin`` principals.
+        """
+
+    @abc.abstractmethod
     async def set_keycloak_user_id(self, *, member_id: UUID, keycloak_user_id: str) -> None:
         """Back-fill ``keycloak_user_id`` after Keycloak account provisioning succeeds."""
 

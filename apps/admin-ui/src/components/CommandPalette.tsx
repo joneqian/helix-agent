@@ -42,6 +42,7 @@ import {
   Plus,
   ArrowRight,
   Cog,
+  ShieldCheck,
   Webhook,
 } from "lucide-react";
 
@@ -176,6 +177,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       { key: "go-triggers", label: t("cmdk.label_triggers"), path: "/triggers", icon: <Clock size={16} strokeWidth={1.5} />, sc: ["g", "t"] },
       { key: "go-webhooks", label: t("cmdk.label_webhooks"), path: "/webhooks", icon: <Webhook size={16} strokeWidth={1.5} />, sc: ["g", "w"] },
       { key: "go-api-keys", label: t("cmdk.label_settings_api_keys"), path: "/settings/api-keys", icon: <Key size={16} strokeWidth={1.5} />, sc: [] as string[] },
+      { key: "go-platform-users", label: t("cmdk.label_settings_platform_users"), path: "/settings/platform-users", icon: <ShieldCheck size={16} strokeWidth={1.5} />, sc: [] as string[] },
     ];
     jumpItems.forEach((g) => {
       items.push({

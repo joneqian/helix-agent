@@ -45,7 +45,7 @@ import {
   type TenantMember,
 } from "../api/members";
 import { ApiError } from "../api/client";
-import { useTenantScope } from "../tenant/TenantScopeContext";
+import { SCOPE_ALL, useTenantScope } from "../tenant/TenantScopeContext";
 
 const { Text } = Typography;
 
@@ -78,6 +78,10 @@ export function SettingsMembers() {
   const { t } = useTranslation();
   const { message } = App.useApp();
   const { scope } = useTenantScope();
+  // Cross-tenant aggregate ("All tenants") is a read-only view: write
+  // actions (invite / resend / reset-password / remove) stay on the
+  // single-tenant context where the tenant_id is unambiguous.
+  const crossTenant = scope === SCOPE_ALL;
 
   const [data, setData] = useState<MemberList | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,6 +102,7 @@ export function SettingsMembers() {
     try {
       const result = await listMembers({
         status: statusFilter === "all" ? undefined : statusFilter,
+        ...(crossTenant ? { crossTenant: true } : {}),
       });
       setData(result);
     } catch (err) {
@@ -111,7 +116,7 @@ export function SettingsMembers() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, crossTenant]);
 
   useEffect(() => {
     refresh();
@@ -211,6 +216,23 @@ export function SettingsMembers() {
           </Tooltip>
         ),
       },
+      ...(crossTenant
+        ? [
+            {
+              title: t("settings_members.col_tenant"),
+              dataIndex: "tenant_id",
+              key: "tenant_id",
+              width: 180,
+              render: (tid: string) => (
+                <Tooltip title={tid}>
+                  <Text code style={{ fontSize: 11 }}>
+                    {tid.slice(0, 8)}…
+                  </Text>
+                </Tooltip>
+              ),
+            } satisfies TableColumnsType<TenantMember>[number],
+          ]
+        : []),
       {
         title: t("settings_members.col_name"),
         dataIndex: "display_name",
@@ -259,11 +281,14 @@ export function SettingsMembers() {
             </Text>
           ),
       },
+      ...(crossTenant
+        ? []
+        : ([
       {
         title: t("settings_members.col_actions"),
         key: "actions",
         width: 200,
-        render: (_, record) => {
+        render: (_: unknown, record: TenantMember) => {
           const removable =
             record.status === "invited" || record.status === "active";
           const settable =
@@ -326,8 +351,9 @@ export function SettingsMembers() {
           );
         },
       },
+          ] satisfies TableColumnsType<TenantMember>)),
     ],
-    [t, onResend, onRemove],
+    [t, onResend, onRemove, crossTenant],
   );
 
   return (
@@ -357,17 +383,29 @@ export function SettingsMembers() {
             >
               {t("common.refresh")}
             </Button>
-            <Button
-              type="primary"
-              icon={<UserPlus size={14} strokeWidth={1.5} />}
-              onClick={() => setInviteOpen(true)}
-              data-testid="members-invite-btn"
-            >
-              {t("settings_members.invite")}
-            </Button>
+            {!crossTenant && (
+              <Button
+                type="primary"
+                icon={<UserPlus size={14} strokeWidth={1.5} />}
+                onClick={() => setInviteOpen(true)}
+                data-testid="members-invite-btn"
+              >
+                {t("settings_members.invite")}
+              </Button>
+            )}
           </>
         }
       />
+
+      {crossTenant && (
+        <Alert
+          type="info"
+          showIcon
+          message={t("settings_members.cross_tenant_banner")}
+          style={{ marginBottom: 12 }}
+          data-testid="members-cross-banner"
+        />
+      )}
 
       {error !== null && (
         <Alert

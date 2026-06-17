@@ -296,3 +296,55 @@ async def test_reset_password_too_short_422(
     )
     assert resp.status_code == 422
     assert kc.password_resets == []
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_list_requires_system_admin(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    """Stream ACCT — ``?tenant_id=*`` is system_admin-only; tenant admin gets 403."""
+    client, tenant_id, _app, _kc = admin_app
+    resp = await client.get(
+        "/v1/members", params={"tenant_id": "*"}, headers=_admin_headers(tenant_id)
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"]["code"] == "CROSS_TENANT_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_list_aggregates_for_system_admin(
+    admin_app: tuple[AsyncClient, UUID, object, FakeKeycloakAdminClient],
+) -> None:
+    from helix_agent.protocol import Role
+
+    client, tenant_a, app, _kc = admin_app
+    tenant_b = uuid4()
+    # Invite one member in each of two tenants.
+    for tenant, email in ((tenant_a, "a@t1.com"), (tenant_b, "b@t2.com")):
+        r = await client.post(
+            "/v1/members/invite",
+            json={"invitations": [{"email": email, "role": "viewer"}]},
+            headers=_admin_headers(tenant),
+        )
+        assert r.status_code == 201, r.text
+
+    # Promote a subject to platform system_admin by seeding a platform binding.
+    sysadmin = uuid4()
+    await app.state.role_binding_repo.create(  # type: ignore[attr-defined]
+        subject_type="user",
+        subject_id=sysadmin,
+        tenant_id=None,
+        role=Role.SYSTEM_ADMIN,
+        platform_scope=True,
+        granted_by="test",
+    )
+    token = make_test_jwt(tenant_id=uuid4(), subject=str(sysadmin), roles=("admin",))
+    resp = await client.get(
+        "/v1/members",
+        params={"tenant_id": "*"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["data"]["items"]
+    tenants_seen = {item["tenant_id"] for item in items}
+    assert {str(tenant_a), str(tenant_b)} <= tenants_seen
