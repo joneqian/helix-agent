@@ -368,3 +368,75 @@ async def test_tenant_override_takes_effect_in_service_view(
         other = await _seed_tenant(app)
         view_other = await service.effective_provider_credentials_for(other)
         assert view_other.get("anthropic") == "kms://platform/anthropic"
+
+
+# ---------------------------------------------------------------------------
+# Stream Y-MK — per-provider multi-key API
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multikey_upsert_and_catalog_lists_keys(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, admin = admin_client
+    # default key (priority 100) + a higher-priority sibling.
+    await client.put(
+        "/v1/platform/credentials/providers/deepseek",
+        json={"secret_ref": "kms://deepseek/default", "enabled": True},
+        headers=_headers(admin),
+    )
+    put = await client.put(
+        "/v1/platform/credentials/providers/deepseek/keys/acct-b",
+        json={"secret_ref": "kms://deepseek/b", "enabled": True, "priority": 10},
+        headers=_headers(admin),
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["data"]["key_id"] == "acct-b"
+    assert put.json()["data"]["priority"] == 10
+
+    got = await client.get("/v1/platform/credentials", headers=_headers(admin))
+    row = next(p for p in got.json()["data"]["providers"] if p["provider"] == "deepseek")
+    keys = {k["key_id"]: k for k in row["keys"]}
+    assert set(keys) == {"default", "acct-b"}
+    assert keys["acct-b"]["priority"] == 10
+    # Keys are priority-sorted; best (lowest) first.
+    assert row["keys"][0]["key_id"] == "acct-b"
+
+
+@pytest.mark.asyncio
+async def test_multikey_delete_sibling_keeps_others(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, admin = admin_client
+    await client.put(
+        "/v1/platform/credentials/providers/deepseek",
+        json={"secret_ref": "kms://deepseek/default", "enabled": True},
+        headers=_headers(admin),
+    )
+    await client.put(
+        "/v1/platform/credentials/providers/deepseek/keys/acct-b",
+        json={"secret_ref": "kms://deepseek/b", "enabled": True, "priority": 10},
+        headers=_headers(admin),
+    )
+    delete = await client.delete(
+        "/v1/platform/credentials/providers/deepseek/keys/acct-b",
+        headers=_headers(admin),
+    )
+    assert delete.status_code == 204, delete.text
+
+    got = await client.get("/v1/platform/credentials", headers=_headers(admin))
+    row = next(p for p in got.json()["data"]["providers"] if p["provider"] == "deepseek")
+    assert [k["key_id"] for k in row["keys"]] == ["default"]
+
+
+@pytest.mark.asyncio
+async def test_multikey_delete_missing_key_404(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    client, admin = admin_client
+    resp = await client.delete(
+        "/v1/platform/credentials/providers/deepseek/keys/nope",
+        headers=_headers(admin),
+    )
+    assert resp.status_code == 404
