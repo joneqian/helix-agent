@@ -88,8 +88,8 @@ _PROVIDER_KEY_NAMES = {
 }
 
 
-async def _platform_resolver(provider: str) -> str:
-    return f"secret://{_PROVIDER_KEY_NAMES[provider]}"
+async def _platform_resolver(provider: str) -> list[str]:
+    return [f"secret://{_PROVIDER_KEY_NAMES[provider]}"]
 
 
 async def _build(spec: AgentSpec, **kwargs: Any) -> BuiltAgent:
@@ -247,9 +247,9 @@ async def test_build_llm_router_uses_provider_key_resolver_when_no_ref() -> None
     model = ModelSpec.model_validate({"provider": "anthropic", "name": "claude"})
     seen: list[str] = []
 
-    async def resolver(provider: str) -> str:
+    async def resolver(provider: str) -> list[str]:
         seen.append(provider)
-        return f"secret://{_ANTHROPIC_KEY_NAME}"
+        return [f"secret://{_ANTHROPIC_KEY_NAME}"]
 
     router = await build_llm_router(
         model, secret_store=_secret_store(), provider_key_resolver=resolver
@@ -259,15 +259,47 @@ async def test_build_llm_router_uses_provider_key_resolver_when_no_ref() -> None
 
 
 @pytest.mark.asyncio
+async def test_build_llm_router_expands_multikey_into_sibling_handles() -> None:
+    """Stream Y-MK — a resolver returning N keys yields N sibling
+    ``ProviderHandle``s sharing one ``group``, with ``#idx`` breaker keys."""
+    model = ModelSpec.model_validate({"provider": "anthropic", "name": "claude"})
+
+    async def resolver(provider: str) -> list[str]:
+        return [f"secret://{_ANTHROPIC_KEY_NAME}", f"secret://{_OPENAI_KEY_NAME}"]
+
+    router = await build_llm_router(
+        model, secret_store=_secret_store(), provider_key_resolver=resolver
+    )
+    handles = list(router.providers)
+    assert len(handles) == 2
+    assert [h.key for h in handles] == ["anthropic:claude#0", "anthropic:claude#1"]
+    assert {h.group for h in handles} == {"anthropic:claude"}
+
+
+@pytest.mark.asyncio
+async def test_build_llm_router_empty_keylist_raises() -> None:
+    """A resolver returning no keys is a configuration error, not an empty router."""
+    model = ModelSpec.model_validate({"provider": "anthropic", "name": "claude"})
+
+    async def resolver(provider: str) -> list[str]:
+        return []
+
+    with pytest.raises(AgentFactoryError, match="resolved no platform credential"):
+        await build_llm_router(
+            model, secret_store=_secret_store(), provider_key_resolver=resolver
+        )
+
+
+@pytest.mark.asyncio
 async def test_build_llm_router_manifest_ref_wins_over_resolver() -> None:
     """Stream Q (Q-5) — manifest api_key_ref is the explicit override; the
     platform resolver is not consulted when a ref is present."""
     called = False
 
-    async def resolver(provider: str) -> str:
+    async def resolver(provider: str) -> list[str]:
         nonlocal called
         called = True
-        return "secret://unused"
+        return ["secret://unused"]
 
     router = await build_llm_router(
         _spec().spec.model, secret_store=_secret_store(), provider_key_resolver=resolver
@@ -766,9 +798,9 @@ async def test_build_agent_ignores_manifest_api_key_ref_for_resolver(
     # proof the manifest ref was ignored and the platform path was taken.
     seen: list[str] = []
 
-    async def resolver(provider: str) -> str:
+    async def resolver(provider: str) -> list[str]:
         seen.append(provider)
-        return f"secret://{_OPENAI_KEY_NAME}"
+        return [f"secret://{_OPENAI_KEY_NAME}"]
 
     with caplog.at_level("WARNING", logger="helix.orchestrator.agent_factory"):
         async with make_checkpointer("memory") as cp:

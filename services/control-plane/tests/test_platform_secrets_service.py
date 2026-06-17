@@ -155,3 +155,100 @@ async def test_tenant_tool_override_and_invalidate() -> None:
     assert (await svc.effective_tool_credentials_for(_TENANT_A)).get(
         "web_search"
     ) == "kms://tenant-a/tavily"
+
+
+# ---------------------------------------------------------------------------
+# Stream Y-MK — per-provider multi-key effective views
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mk_refs_aggregates_multiple_keys_sorted_by_priority() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="deepseek", key_id="b", secret_ref="kms://b", enabled=True,
+        priority=20, actor_id="a",
+    )
+    await store.upsert_provider(
+        provider="deepseek", key_id="a", secret_ref="kms://a", enabled=True,
+        priority=10, actor_id="a",
+    )
+    svc = PlatformSecretsService(store=store, settings=_settings())
+
+    refs = await svc.effective_provider_secret_refs()
+    assert refs["deepseek"] == ["kms://a", "kms://b"]  # priority 10 before 20
+    # Single view = best (first) key, preserved for embed/rerank callers.
+    assert (await svc.effective_provider_credentials())["deepseek"] == "kms://a"
+
+
+@pytest.mark.asyncio
+async def test_mk_refs_excludes_disabled_keys() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="openai", key_id="live", secret_ref="kms://live", enabled=True,
+        priority=10, actor_id="a",
+    )
+    await store.upsert_provider(
+        provider="openai", key_id="dead", secret_ref="kms://dead", enabled=False,
+        priority=5, actor_id="a",
+    )
+    svc = PlatformSecretsService(store=store, settings=_settings())
+
+    refs = await svc.effective_provider_secret_refs()
+    assert refs["openai"] == ["kms://live"]  # disabled excluded despite lower priority
+
+
+@pytest.mark.asyncio
+async def test_mk_refs_all_disabled_suppresses_provider() -> None:
+    settings = _settings(
+        supported_providers=["openai"],
+        platform_provider_credentials={"openai": "secret://env-openai"},
+    )
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="openai", key_id="default", secret_ref="kms://db", enabled=False,
+        actor_id="a",
+    )
+    svc = PlatformSecretsService(store=store, settings=settings)
+
+    refs = await svc.effective_provider_secret_refs()
+    assert "openai" not in refs  # all DB keys disabled → suppressed even with env seed
+
+
+@pytest.mark.asyncio
+async def test_mk_refs_env_seed_when_no_db_rows() -> None:
+    settings = _settings(
+        supported_providers=["openai"],
+        platform_provider_credentials={"openai": "secret://env-openai"},
+    )
+    store = InMemoryPlatformSecretStore()
+    svc = PlatformSecretsService(store=store, settings=settings)
+
+    refs = await svc.effective_provider_secret_refs()
+    assert refs["openai"] == ["secret://env-openai"]
+
+
+@pytest.mark.asyncio
+async def test_mk_refs_for_tenant_override_replaces_list() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="openai", key_id="a", secret_ref="kms://plat-a", enabled=True,
+        priority=10, actor_id="a",
+    )
+    await store.upsert_provider(
+        provider="openai", key_id="b", secret_ref="kms://plat-b", enabled=True,
+        priority=20, actor_id="a",
+    )
+    await store.upsert_tenant_provider(
+        tenant_id=_TENANT_A, provider="openai", secret_ref="kms://tenant-a",
+        enabled=True, actor_id="a",
+    )
+    svc = PlatformSecretsService(store=store, settings=_settings())
+
+    # Tenant A: single override replaces the platform key list.
+    assert (await svc.effective_provider_secret_refs_for(_TENANT_A))["openai"] == ["kms://tenant-a"]
+    # Tenant B: no override → full platform list.
+    assert (await svc.effective_provider_secret_refs_for(_TENANT_B))["openai"] == [
+        "kms://plat-a",
+        "kms://plat-b",
+    ]

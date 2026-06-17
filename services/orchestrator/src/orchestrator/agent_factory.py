@@ -1129,7 +1129,11 @@ def detect_subagent_cycle(
 #: orchestrator never imports helix-common.credentials (same decoupling as
 #: ``mcp_allowlist_provider``). Raising surfaces as ``AgentFactoryError`` —
 #: the control-plane closure translates ``CredentialsResolverError``.
-ProviderKeyResolver = Callable[[str], Awaitable[str]]
+# Stream Y-MK — resolves a provider to its ORDERED list of secret_refs
+# (priority asc) for per-provider multi-key failover. Single-key platforms
+# return a 1-element list; the internal-plumbing api_key_ref path wraps its
+# pinned ref the same way.
+ProviderKeyResolver = Callable[[str], Awaitable[list[str]]]
 
 
 #: Stream CM-9 (Mini-ADR CM-J4/J5) — one-step effort ladder for the
@@ -1333,8 +1337,8 @@ async def build_llm_router(
         # (possibly a different provider) resolves independently.
         if entry.api_key_ref is not None and not ignore_api_key_ref:
             # Internal-plumbing path: the caller already resolved a platform
-            # secret_ref and pinned it here (Stream Q rerank/embed/aux).
-            secret_ref = entry.api_key_ref
+            # secret_ref and pinned it here (Stream Q rerank/embed/aux). One key.
+            secret_refs = [entry.api_key_ref]
         else:
             if entry.api_key_ref is not None:
                 # ignore_api_key_ref is True — a manifest still carries the
@@ -1351,11 +1355,27 @@ async def build_llm_router(
                     f"model {entry.provider}:{entry.name} has no platform credential "
                     f"configured for provider {entry.provider!r}"
                 )
-            secret_ref = await provider_key_resolver(entry.provider)
-        api_key = await secret_store.get(parse_secret_ref(secret_ref))
-        provider = _build_provider(entry, api_key, image_resolver=image_resolver)
-        rate_limited = RateLimitedProvider.with_rpm(provider, rate_limit_rpm=entry.rate_limit_rpm)
-        handles.append(ProviderHandle(provider=rate_limited, key=f"{entry.provider}:{entry.name}"))
+            secret_refs = await provider_key_resolver(entry.provider)
+            if not secret_refs:
+                raise AgentFactoryError(
+                    f"model {entry.provider}:{entry.name} resolved no platform "
+                    f"credential for provider {entry.provider!r}"
+                )
+        # Stream Y-MK — expand the entry's key list into sibling handles sharing
+        # one ``group`` so the router fails over key→key within the provider
+        # before advancing to the next provider. A single key keeps the legacy
+        # ``"<provider>:<model>"`` breaker key (no ``#idx`` suffix) so existing
+        # metrics/labels are unchanged.
+        group = f"{entry.provider}:{entry.name}"
+        multikey = len(secret_refs) > 1
+        for idx, secret_ref in enumerate(secret_refs):
+            api_key = await secret_store.get(parse_secret_ref(secret_ref))
+            provider = _build_provider(entry, api_key, image_resolver=image_resolver)
+            rate_limited = RateLimitedProvider.with_rpm(
+                provider, rate_limit_rpm=entry.rate_limit_rpm
+            )
+            key = f"{group}#{idx}" if multikey else group
+            handles.append(ProviderHandle(provider=rate_limited, key=key, group=group))
     return LLMRouter(
         providers=handles,
         around_llm_chain=around_llm_chain,

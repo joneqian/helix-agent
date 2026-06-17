@@ -32,7 +32,7 @@ from control_plane.settings import Settings
 from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.observability import helix_gauge
 from helix_agent.persistence import PlatformSecretStore
-from helix_agent.protocol import Provider, Tool
+from helix_agent.protocol import PlatformProviderSecretRecord, Provider, Tool
 
 _tenant_overrides_gauge = helix_gauge(
     "helix_platform_credentials_tenant_overrides",
@@ -54,6 +54,9 @@ class PlatformSecretsService:
         self._settings = settings
         self._ttl_s = ttl_s
         self._provider_cache: dict[Provider, str] | None = None
+        # Y-MK — per-provider ordered key list (priority-sorted); the single
+        # cache above is the first/best of each list (embed/rerank compat).
+        self._provider_refs_cache: dict[Provider, list[str]] | None = None
         self._tool_cache: dict[Tool, str] | None = None
         self._tenant_provider_cache: dict[UUID, dict[Provider, str | None]] = {}
         self._tenant_tool_cache: dict[UUID, dict[Tool, str | None]] = {}
@@ -61,9 +64,41 @@ class PlatformSecretsService:
         self._lock = asyncio.Lock()
 
     async def effective_provider_credentials(self) -> dict[Provider, str]:
-        """Merged provider → secret_ref view (env seed + enabled DB rows)."""
+        """Merged provider → *best* secret_ref view (env seed + enabled DB rows).
+
+        Y-MK: the single best key (first by priority) per provider — preserved
+        for non-router callers (embed / rerank / aux) that take one key.
+        """
         await self._maybe_refresh()
         return dict(self._provider_cache or {})
+
+    async def effective_provider_secret_refs(self) -> dict[Provider, list[str]]:
+        """Y-MK — provider → ordered key list (priority asc, then key_id).
+
+        DB rows are authoritative when present: enabled keys form the list;
+        if *all* keys for a provider are disabled the provider is suppressed
+        (even over an env seed, mirroring the P-12 single-key semantics).
+        Providers with no DB rows fall back to the env seed as a 1-key list.
+        """
+        await self._maybe_refresh()
+        return {p: list(v) for p, v in (self._provider_refs_cache or {}).items()}
+
+    async def effective_provider_secret_refs_for(
+        self, tenant_id: UUID
+    ) -> dict[Provider, list[str]]:
+        """Y-MK tenant-effective key list. A tenant override (HX-8) is a single
+        key that *replaces* the platform list; a disabled override suppresses
+        the provider for that tenant; no override → the full platform list."""
+        await self._maybe_refresh()
+        merged: dict[Provider, list[str]] = {
+            p: list(v) for p, v in (self._provider_refs_cache or {}).items()
+        }
+        for provider, ref in self._tenant_provider_cache.get(tenant_id, {}).items():
+            if ref is None:
+                merged.pop(provider, None)
+            else:
+                merged[provider] = [ref]
+        return merged
 
     async def effective_tool_credentials(self) -> dict[Tool, str]:
         """Merged tool → secret_ref view (env seed + enabled DB rows)."""
@@ -111,10 +146,9 @@ class PlatformSecretsService:
             await self._reload()
 
     async def _reload(self) -> None:
-        # Env seed first; DB rows then override per key (enabled → set,
-        # disabled → suppress). Platform rows are tenant-less, so the store
-        # reads run inside bypass_rls_session().
-        providers: dict[Provider, str] = dict(
+        # Env seed; DB rows then take over per provider. Platform rows are
+        # tenant-less, so the store reads run inside bypass_rls_session().
+        env_providers: dict[Provider, str] = dict(
             self._settings.effective_platform_provider_credentials
         )
         tools: dict[Tool, str] = dict(self._settings.effective_platform_tool_credentials)
@@ -123,11 +157,24 @@ class PlatformSecretsService:
             tool_rows = await self._store.list_tools()
             tenant_provider_rows = await self._store.list_tenant_providers()
             tenant_tool_rows = await self._store.list_tenant_tools()
+        # Y-MK — a provider with ANY DB rows is DB-authoritative: enabled keys
+        # (priority asc, then key_id) form its list; all-disabled → suppressed
+        # even over an env seed. Providers with no DB rows use the env seed as a
+        # 1-key list. Single cache = first/best key of each list.
+        db_by_provider: dict[Provider, list[PlatformProviderSecretRecord]] = {}
         for row in provider_rows:
-            if row.enabled:
-                providers[row.provider] = row.secret_ref
-            else:
-                providers.pop(row.provider, None)
+            db_by_provider.setdefault(row.provider, []).append(row)
+        provider_refs: dict[Provider, list[str]] = {}
+        for provider, rows in db_by_provider.items():
+            enabled = sorted(
+                (r for r in rows if r.enabled), key=lambda r: (r.priority, r.key_id)
+            )
+            if enabled:
+                provider_refs[provider] = [r.secret_ref for r in enabled]
+        for provider, ref in env_providers.items():
+            if provider not in db_by_provider:
+                provider_refs[provider] = [ref]
+        providers: dict[Provider, str] = {p: refs[0] for p, refs in provider_refs.items()}
         for row in tool_rows:
             if row.enabled:
                 tools[row.tool] = row.secret_ref
@@ -146,6 +193,7 @@ class PlatformSecretsService:
                 trow2.secret_ref if trow2.enabled else None
             )
         self._provider_cache = providers
+        self._provider_refs_cache = provider_refs
         self._tool_cache = tools
         self._tenant_provider_cache = tenant_providers
         self._tenant_tool_cache = tenant_tools
