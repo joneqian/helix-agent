@@ -56,10 +56,9 @@ from helix_agent.common.uplift_metrics import record_anthropic_cache_anchor
 from helix_agent.runtime.middleware import (
     LLMClientError,
     LLMNetworkError,
-    LLMRateLimitError,
     LLMServerError,
-    LLMUnauthorizedError,
 )
+from orchestrator.llm.providers._errors import classify_http_error
 from orchestrator.llm.providers._metrics import disclosure_fallback_total
 from orchestrator.multimodal import ImageResolver, split_human_content
 from orchestrator.tools.registry import ToolSpec
@@ -182,16 +181,12 @@ class HTTPAnthropicClient:
             raise LLMNetworkError(f"anthropic: {exc}") from exc
 
         status = response.status_code
-        if status == 401:
-            # Stream L.L8 — surface 401 distinctly so OAuth-capable
-            # providers can opt into the router's refresh + retry path.
-            raise LLMUnauthorizedError(f"anthropic 401: {_truncate(response.text)}")
-        if status == 429:
-            raise LLMRateLimitError(f"anthropic 429: {_truncate(response.text)}")
-        if 400 <= status < 500:
-            raise LLMClientError(f"anthropic {status}: {_truncate(response.text)}")
-        if status >= 500:
-            raise LLMServerError(f"anthropic {status}: {_truncate(response.text)}")
+        if status >= 400:
+            # Stream Y-MK — shared classifier splits account/key-level failures
+            # (402 / quota / billing → LLMKeyUnavailableError, router tries a
+            # sibling key) from plain 429 rate-limits, malformed 4xx, and 5xx.
+            # 401 stays an LLMUnauthorizedError for the L.L8 OAuth refresh path.
+            raise classify_http_error("anthropic", status, _truncate(response.text))
 
         data = response.json()
         if not isinstance(data, Mapping):

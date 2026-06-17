@@ -16,6 +16,7 @@ from helix_agent.runtime.middleware import (
     CircuitOpenError,
     LLMClientError,
     LLMErrorHandlingMiddleware,
+    LLMKeyUnavailableError,
     LLMNetworkError,
     LLMRateLimitError,
     LLMServerError,
@@ -309,3 +310,33 @@ def test_circuit_open_error_carries_key() -> None:
     err = CircuitOpenError("anthropic-primary")
     assert err.key == "anthropic-primary"
     assert "anthropic-primary" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Y-MK — LLMKeyUnavailableError: account/key dead (欠费/quota/撤销)
+# Not retried (backoff is pointless on a dead account) but DOES trip the
+# breaker so the key is skipped during its cooldown.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_key_unavailable_not_retried_records_failure() -> None:
+    mw, tracker = _mw()
+    terminal = SequenceTerminal([LLMKeyUnavailableError("402 insufficient balance")])
+    with pytest.raises(LLMKeyUnavailableError):
+        await mw(_ctx(), terminal)
+    assert terminal.calls == 1  # no retry
+    assert tracker.sleeps == []  # no backoff
+    breaker = await mw.breaker_registry.get("test-key")
+    assert breaker.consecutive_failures == 1  # counted toward breaker
+
+
+@pytest.mark.asyncio
+async def test_key_unavailable_opens_breaker_at_threshold() -> None:
+    mw, _ = _mw(failure_threshold=3)
+    for _ in range(3):
+        terminal = SequenceTerminal([LLMKeyUnavailableError("402")])
+        with pytest.raises(LLMKeyUnavailableError):
+            await mw(_ctx(), terminal)
+    breaker = await mw.breaker_registry.get("test-key")
+    assert await breaker.check_state() == "OPEN"

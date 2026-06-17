@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 from uuid import UUID
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -243,22 +243,40 @@ class AgentRuntime:
             del self._cache[key]
 
 
+@runtime_checkable
+class _ProviderKeysCapable(Protocol):
+    """A resolver that can return the ordered key list for a provider (Y-MK)."""
+
+    async def resolve_provider_keys(self, *, tenant_id: UUID, provider: Provider) -> list[str]: ...
+
+
 def make_provider_key_resolver(
     *, resolver: CredentialsResolver, tenant_id: UUID
 ) -> ProviderKeyResolver:
     """Bind a :class:`CredentialsResolver` + tenant to a provider→secret_ref
-    getter for the agent build (Stream Q, Mini-ADR Q-5).
+    *list* getter for the agent build (Stream Q, Mini-ADR Q-5; Stream Y-MK).
+
+    Y-MK: returns the ordered list of keys to try for a provider (per-provider
+    multi-key failover). An overlay resolver that exposes ``resolve_provider_keys``
+    returns the full list; a base resolver falls back to its single
+    ``resolve_provider`` wrapped as a 1-key list — preserving single-key builds.
 
     Translates :class:`CredentialsResolverError` into
     :class:`AgentFactoryError` here (control-plane) so the orchestrator's
     ``build_llm_router`` stays free of any ``helix-common.credentials`` import.
     """
 
-    async def _resolve(provider: str) -> str:
+    async def _resolve(provider: str) -> list[str]:
         try:
-            return await resolver.resolve_provider(
-                tenant_id=tenant_id, provider=cast(Provider, provider)
-            )
+            if isinstance(resolver, _ProviderKeysCapable):
+                return await resolver.resolve_provider_keys(
+                    tenant_id=tenant_id, provider=cast(Provider, provider)
+                )
+            return [
+                await resolver.resolve_provider(
+                    tenant_id=tenant_id, provider=cast(Provider, provider)
+                )
+            ]
         except CredentialsResolverError as exc:
             msg = f"no platform credential is configured for provider {provider!r}"
             raise AgentFactoryError(msg) from exc

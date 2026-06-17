@@ -126,3 +126,76 @@ async def test_tenant_tool_override_independent_namespace() -> None:
     assert len(await store.list_tenant_tools(tenant_a)) == 1
     assert await store.list_tenant_providers(tenant_a) == []
     assert await store.delete_tenant_tool(tenant_id=tenant_a, tool="web_search") is True
+
+
+# ---------------------------------------------------------------------------
+# Stream Y-MK — per-provider multi-key
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_provider_multiple_keys_independent_rows() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="deepseek",
+        key_id="acct-a",
+        secret_ref="kms://a",
+        enabled=True,
+        priority=10,
+        actor_id="admin",
+    )
+    await store.upsert_provider(
+        provider="deepseek",
+        key_id="acct-b",
+        secret_ref="kms://b",
+        enabled=True,
+        priority=20,
+        actor_id="admin",
+    )
+    rows = await store.list_providers()
+    assert len(rows) == 2  # two keys, same provider — distinct rows
+    a = await store.get_provider("deepseek", "acct-a")
+    assert a is not None and a.secret_ref == "kms://a" and a.priority == 10
+    # default key_id is a separate slot, absent here
+    assert await store.get_provider("deepseek") is None
+
+
+@pytest.mark.asyncio
+async def test_provider_delete_one_key_keeps_siblings() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="openai", key_id="k1", secret_ref="kms://k1", enabled=True, actor_id="a"
+    )
+    await store.upsert_provider(
+        provider="openai", key_id="k2", secret_ref="kms://k2", enabled=True, actor_id="a"
+    )
+    assert await store.delete_provider("openai", "k1") is True
+    assert await store.delete_provider("openai", "k1") is False  # already gone
+    remaining = await store.list_providers()
+    assert [r.key_id for r in remaining] == ["k2"]
+
+
+@pytest.mark.asyncio
+async def test_provider_upsert_same_key_updates_in_place() -> None:
+    store = InMemoryPlatformSecretStore()
+    await store.upsert_provider(
+        provider="openai",
+        key_id="k1",
+        secret_ref="kms://old",
+        enabled=True,
+        priority=100,
+        actor_id="a",
+    )
+    await store.upsert_provider(
+        provider="openai",
+        key_id="k1",
+        secret_ref="kms://new",
+        enabled=False,
+        priority=5,
+        actor_id="b",
+    )
+    rows = await store.list_providers()
+    assert len(rows) == 1
+    assert rows[0].secret_ref == "kms://new"
+    assert rows[0].enabled is False
+    assert rows[0].priority == 5

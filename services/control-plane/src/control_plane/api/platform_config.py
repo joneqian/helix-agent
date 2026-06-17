@@ -42,6 +42,7 @@ from helix_agent.protocol import (
     PROVIDER_CATALOG,
     TOOL_CATALOG,
     AuditAction,
+    PlatformProviderSecretRecord,
     Principal,
     Provider,
     Tool,
@@ -69,6 +70,9 @@ class PlatformSecretWrite(BaseModel):
     secret_ref: str | None = None
     value: SecretStr | None = None
     enabled: bool = True
+    #: Stream Y-MK — failover order within a provider (lower tried first).
+    #: Ignored for tool writes.
+    priority: int = 100
 
     @field_validator("secret_ref")
     @classmethod
@@ -182,7 +186,10 @@ def build_platform_config_router() -> APIRouter:
         agent_store = _get_agent_spec_store(request)
         embedding_provider = _embedding_provider(request)
         async with bypass_rls_session():
-            db_provs = {row.provider: row for row in await store.list_providers()}
+            # Y-MK — group provider rows by provider (one per key_id).
+            db_prov_keys: dict[str, list[PlatformProviderSecretRecord]] = {}
+            for row in await store.list_providers():
+                db_prov_keys.setdefault(row.provider, []).append(row)
             db_tools = {row.tool: row for row in await store.list_tools()}
             tenant_prov_counts = Counter(
                 row.provider for row in await store.list_tenant_providers()
@@ -195,25 +202,33 @@ def build_platform_config_router() -> APIRouter:
             )
         prov_counts = _provider_usage_counts(specs, embedding_provider=embedding_provider)
         tool_counts = _tool_usage_counts(specs)
-        providers = [
-            {
+
+        def _provider_entry(provider: str) -> dict[str, object]:
+            keys = sorted(db_prov_keys.get(provider, []), key=lambda r: (r.priority, r.key_id))
+            # Backward-compat scalar fields reflect the primary key: prefer
+            # 'default', else the best (lowest-priority) row.
+            primary = next((k for k in keys if k.key_id == "default"), keys[0] if keys else None)
+            return {
                 "provider": provider,
-                "source": "db"
-                if provider in db_provs
-                else ("env" if provider in env_provs else "unset"),
+                "source": "db" if keys else ("env" if provider in env_provs else "unset"),
                 "secret_ref": (
-                    db_provs[provider].secret_ref
-                    if provider in db_provs
-                    else env_provs.get(provider)
+                    primary.secret_ref if primary is not None else env_provs.get(provider)
                 ),
-                "enabled": (
-                    db_provs[provider].enabled if provider in db_provs else provider in env_provs
-                ),
+                "enabled": (primary.enabled if primary is not None else provider in env_provs),
+                "keys": [
+                    {
+                        "key_id": k.key_id,
+                        "secret_ref": k.secret_ref,
+                        "enabled": k.enabled,
+                        "priority": k.priority,
+                    }
+                    for k in keys
+                ],
                 "used_by_agents": prov_counts.get(provider, 0),
                 "tenant_override_count": tenant_prov_counts.get(provider, 0),
             }
-            for provider in PROVIDER_CATALOG
-        ]
+
+        providers = [_provider_entry(provider) for provider in PROVIDER_CATALOG]
         tools = [
             {
                 "tool": tool,
@@ -233,15 +248,16 @@ def build_platform_config_router() -> APIRouter:
             "error": None,
         }
 
-    @router.put("/providers/{provider}")
-    async def upsert_provider(
+    async def _do_upsert_provider(
+        *,
         provider: str,
+        key_id: str,
         payload: PlatformSecretWrite,
-        principal: Annotated[Principal, Depends(_principal)],
-        store: Annotated[PlatformSecretStore, Depends(_get_store)],
-        service: Annotated[PlatformSecretsService, Depends(_get_service)],
-        audit: Annotated[AuditLogger, Depends(_get_audit)],
-        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
+        principal: Principal,
+        store: PlatformSecretStore,
+        service: PlatformSecretsService,
+        audit: AuditLogger,
+        secret_store: SecretStore,
     ) -> dict[str, object]:
         _require_system_admin(principal)
         if provider not in PROVIDER_CATALOG:
@@ -252,14 +268,19 @@ def build_platform_config_router() -> APIRouter:
                     "message": f"provider {provider!r} not in catalog",
                 },
             )
-        secret_ref = await _resolve_write_ref(
-            payload, secret_store, name=f"helix-agent/platform/llm/{provider}"
-        )
+        # Stream Y-MK — multiple keys share one secret name slot per key_id so
+        # rotated/extra keys never collide with the default one.
+        name = f"helix-agent/platform/llm/{provider}"
+        if key_id != "default":
+            name = f"{name}/{key_id}"
+        secret_ref = await _resolve_write_ref(payload, secret_store, name=name)
         async with bypass_rls_session():
             row = await store.upsert_provider(
                 provider=cast(Provider, provider),
+                key_id=key_id,
                 secret_ref=secret_ref,
                 enabled=payload.enabled,
+                priority=payload.priority,
                 actor_id=principal.subject_id,
             )
         service.invalidate()
@@ -267,10 +288,60 @@ def build_platform_config_router() -> APIRouter:
             audit,
             principal=principal,
             action=AuditAction.PLATFORM_PROVIDER_CREDENTIAL_UPSERT,
-            key=provider,
-            details={"enabled": payload.enabled, "secret_ref": secret_ref},
+            key=f"{provider}#{key_id}",
+            details={
+                "enabled": payload.enabled,
+                "secret_ref": secret_ref,
+                "key_id": key_id,
+                "priority": payload.priority,
+            },
         )
         return {"success": True, "data": row.model_dump(mode="json"), "error": None}
+
+    @router.put("/providers/{provider}")
+    async def upsert_provider(
+        provider: str,
+        payload: PlatformSecretWrite,
+        principal: Annotated[Principal, Depends(_principal)],
+        store: Annotated[PlatformSecretStore, Depends(_get_store)],
+        service: Annotated[PlatformSecretsService, Depends(_get_service)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
+    ) -> dict[str, object]:
+        """Upsert the provider's ``default`` key (Stream P; Y-MK key_id='default')."""
+        return await _do_upsert_provider(
+            provider=provider,
+            key_id="default",
+            payload=payload,
+            principal=principal,
+            store=store,
+            service=service,
+            audit=audit,
+            secret_store=secret_store,
+        )
+
+    @router.put("/providers/{provider}/keys/{key_id}")
+    async def upsert_provider_key(
+        provider: str,
+        key_id: str,
+        payload: PlatformSecretWrite,
+        principal: Annotated[Principal, Depends(_principal)],
+        store: Annotated[PlatformSecretStore, Depends(_get_store)],
+        service: Annotated[PlatformSecretsService, Depends(_get_service)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
+    ) -> dict[str, object]:
+        """Stream Y-MK — upsert one named key of a provider for multi-key failover."""
+        return await _do_upsert_provider(
+            provider=provider,
+            key_id=key_id,
+            payload=payload,
+            principal=principal,
+            store=store,
+            service=service,
+            audit=audit,
+            secret_store=secret_store,
+        )
 
     @router.put("/tools/{tool}")
     async def upsert_tool(
@@ -355,6 +426,57 @@ def build_platform_config_router() -> APIRouter:
             action=AuditAction.PLATFORM_PROVIDER_CREDENTIAL_DELETE,
             key=provider,
             details={},
+        )
+
+    @router.delete("/providers/{provider}/keys/{key_id}", status_code=204)
+    async def delete_provider_key(
+        provider: str,
+        key_id: str,
+        principal: Annotated[Principal, Depends(_principal)],
+        store: Annotated[PlatformSecretStore, Depends(_get_store)],
+        service: Annotated[PlatformSecretsService, Depends(_get_service)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+        request: Request,
+    ) -> None:
+        """Stream Y-MK — delete one key. Blocked only when it is the *last*
+        remaining key of an in-use, non-env provider (would orphan agents);
+        deleting a sibling while others remain is always allowed."""
+        _require_system_admin(principal)
+        agent_store = _get_agent_spec_store(request)
+        embedding_provider = _embedding_provider(request)
+        async with bypass_rls_session():
+            rows = [r for r in await store.list_providers() if r.provider == provider]
+            remaining = [r for r in rows if r.key_id != key_id]
+            if not remaining and provider not in _env_provider_refs(request):
+                specs = (
+                    await agent_store.list_all_tenants(status=None, limit=1000)
+                    if agent_store is not None
+                    else []
+                )
+                in_use = _provider_usage_counts(specs, embedding_provider=embedding_provider).get(
+                    cast(Provider, provider), 0
+                )
+                if in_use > 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "PLATFORM_CREDENTIAL_IN_USE",
+                            "message": (
+                                f"{in_use} agent(s) reference this provider and this is the "
+                                "last key; disable instead or add another key first"
+                            ),
+                        },
+                    )
+            deleted = await store.delete_provider(cast(Provider, provider), key_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="platform provider key not found")
+        service.invalidate()
+        await _emit_platform_audit(
+            audit,
+            principal=principal,
+            action=AuditAction.PLATFORM_PROVIDER_CREDENTIAL_DELETE,
+            key=f"{provider}#{key_id}",
+            details={"key_id": key_id},
         )
 
     @router.delete("/tools/{tool}", status_code=204)

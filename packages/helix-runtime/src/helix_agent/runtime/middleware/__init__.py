@@ -91,6 +91,9 @@ from helix_agent.runtime.middleware.llm_error_handling import (
     LLMErrorHandlingMiddleware as LLMErrorHandlingMiddleware,
 )
 from helix_agent.runtime.middleware.llm_error_handling import (
+    LLMKeyUnavailableError as LLMKeyUnavailableError,
+)
+from helix_agent.runtime.middleware.llm_error_handling import (
     LLMNetworkError as LLMNetworkError,
 )
 from helix_agent.runtime.middleware.llm_error_handling import (
@@ -161,6 +164,7 @@ __all__ = [
     "LLMClientError",
     "LLMError",
     "LLMErrorHandlingMiddleware",
+    "LLMKeyUnavailableError",
     "LLMNetworkError",
     "LLMRateLimitError",
     "LLMServerError",

@@ -26,6 +26,8 @@ from helix_agent.protocol import Provider, Tool
 
 TenantProviderViewGetter = Callable[[UUID], Awaitable[dict[Provider, str]]]
 TenantToolViewGetter = Callable[[UUID], Awaitable[dict[Tool, str]]]
+# Stream Y-MK — tenant-effective per-provider ordered key list.
+TenantProviderKeysViewGetter = Callable[[UUID], Awaitable[dict[Provider, list[str]]]]
 
 
 class TenantOverlayCredentialsResolver(CredentialsResolver):
@@ -36,11 +38,13 @@ class TenantOverlayCredentialsResolver(CredentialsResolver):
         *,
         tenant_provider_view: TenantProviderViewGetter,
         tenant_tool_view: TenantToolViewGetter,
+        tenant_provider_keys_view: TenantProviderKeysViewGetter | None = None,
         **resolver_kwargs: Any,
     ) -> None:
         super().__init__(**resolver_kwargs)
         self._tenant_provider_view = tenant_provider_view
         self._tenant_tool_view = tenant_tool_view
+        self._tenant_provider_keys_view = tenant_provider_keys_view
 
     async def resolve_provider(self, *, tenant_id: UUID, provider: Provider) -> str:
         # Tenant-existence validation mirrors the base class (raises on
@@ -57,6 +61,26 @@ class TenantOverlayCredentialsResolver(CredentialsResolver):
             )
             raise CredentialsResolverError(msg, mode="platform", kind="provider", key=provider)
         return secret_ref
+
+    async def resolve_provider_keys(self, *, tenant_id: UUID, provider: Provider) -> list[str]:
+        """Stream Y-MK — the ordered list of secret_refs to try for ``provider``
+        (priority asc). A tenant override is a single key replacing the list; a
+        disabled override / unset platform credential yields a miss, raised as a
+        :class:`CredentialsResolverError` with the same contract as
+        :meth:`resolve_provider`. Falls back to the single resolve (wrapped as a
+        1-key list) when no keys view was injected."""
+        await self._tenant_config.get(tenant_id=tenant_id)
+        if self._tenant_provider_keys_view is None:
+            return [await self.resolve_provider(tenant_id=tenant_id, provider=provider)]
+        refs = (await self._tenant_provider_keys_view(tenant_id)).get(provider)
+        if not refs:
+            msg = (
+                f"platform credentials missing for provider={provider} "
+                f"(tenant-effective key list). Configure a platform credential "
+                "or remove the tenant's disabled override."
+            )
+            raise CredentialsResolverError(msg, mode="platform", kind="provider", key=provider)
+        return refs
 
     async def resolve_tool(self, *, tenant_id: UUID, tool: Tool) -> str:
         await self._tenant_config.get(tenant_id=tenant_id)

@@ -34,8 +34,10 @@ def _utc_now() -> datetime:
 def _provider_record(row: PlatformProviderSecretRow) -> PlatformProviderSecretRecord:
     return PlatformProviderSecretRecord(
         provider=cast(Provider, row.provider),
+        key_id=row.key_id,
         secret_ref=row.secret_ref,
         enabled=row.enabled,
+        priority=row.priority,
         created_at=row.created_at,
         updated_at=row.updated_at,
         updated_by=row.updated_by,
@@ -88,17 +90,21 @@ class SqlPlatformSecretStore(PlatformSecretStore):
             rows = (await session.execute(select(PlatformProviderSecretRow))).scalars().all()
         return [_provider_record(r) for r in rows]
 
-    async def get_provider(self, provider: Provider) -> PlatformProviderSecretRecord | None:
+    async def get_provider(
+        self, provider: Provider, key_id: str = "default"
+    ) -> PlatformProviderSecretRecord | None:
         async with self._sf() as session:
-            row = await session.get(PlatformProviderSecretRow, provider)
+            row = await session.get(PlatformProviderSecretRow, (provider, key_id))
         return _provider_record(row) if row is not None else None
 
     async def upsert_provider(
         self,
         *,
         provider: Provider,
+        key_id: str = "default",
         secret_ref: str,
         enabled: bool,
+        priority: int = 100,
         actor_id: str,
     ) -> PlatformProviderSecretRecord:
         now = _utc_now()
@@ -107,17 +113,20 @@ class SqlPlatformSecretStore(PlatformSecretStore):
                 pg_insert(PlatformProviderSecretRow)
                 .values(
                     provider=provider,
+                    key_id=key_id,
                     secret_ref=secret_ref,
                     enabled=enabled,
+                    priority=priority,
                     created_at=now,
                     updated_at=now,
                     updated_by=actor_id,
                 )
                 .on_conflict_do_update(
-                    index_elements=["provider"],
+                    index_elements=["provider", "key_id"],
                     set_={
                         "secret_ref": secret_ref,
                         "enabled": enabled,
+                        "priority": priority,
                         "updated_at": now,
                         "updated_by": actor_id,
                     },
@@ -129,11 +138,12 @@ class SqlPlatformSecretStore(PlatformSecretStore):
             await session.refresh(row)
             return _provider_record(row)
 
-    async def delete_provider(self, provider: Provider) -> bool:
+    async def delete_provider(self, provider: Provider, key_id: str = "default") -> bool:
         async with self._sf() as session:
             result = await session.execute(
                 delete(PlatformProviderSecretRow).where(
-                    PlatformProviderSecretRow.provider == provider
+                    PlatformProviderSecretRow.provider == provider,
+                    PlatformProviderSecretRow.key_id == key_id,
                 )
             )
             await session.commit()

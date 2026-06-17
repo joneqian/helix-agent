@@ -154,3 +154,41 @@ async def test_tenant_override_round_trip(
         assert await store.delete_tenant_tool(tenant_id=tenant_b, tool="web_search") is True
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_multikey_round_trip(
+    platform_secret_store: tuple[SqlPlatformSecretStore, AsyncEngine],
+) -> None:
+    """Stream Y-MK — multiple keys per provider against real PG (migration
+    0084 composite PK ``(provider, key_id)`` exercised via the fixture's
+    ``upgrade(head)``)."""
+    store, engine = platform_secret_store
+    try:
+        await store.upsert_provider(
+            provider="deepseek",
+            key_id="acct-a",
+            secret_ref="kms://a",
+            enabled=True,
+            priority=10,
+            actor_id="admin",
+        )
+        await store.upsert_provider(
+            provider="deepseek",
+            key_id="acct-b",
+            secret_ref="kms://b",
+            enabled=True,
+            priority=20,
+            actor_id="admin",
+        )
+        rows = [r for r in await store.list_providers() if r.provider == "deepseek"]
+        assert {r.key_id for r in rows} == {"acct-a", "acct-b"}
+        a = await store.get_provider("deepseek", "acct-a")
+        assert a is not None and a.priority == 10
+
+        # Deleting one key leaves the sibling intact.
+        assert await store.delete_provider("deepseek", "acct-a") is True
+        remaining = [r for r in await store.list_providers() if r.provider == "deepseek"]
+        assert [r.key_id for r in remaining] == ["acct-b"]
+    finally:
+        await engine.dispose()

@@ -881,6 +881,11 @@ def create_app(
                     tenant_tool_view=(
                         resolved_platform_secrets_service.effective_tool_credentials_for
                     ),
+                    # Stream Y-MK — tenant-effective per-provider key list for
+                    # the agent's main-model multi-key failover.
+                    tenant_provider_keys_view=(
+                        resolved_platform_secrets_service.effective_provider_secret_refs_for
+                    ),
                     platform_provider_credentials=(
                         resolved_settings.effective_platform_provider_credentials
                     ),

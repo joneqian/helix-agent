@@ -75,11 +75,11 @@ def _secret_store() -> LocalDevSecretStore:
     return LocalDevSecretStore.from_mapping({_ANTHROPIC_KEY_NAME: "sk-ant-test"})
 
 
-async def _platform_resolver(provider: str) -> str:
+async def _platform_resolver(provider: str) -> list[str]:
     # Stream Y-2 — agent builds resolve the platform key; these specs are all
     # anthropic, so every provider maps to the seeded anthropic dev key.
     del provider
-    return f"secret://{_ANTHROPIC_KEY_NAME}"
+    return [f"secret://{_ANTHROPIC_KEY_NAME}"]
 
 
 async def _build(spec: AgentSpec, **kwargs: Any) -> Any:
