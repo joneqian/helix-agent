@@ -20,7 +20,7 @@
 ## 当前非满分项（6 项；2.2/4.1/11.4/11.5/3.3/4.4/1.3/7.3/7.4/8.5/13.2/14.4/9.4/16.3/10.5 已收为 ★5）
 
 ★4（一步之遥，多为低成本）：10.1（TX 终态，不推）（~~1.3~~ 已 ★5 #666/#667；~~7.3~~~~7.4~~ 已 ★5 #669）
-★3（真 gap）：7.2 · 7.6 · 16.4 · 12.4（~~8.5~~ #671 / ~~13.2~~ #673 / ~~14.4~~ #675 / ~~16.3~~ backpressure / ~~10.5~~ 烧录率 #680 已 ★5）
+★3（真 gap）：7.2 · 7.6 · 16.4（~~8.5~~ #671 / ~~13.2~~ #673 / ~~14.4~~ #675 / ~~16.3~~ backpressure / ~~10.5~~ 烧录率 #680 已 ★5；12.4 ★3→★4 平台用量视图 #690/#691，剩发票/支付 M2/外部）
 ★2（M1 大件）：—（~~9.4~~ 已 ★5 live #677+#678；~~9.5~~ 全收官 ★5 live #683–#687，T3 HA 层全清）
 ✅ 已收（本轮 T0）：2.2（#647）· 4.1（确认）
 
@@ -39,8 +39,8 @@
 > 见 `2026-06-15-1145-live-eval-worker-design.md` §8 E2E 实证；代码 #649/#652 已合，本机真栈（deepseek eval agent）
 > trace passed 3/3 / adversarial 5/6（机制证实，1 真防御观测非假阴）。
 >
-> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ 14.4（+2，410）→ 9.4（★2→★5 live，+3，413）→ 16.3（+2，415）→ 10.5（★3→★5，+2，417）→ **9.5（★2→★5 live，+3，420/430）**（+15.3 测试债清，★5 不改分）。
-> **均分 4.60→4.88（97.7%），共 +24★。T1 全清；M1 大件 9.4+9.5 双双 live 收口；运维韧性三连（16.3/10.5/15.3，#679-681）。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
+> **累计进度（T0+T1+T2+T4 收割）**：重核 396 → 11.4/11.5（+2，398）→ 3.3（+2，400）→ 4.4（+1，401）→ 1.3（+1，402）→ 7.3/7.4（+2，404）→ 8.5（+2，406）→ 13.2（+2，408）→ 14.4（+2，410）→ 9.4（★2→★5 live，+3，413）→ 16.3（+2，415）→ 10.5（★3→★5，+2，417）→ 9.5（★2→★5 live，+3，420）→ **12.4（★3→★4，+1，421/430）**（+15.3 测试债清，★5 不改分）。
+> **均分 4.60→4.90（97.9%），共 +25★。T1 全清；M1 大件 9.4+9.5 双双 live 收口；运维韧性三连（16.3/10.5/15.3，#679-681）。** 1.3 见 `2026-06-16-1.3-orchestration-patterns-design.md`。
 > **9.5 worker 多副本完备（#686 TriggerScheduler cron+retry CAS / #687 approval timeout sweep）** 是已 ★5 范围内的加固，不改分——让所有 9.5 后台 worker（reaper/scheduler/queue/eval/approval）多副本 exactly-once，并补平 J.8 审批超时从没接线的缺失功能；设计见 `2026-06-16-9.5-distributed-run-queue-design.md` §2.2c/§2.2d。
 > 16.3/10.5/15.3 见 `2026-06-15-capability-reassessment.md` §3「运维韧性三连」：16.3 应用层 backpressure 过载守卫（503 甩负）/ 10.5 SLO 多窗烧录率（Google SRE，promtool 双验）/ 15.3 sanitize 纯函数直接单测（含跨递归位置）。
 > 9.4 见 `2026-06-16-9.4-9.5-ha-failover-design.md` §7（#677+#678）：Postgres 租约+孤儿 sweep+自动热接力,蓝绿双实例真栈 kill blue mid-run→green 续跑到 success(5 项断言全绿);live 暴露 failover 硬依赖 postgres checkpointer + 续跑 seq 撞键(已修)。
@@ -90,7 +90,7 @@
 | 16.4 基础设施自愈 | ★3 | k8s HPA/failover（基础设施层） |
 | ~~16.3 应用层 backpressure~~ | ✅★5 | **已交付+单测+全 app 集成（#679）**：`BackpressureMiddleware` 过载守卫——in-flight 深度（复用 `Lifecycle.in_flight`）超阈值 503+Retry-After fast-fail,置 Observability 内/Auth 外（shed 被 trace 但不进 JWT/DB）,免 health/metrics,默认开 cap 512。区别于 per-tenant rate-limit（429 公平）——这是全局过载（503 服务端）。补足「无应用层 backpressure/fast-fail 代码」gap |
 | ~~10.5 SLO burn-rate~~ | ✅★5 | **已交付+promtool 双验（#680）**：`burn_rate.yml` Google SRE 多窗多烧录率——record `helix_slo_burn_rate{slo,window}`（可用性 SLO,5m/30m/1h/2h/6h/24h）+ 长窗确认/短窗加速告警（1h&5m>14.4 P0 / 6h&30m>6 P1 / 24h&2h>3 P2,`and ignoring(window)`）;`promtool check rules`+`test rules` 双 SUCCESS。关掉 sli.yml「Burn-rate rules are M1」deferral |
-| 12.4 chargeback 计费 | ★3 | 定价引擎/发票（**用户拍板后置**） |
+| 12.4 chargeback 计费 | ★3→★4 | **平台用量视图已交付（#690/#691）**：核代码发现计费链路（计量 G.9 → 定价 Y3 → rollup Y4 → ledger → 暴露 Z）已建，assessment「定价引擎/发票」中定价引擎早做完。用户拍板范围=平台 system_admin 看**每租户 + 每 agent** 的 token + 成本 + rollup enable 配置入口：Part A 扩 chargeback per-agent 钻取（ledger 已含 agent 分桶，零新计算）；Part B `platform_billing_config` 单行表 + admin-ui 开关 + 离线 rollup job 跑前读（cron 调度归 k8s）。**剩 ★5 gap=发票/月结对账单 + 支付（Stripe）**——用户明确排除（M2/外部），非静默缺失。设计见 `2026-06-17-12.4-platform-usage-view-design.md` |
 
 ## 与 v1 的关键差异
 
@@ -98,7 +98,7 @@
 2. **旧 P3/P4 沙箱安全已自愈**（7.2/3/4/6 全升档）→ 从「攻坚区」降为「补到满分的收尾」。
 3. **新增 T0 廉价收割层**：4 项 ★4→★5 全 ≤1 天，最高 ROI，旧 v1 没单列。
 4. **HA：9.4+9.5 双双 ★5 live 收口**（9.4 failover #677+#678；9.5 分布式队列 #683–#687，含全 worker 多副本 CAS 加固 + approval 超时 sweep 补缺）——均 house 风格复用现成 checkpoint+CAS，非传统 XL 大件。**T3 HA 层全清**。
-5. **变现 12.4 仍用户后置**，T4 末位。
+5. **变现 12.4 ★3→★4**：平台用量视图（per-agent token+成本 + rollup enable）已交付（#690/#691）；剩发票/支付 = M2/外部，用户拍板排除。
 
 ## 建议执行序
 
