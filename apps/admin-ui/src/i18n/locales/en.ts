@@ -75,6 +75,38 @@ export interface TranslationKeys {
     exchanging: string;
     failed: string;
   };
+  setup: {
+    title: string;
+    paragraph: string;
+    platform_name_label: string;
+    admin_email_label: string;
+    admin_email_required: string;
+    admin_email_invalid: string;
+    admin_password_label: string;
+    admin_password_required: string;
+    admin_password_length: string;
+    admin_password_confirm_label: string;
+    admin_password_confirm_required: string;
+    admin_password_mismatch: string;
+    admin_display_name_label: string;
+    setup_token_label: string;
+    setup_token_hint: string;
+    setup_token_required: string;
+    notice: string;
+    submit: string;
+    success_toast: string;
+    done_title: string;
+    done_subtitle: string;
+    go_to_login: string;
+    already_initialized_title: string;
+    already_initialized_subtitle: string;
+    error_already_initialized: string;
+    error_invalid_token: string;
+    error_not_configured: string;
+    error_email_exists: string;
+    error_keycloak_unavailable: string;
+    error_generic: string;
+  };
   agent_detail: {
     failed_to_load: string;
     tab_overview: string;
@@ -1555,6 +1587,46 @@ const en: TranslationKeys = {
     exchanging:
       "Exchanging the authorization code with your identity provider.",
     failed: "Sign-in failed",
+  },
+  setup: {
+    title: "Set up helix",
+    paragraph:
+      "No platform administrator exists yet. Create the first system admin to finish installing helix.",
+    platform_name_label: "Platform name",
+    admin_email_label: "Administrator email",
+    admin_email_required: "Email is required",
+    admin_email_invalid: "Enter a valid email address",
+    admin_password_label: "Password",
+    admin_password_required: "Password is required",
+    admin_password_length: "Password must be 8–256 characters",
+    admin_password_confirm_label: "Confirm password",
+    admin_password_confirm_required: "Please confirm the password",
+    admin_password_mismatch: "The two passwords do not match",
+    admin_display_name_label: "Display name (optional)",
+    setup_token_label: "Setup token",
+    setup_token_hint:
+      "The HELIX_AGENT_SETUP_TOKEN value configured at deploy time.",
+    setup_token_required: "Setup token is required",
+    notice:
+      "This one-time wizard creates the first platform system administrator. It is disabled once setup completes.",
+    submit: "Create administrator",
+    success_toast: "Platform administrator created",
+    done_title: "Platform administrator created",
+    done_subtitle:
+      "helix is initialized. Sign in with the administrator account you just created.",
+    go_to_login: "Go to sign in",
+    already_initialized_title: "Already initialized",
+    already_initialized_subtitle:
+      "A platform administrator already exists. Sign in instead.",
+    error_already_initialized:
+      "The platform is already initialized — please sign in.",
+    error_invalid_token: "The setup token is incorrect.",
+    error_not_configured:
+      "Setup is not configured on this deployment (no setup token set).",
+    error_email_exists: "An account with this email already exists.",
+    error_keycloak_unavailable:
+      "The identity provider is unavailable. Try again shortly.",
+    error_generic: "Setup failed. Please check the details and try again.",
   },
   agent_detail: {
     failed_to_load: "Failed to load agent",
