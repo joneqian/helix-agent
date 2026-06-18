@@ -25,7 +25,7 @@ WAIT_SERVICES := $(DEV_DATA) $(DEV_APP) $(DEV_LANGFUSE)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build dev-bootstrap-admin langfuse-reset dev-info
+.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build dev-bootstrap-admin dev-reset-admin langfuse-reset dev-info
 
 help: ## 列出可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -65,6 +65,17 @@ dev-bootstrap-admin: ## 提权 dev 用户为 system_admin(快路径;首选 /setu
 	if [ -z "$$SUB" ]; then echo "FAILED: 取不到 dev 用户 id(Keycloak 未就绪?)"; exit 1; fi; \
 	echo "dev subject_id = $$SUB"; \
 	$(COMPOSE) $(PROFILES) exec -T control-plane-blue python -m control_plane.bootstrap_admin --subject-id $$SUB
+
+# 只删平台 system_admin 绑定 → 回到零-admin,让 /setup 向导重新可用。
+# 不动 LLM key(密钥库)/租户/agent/记忆/审计 —— 仅清授权,数据保留。
+# role_binding 是 FORCE-RLS;容器内 postgres 超级用户直删可绕 RLS。
+dev-reset-admin: ## 清平台管理员绑定(保留其它数据;还原 /setup 向导)
+	$(COMPOSE) $(PROFILES) exec -T postgres \
+	  sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "DELETE FROM role_binding WHERE platform_scope = true;"'
+	@echo "── /setup 状态 ───────────────────────────────────"
+	@curl -s http://localhost:8000/v1/setup/status || echo "(control-plane 未就绪?)"
+	@echo ""
+	@echo "→ 开 admin-ui 走 /setup 向导(initialized 应为 false)"
 
 dev-down: ## 停所有 dev 服务(留容器 + 数据卷)
 	$(COMPOSE) $(PROFILES) stop $(WAIT_SERVICES) keycloak
