@@ -1,120 +1,240 @@
-# 部署与发布 — Stream I
+# Helix-Agent 部署手册
 
-> 落实 P0 #32（服务发布策略）/ #33（服务回滚）。设计见 [STREAM-I-DESIGN § 6–8](../streams/STREAM-I-DESIGN.md)。
+> 单一权威的部署入口:从零起本地栈、首次上线 staging / prod、滚动更新、回滚、验证、运维。
+> 深度专题(蓝绿脚本、Postgres、TLS、备份)在对应 runbook,本手册串起全程并链接它们。
 >
-> 覆盖 Stream I 全程：三环境矩阵、配置来源、首次部署、滚动发布、回滚、迁移兼容、发布检查清单。
+> 落实 Stream I(发布/回滚)+ Stream ACCT(首装向导)。设计见 [STREAM-I-DESIGN](../streams/STREAM-I-DESIGN.md) / [STREAM-ACCT-DESIGN](../streams/STREAM-ACCT-DESIGN.md)。
 
-M0 在线栈跑在单台主机的 `docker compose --profile full up` 上。control-plane 在 ADR B-6（SQL store 切换）后**无状态** —— 蓝绿两色（`control-plane-blue` / `control-plane-green`）可并行连同一套数据库，发布与回滚都靠切换 nginx upstream 完成。
+## 目录
 
-## 三环境矩阵
+1. [架构与拓扑](#1-架构与拓扑)
+2. [前置准备](#2-前置准备)
+3. [配置来源与优先级](#3-配置来源与优先级)
+4. [关键环境变量](#4-关键环境变量)
+5. [首次部署 — 本地 dev / dogfood](#5-首次部署--本地-dev--dogfood)
+6. [首次部署 — staging / prod](#6-首次部署--staging--prod)
+7. [创建第一个平台管理员(首装向导)](#7-创建第一个平台管理员首装向导)
+8. [更新部署(滚动发布 / 蓝绿)](#8-更新部署滚动发布--蓝绿)
+9. [回滚](#9-回滚)
+10. [数据库迁移(expand-contract)](#10-数据库迁移expand-contract)
+11. [部署后验证](#11-部署后验证)
+12. [可观测性栈](#12-可观测性栈)
+13. [备份与恢复](#13-备份与恢复)
+14. [发布检查清单](#14-发布检查清单)
+15. [常见坑](#15-常见坑)
 
-| 维度 | dev | staging | prod |
-|------|-----|---------|------|
-| 载体 | 本机 docker-compose（OrbStack/Lima）| 单台阿里云 ECS + docker-compose | 阿里云 ECS + docker-compose（独立实例）|
-| Postgres | compose `postgres` 容器 | 阿里云 RDS（staging 库）| 阿里云 RDS（prod 库，独立实例）|
-| 对象存储 | compose MinIO | 阿里云 OSS（staging bucket）| 阿里云 OSS（prod bucket）|
-| Secret | `local_dev`（`infra/credential-proxy/secrets.env` 占位）| 阿里云 KMS Secrets Manager（ADR-0007）| 阿里云 KMS Secrets Manager |
-| 镜像来源 | 本地 `docker build` | 阿里云 ACR | 阿里云 ACR |
-| TLS 证书 | 自签（`tools/dev-certs/`）| 内部 CA / 真证书 | 真证书 |
-| `HELIX_AGENT_STORE_BACKEND` | `sql` | `sql` | `sql` |
-| `HELIX_AGENT_SINGLE_INSTANCE` | `true`（不蓝绿）| `false` + Redis（蓝绿需要）| `false` + Redis |
-| 发布方式 | `compose up`（无蓝绿）| `deploy.py` 蓝绿 | `deploy.py` 蓝绿 + 金丝雀 |
+---
 
-**环境隔离（P0）**：三环境的 DB / 密钥 / bucket 完全分离，命名一律带环境后缀（`helix_agent_dev` / `_staging` / `_prod`）防误连；prod 凭据只存 KMS，不落盘、不进仓库。
+## 1. 架构与拓扑
 
-## 配置来源与优先级
+在线栈跑在 `docker compose` 上。control-plane 在 ADR B-6(SQL store)后**无状态**,可蓝绿两色(`control-plane-blue` / `control-plane-green`)并行连同一套 DB,发布/回滚靠切换 nginx upstream。
 
-三处配置源，由结构化到敏感：
+| 组件 | 角色 | 默认端口 |
+|------|------|---------|
+| `control-plane` | 后端 API(无状态,蓝绿) | blue 8000 / green 8001 |
+| `sandbox-supervisor` | 每会话沙箱生命周期(Docker/gVisor) | 8001(容器内 8000) |
+| `credential-proxy` | 出站凭据注入代理 | — |
+| `admin-ui` | React 控制台(独立构建/部署) | dev 5173 |
+| `postgres` (+`pgbouncer`) | 事件日志 / 状态单一真相源(RLS) | 5432 / 6432 |
+| `redis` | 多实例限流 / 队列协调 | 6379 |
+| `minio` / OSS | 对象存储(上传 / 快照 / 归档) | 9000 / 9001 |
+| `keycloak` | OIDC/JWT IdP | 8080 |
+| `nginx` | TLS 终结 + 蓝绿 upstream | 8080 / 8443 |
 
-1. **`environments/<env>.yaml`** —— 结构化非密配置（DB host、OSS endpoint、observability、TLS 路径、`secrets.backend` 选型）。声明式，目前由 `tools/tls/check_tls_config.py`（`tls:` 段）和 SecretStore 工厂（`secrets.backend`）消费。
-2. **`HELIX_AGENT_*` 环境变量** —— control-plane 的 pydantic `Settings` **只**读真实环境变量（不读 yaml）。compose 文件 / 部署脚本注入：`HELIX_AGENT_DB_DSN`、`HELIX_AGENT_STORE_BACKEND`、`HELIX_AGENT_SINGLE_INSTANCE`、`HELIX_AGENT_QUOTA_REDIS_URL` 等。
-3. **阿里云 KMS Secrets Manager** —— 运行期密钥（模型 key、DB 密码、上游凭据），staging / prod 经 SecretStore（ADR-0007）拉取，永不落盘。dev 用 `local_dev` 占位文件。
+**Compose profiles**(`infra/docker-compose.yml`):
 
-## 首次部署
+| profile | 含 | 用途 |
+|---------|----|------|
+| (默认) | postgres / pgbouncer / redis / minio | 数据层(集成测试、迁移、psql) |
+| `full` | migrate / control-plane-blue / green / sandbox-supervisor / credential-proxy | 在线后端栈 |
+| `auth` | keycloak | OIDC 登录 |
+| `proxy` | nginx | TLS + 蓝绿(staging/prod 必备) |
+| `observability` | otel / prometheus / tempo / loki / promtail / grafana / alertmanager / langfuse | 指标 / trace / 日志 |
+| `sandbox` | credential-proxy / sandbox-supervisor | 仅沙箱子集 |
+| `e2e` | mock-upstream | 端到端测试 |
 
-**dev** —— 见 [`infra/README.md`](../../infra/README.md)。预构建沙盒镜像后 `docker compose --profile full up`；要蓝绿 / nginx 再加 `--profile proxy`。
+## 2. 前置准备
 
-**staging / prod**：
+| 项 | dev | staging / prod |
+|----|-----|----------------|
+| 容器运行时 | Docker Desktop / OrbStack / Lima | Linux + Docker(阿里云 ECS) |
+| Postgres | compose `postgres` 容器 | 阿里云 RDS(独立实例 / 库) |
+| 对象存储 | compose MinIO | 阿里云 OSS bucket |
+| 密钥 | `infra/.env`(git-ignored) | 阿里云 KMS Secrets Manager |
+| 镜像 | 本地 `docker build` | 阿里云 ACR |
+| TLS | 自签(`tools/dev-certs/`) | 真证书 / 内部 CA([tls-certs.md](./tls-certs.md)) |
+| 前端工具 | Node + pnpm(admin-ui) | 构建产物 / CDN |
+| 一个真模型 key | Anthropic `sk-ant-…`(网页粘贴) | KMS 托管 |
 
-1. 备好 `environments/<env>.yaml` + 注入 `HELIX_AGENT_*` 环境变量（DSN 指向 RDS；`STORE_BACKEND=sql`；`SINGLE_INSTANCE=false` + `QUOTA_REDIS_URL`）。
-2. 从阿里云 ACR 拉 `helix-control-plane` / `helix-sandbox-supervisor` / `helix-credential-proxy` 镜像。
-3. 起数据层（staging/prod 的 Postgres 是 RDS，不起 compose 的 `postgres` / `pgbouncer`；redis 仍由 compose 起）。
-4. 跑 `migrate`（`alembic upgrade head`，纯 expand —— 见下）。
-5. 蓝绿起 control-plane：首次直接 `docker compose up -d control-plane-blue` + 起 nginx；之后的版本走 `deploy.py`。
-6. 起 sandbox-supervisor / credential-proxy。
-7. 验证：`/healthz/ready` 全绿、nginx 经 8443 mTLS 可达、Stream G SLO 大盘有数据。
+**沙箱镜像须预构建**:`sandbox-supervisor` 运行期 `docker run` 沙箱镜像,compose 不替它构建。部署前 `docker build`(office / minimal 两镜像,build context 不同 —— 见 [sandbox.md](./sandbox.md))。
 
-## 滚动发布（蓝绿）
+## 3. 配置来源与优先级
 
+三处配置源,由结构化到敏感:
+
+1. **`environments/<env>.yaml`** —— 结构化非密配置(DB host、OSS endpoint、observability、TLS 路径、`secrets.backend` 选型)。声明式,由 TLS 校验器与 SecretStore 工厂消费。
+2. **`HELIX_AGENT_*` 环境变量** —— control-plane 的 pydantic `Settings` **只**读真实环境变量(不读 yaml)。compose / 部署脚本注入。
+3. **阿里云 KMS Secrets Manager** —— 运行期密钥(模型 key、DB 密码、上游凭据),staging/prod 经 SecretStore(ADR-0007)拉取,永不落盘。dev 用 `local_dev` 占位 / `infra/.env`。
+
+> **环境隔离(P0)**:三环境 DB / 密钥 / bucket 完全分离,命名带环境后缀(`helix_agent_dev` / `_staging` / `_prod`)防误连;prod 凭据只存 KMS。
+
+## 4. 关键环境变量
+
+完整模板见 [`infra/.env.example`](../../infra/.env.example);权威定义见 `services/control-plane/src/control_plane/settings.py`(`HELIX_AGENT_` 前缀)。部署关键项:
+
+| 变量 | 说明 | dev | staging / prod |
+|------|------|-----|----------------|
+| `HELIX_AGENT_DB_DSN` | Postgres DSN | pgbouncer 容器 | RDS endpoint |
+| `HELIX_AGENT_STORE_BACKEND` | 存储后端 | `sql` | `sql` |
+| `HELIX_AGENT_SINGLE_INSTANCE` | 是否单实例(关蓝绿多进程协调) | `true` | `false` |
+| `HELIX_AGENT_QUOTA_REDIS_URL` | 多实例限流的 Redis | — | 必填(蓝绿) |
+| `HELIX_AGENT_OIDC_ISSUER` | Keycloak realm issuer | localhost realm | 真 issuer |
+| `HELIX_AGENT_KEYCLOAK_ENABLED` | 真 Keycloak Admin API | `true` | `true` |
+| `HELIX_AGENT_SECRET_ENCRYPTION_KEY` | 平台密钥库 KEK | 固定占位 | KMS(换 KEK 旧密文永久不可解) |
+| `HELIX_AGENT_SETUP_TOKEN` | **首装向导一次性 token**(见 §7) | 可选 | **必填**,首跑后清除 |
+| `HELIX_AGENT_BOOTSTRAP_ADMIN_EMAIL` | 邮箱首登自动升 system_admin(可选替代向导) | — | 可选 |
+
+## 5. 首次部署 — 本地 dev / dogfood
+
+完整「一家公司从零用起来」闭环(建公司 → 配 key → 邀员工 → 用 agent)见 [getting-started.md](./getting-started.md)。最短路径:
+
+```sh
+# 1. 配 infra/.env(从 .env.example 复制;git-ignored)
+cd infra && cp .env.example .env   # 填 Anthropic key 等
+
+# 2. 一键起全量 dev 栈(full + auth + observability;自动迁移 + 提权 dev 用户)
+make dev-up
+
+# 3. 前端单独起(host 上)
+cd ../apps/admin-ui && pnpm install && pnpm dev   # http://localhost:5173
 ```
+
+`make dev-up` 会:构建 control-plane 镜像 → 起数据层/后端/Keycloak/可观测 → 跑迁移 → 自动 `dev-bootstrap-admin`(幂等提权 dev 用户)→ 打印地址(`make dev-info`)。
+
+**地址 / 登录**:admin-ui `:5173`(SSO,dev/devpass)· control-plane `:8000` · Keycloak `:8080`(admin/admin_dev)· Langfuse `:3001` · MinIO `:9001` · Grafana `:3000`。
+
+常用:`make dev-ps` / `make dev-logs SVC=control-plane-blue` / `make dev-down`(留卷)/ `make dev-clean`。
+
+## 6. 首次部署 — staging / prod
+
+1. 备好 `environments/<env>.yaml` + 注入 `HELIX_AGENT_*` 环境变量(DSN 指向 RDS;`STORE_BACKEND=sql`;`SINGLE_INSTANCE=false` + `QUOTA_REDIS_URL`;`SETUP_TOKEN`)。
+2. 从阿里云 ACR 拉 `helix-control-plane` / `helix-sandbox-supervisor` / `helix-credential-proxy` 镜像;预构建沙箱镜像。
+3. 起数据层:staging/prod 的 Postgres 是 RDS(**不**起 compose 的 `postgres` / `pgbouncer`);redis 仍由 compose 起。
+4. 跑迁移:`docker compose run --rm migrate`(= `alembic upgrade head`,纯 expand,见 §10)。
+5. 蓝绿起 control-plane:首次直接 `docker compose --profile full --profile proxy up -d control-plane-blue nginx`;之后版本走 `deploy.py`(§8)。
+6. 起 `sandbox-supervisor` / `credential-proxy`。
+7. **创建第一个平台管理员**:见 §7。
+8. 验证:见 §11。
+
+## 7. 创建第一个平台管理员(首装向导)
+
+全新部署 `role_binding` 表为空 —— 没人能经 API 授第一个 `system_admin`(鸡蛋问题)。三条路径,**推荐首装向导**(运维不碰 Keycloak 控制台):
+
+### 路径 A — 首装向导(推荐,Stream ACCT)
+
+1. 部署时设 env `HELIX_AGENT_SETUP_TOKEN=<随机串>`。生成:
+   ```sh
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # 或 openssl rand -base64 32
+   ```
+2. 打开 admin-ui → 未初始化会自动进 `/setup` 向导。
+3. 填:平台名 / 管理员邮箱 / 密码 / 把上面的 token 粘进 Setup Token → 提交。
+4. 后端建专用「平台」租户 + Keycloak 账号(已验证 + 该密码)+ `system_admin` 绑定。
+5. 跳登录,用刚设的密码登入 = 平台管理员。**首跑后清除 `SETUP_TOKEN` env**(零-admin 门控也会让端点此后永久 409)。
+
+> 安全:`/v1/setup` 无需认证,靠 **SETUP_TOKEN(防部署窗口劫持)+ 零-admin 不变量(一次性)** 双重门控。未配 token 则端点直接拒。
+
+### 路径 B — 邮箱首登自动升
+
+设 `HELIX_AGENT_BOOTSTRAP_ADMIN_EMAIL=<运维邮箱>`(前提:该邮箱用户已在 Keycloak 存在且 email 已验证)。其首次登录、系统零 admin 时自动升 `system_admin`。
+
+### 路径 C — break-glass CLI
+
+env 不便 / 向导不可用时:在 control-plane 容器内跑
+
+```sh
+docker compose exec control-plane-blue python -m control_plane.bootstrap_admin --subject-id <keycloak-user-uuid>
+```
+
+`--subject-id` 是 Keycloak 用户的 `sub`(UUID,非 email)。幂等。详见 [bootstrap-admin.md](./bootstrap-admin.md)。
+
+> 之后所有授权走审计化的 `POST /v1/role_bindings` 或 admin-ui「平台管理员」页;租户成员用邀请流。
+
+## 8. 更新部署(滚动发布 / 蓝绿)
+
+```sh
 python tools/deploy/deploy.py --tag <new-image-tag>
 python tools/deploy/deploy.py --tag <new-image-tag> --canary 10,50 --canary-pause 60
 ```
 
-`deploy.py` 的步骤：重建 idle 色（带新 tag）→ 等其 `/healthz/ready` → 可选加权金丝雀步进 → 翻 nginx upstream + `nginx -s reload` → drain 旧色（**停止但保留容器**，供下方快路径回滚）。
+`deploy.py` 步骤:重建 idle 色(新 tag)→ 等其 `/healthz/ready` → 可选加权金丝雀步进 → 翻 nginx upstream + `nginx -s reload` → drain 旧色(**停止但保留容器**,供回滚快路径)。
 
-含 schema 变更的发布：先跑 `migrate`（只做 expand，见下）再 `deploy.py`。
+**含 schema 变更**:先 `docker compose run --rm migrate`(只 expand,§10)再 `deploy.py`。
 
-## 回滚
+## 9. 回滚
 
-```
+```sh
 python tools/deploy/rollback.py                  # 快路径
 python tools/deploy/rollback.py --to-tag v1.2.2  # 兜底路径
 ```
 
-- **快路径（默认）** —— 上一次 `deploy.py` 把旧色容器**停止保留**。`rollback.py` 重启该容器、等 `/healthz/ready`、把 nginx upstream 切回旧色 + reload、drain 当前（坏）色。秒级流量切换，不拉镜像、不重建。
-- **兜底路径（`--to-tag`）** —— 旧色容器已被后续发布顶掉，或要回到任意更早版本。按指定 tag 跑一次完整蓝绿部署（复用 `deploy.py`）。
+- **快路径**:上次 `deploy.py` 把旧色容器停止保留;`rollback.py` 重启它 → 等就绪 → 切回 nginx → drain 坏色。秒级,不拉镜像。
+- **兜底(`--to-tag`)**:旧色已被顶掉或要回更早版本;按 tag 跑一次完整蓝绿。
 
-回滚之所以安全，依赖下面的迁移兼容纪律：旧 control-plane 镜像必须能跑在**当前** schema 上。
+回滚安全的前提是迁移兼容纪律(§10):旧镜像必须能跑在**当前** schema 上。
 
-## 数据库迁移兼容（expand-contract）
+## 10. 数据库迁移(expand-contract)
 
-回滚切回旧 control-plane 镜像后，旧代码要能跑在当前 schema 上。M0 用 **expand-contract** 纪律保证 —— 迁移**只向前**，不用 `alembic downgrade`：
+迁移**只向前**,不用 `alembic downgrade`:
 
-- **expand（可随发布走）**：加列（nullable 或带 default）、加表、加索引（`CREATE INDEX CONCURRENTLY`）、加宽类型。旧代码看不见新列也能跑 → 对旧代码恒兼容。
-- **contract（单独发布、滞后）**：删列、改名、加 `NOT NULL`、窄化类型。只能在「依赖旧 shape 的代码已全部下线」之后的**单独一个发布**里做。
-- **推论**：任一发布 v(n) 的 schema 对 v(n−1) 代码恒兼容 → 蓝绿回滚到 v(n−1) 镜像永远安全。
-- **不用 `alembic downgrade`**：生产降级迁移可能丢数据、且降级脚本几乎不被测；兼容性靠「只 expand」实现，不靠回滚 schema。
+- **expand(随发布走)**:加列(nullable/带 default)、加表、加索引(`CREATE INDEX CONCURRENTLY`)、加宽类型 —— 对旧代码恒兼容。
+- **contract(单独滞后发布)**:删列、改名、加 `NOT NULL`、窄化 —— 只在「依赖旧 shape 的代码已全部下线」后的单独发布里做。
+- **推论**:任一发布 v(n) 的 schema 对 v(n−1) 代码恒兼容 → 蓝绿回滚永远安全。
+- 不用 `alembic downgrade`(生产降级可能丢数据、降级脚本几乎不被测)。
 
-> 完整的零停机迁移规范（在线建索引、分批 backfill、迁移 linter / CI 自动拦 contract 迁移）属 M1-B。本阶段只立规则 + 在下方清单设强制检查点。
+命令:`docker compose run --rm migrate` 或容器内 `alembic upgrade head`。alembic revision id ≤ 32 字符(超长仅真 Postgres 报错)。
 
-## Volume at-rest encryption（落实 P0 #9 / Stream J.15-补强-2 / Mini-ADR J-29 第 3 项）
+## 11. 部署后验证
 
-> Stream J.15 持久卷里有用户文件 + agent 中间产物。我们**不在 helix 应用层做加密** —— 依赖宿主机 / 云磁盘加密。本节锁定每种环境的强约束。
+- [ ] `curl -sf http://<host>:8000/healthz/ready` 返回 `status: ready`(所有依赖探针绿)。
+- [ ] 经 nginx `:8443` mTLS 可达(staging/prod)。
+- [ ] 第一个 `system_admin` 能登录(§7)。
+- [ ] Grafana SLO 大盘([slo.md](./slo.md))有数据;Langfuse 有 trace。
+- [ ] 起一个 canonical agent 跑通最小对话(Gate 验收见 [canonical-agent-e2e-test.md](./canonical-agent-e2e-test.md))。
 
-| 环境 | 加密责任方 | 强约束 |
-|------|-----------|--------|
-| **阿里云 ECS（prod / staging）** | ECS 数据盘加密 + KMS Secrets Manager 同 region 同 key | 部署前 `aliyun ecs DescribeDisks --DiskIds <id> --DiskCategory cloud_essd` 必须返回 `Encrypted: true` + `KMSKeyId` 非空；`/var/lib/docker` 必须落在该加密盘上（不能用 OS 自带的非加密盘） |
-| **自托管 Linux（staging 备用 / on-prem prod）** | 宿主机 LUKS / dm-crypt | `/var/lib/docker` 所在分区 `cryptsetup status <luks-name>` 返回 `is active`；密钥短语经 systemd-cryptsetup 启动时挂载（不能写明文密钥到磁盘） |
-| **macOS dev** | FileVault | `fdesetup status` = `FileVault is On`（dev only，不要求企业级 key escrow） |
-| **CI / 临时容器** | 不要求 | testcontainers 在 ephemeral runner 上跑，磁盘随 runner 销毁 |
+## 12. 可观测性栈
 
-**为什么不在 helix 应用层做加密**：
+`--profile observability` 起:Prometheus(`:9090`)+ Grafana(`:3000`)+ Tempo(trace)+ Loki/Promtail(日志)+ Alertmanager(`:9093`)+ Langfuse(`:3001`,LLM trace)。指标真值源见 [observability A.8 备注](./slo.md);跨服务 trace 只在信任内部 hop 注入。SLO / 大盘见 [slo.md](./slo.md),Langfuse 见 [langfuse.md](./langfuse.md)。
 
-- 容器层 LUKS / cryfs 会触发 1) double-encrypt 性能损（云盘已经 hw-accelerated XTS），2) 复杂的 key-rotation 链路与 KMS-managed disk encryption 路径割裂。
-- ObjectStore 侧的 J-36 archive + J-29 backup blobs 走对象存储 SSE-KMS（同 ADR-0007 KMS key），落地即加密；不需要在 supervisor 层重复打包加密。
+## 13. 备份与恢复
 
-**部署前验证 checklist（每发布加一项）**：
+- **Postgres**:[postgres.md](./postgres.md) / [pg-restore.md](./pg-restore.md)。
+- **审计日志**:[audit-restore.md](./audit-restore.md)。
+- **持久卷(用户文件 / agent 产物)**:[volume-restore.md](./volume-restore.md);落盘加密依赖宿主/云盘(见 §15 与下表)。
+- **对象存储归档**:OSS SSE-KMS(同 ADR-0007 key)。
 
-- [ ] 部署前 `aliyun cli ecs DescribeDisks` 确认 `Encrypted: true`（或自托管 `cryptsetup status` ）。
-- [ ] `/var/lib/docker` 所在 mount point 与上一项是同一卷（`df /var/lib/docker | tail -1`）。
-- [ ] ObjectStore bucket（`HELIX_SANDBOX_OBJECT_STORE_BUCKET`）开启 SSE-KMS。
+落盘加密强约束:
 
-## 环境差异与坑
+| 环境 | 责任方 | 强约束 |
+|------|--------|--------|
+| 阿里云 ECS | ECS 数据盘加密 + 同 region KMS | `DescribeDisks` 返 `Encrypted:true` + `KMSKeyId` 非空;`/var/lib/docker` 落在该加密盘 |
+| 自托管 Linux | LUKS/dm-crypt | `cryptsetup status` = active |
+| macOS dev | FileVault | `fdesetup status` = On |
 
-- **dev 的 redis 占宿主 6379** —— 若宿主已跑 redis，集成测试用 `HELIX_TEST_COMPOSE_OVERRIDE` 指向一个 `redis: {ports: !reset []}` 的 override 文件（CI 无此冲突）。
-- **staging / prod 必须 `HELIX_AGENT_SINGLE_INSTANCE=false` + `HELIX_AGENT_QUOTA_REDIS_URL`** —— 蓝绿切换窗口内两个色并存，进程内限流器会各算一份；切到 Redis 后端后多进程计数才正确（STREAM-I-DESIGN § 6.4）。
-- **staging / prod 的 Postgres 是 RDS** —— 不起 compose 的 `postgres` / `pgbouncer`；`HELIX_AGENT_DB_DSN` 直接指向 RDS endpoint，`environments/<env>.yaml` 的 `database.host` 同步。
-- **prod 密钥只走 KMS** —— `secrets.backend: aliyun_kms`；不写 `.env`、不进仓库、不落容器磁盘。
-- **沙盒镜像需预构建** —— `helix-sandbox:dev`（或对应 tag）由 sandbox-supervisor 运行期 `docker run`，compose 不替它构建，部署前先 `docker build`（见 STREAM-I-DESIGN § 2.4）。
+## 14. 发布检查清单
 
-## 发布检查清单
+- [ ] 新镜像对应提交 CI 全绿。
+- [ ] 本次迁移**纯 expand**?含 contract 则确认依赖旧 shape 的代码已下线 ≥1 发布。
+- [ ] `environments/<env>.yaml` 与目标环境已核对。
+- [ ] 金丝雀阶段已观察 [SLO 大盘](./slo.md),错误率/延迟无异常再步进。
+- [ ] 发布后旧色容器仍保留(`docker compose ps` 见 `exited`),回滚快路径可用。
+- [ ] 回滚预案明确:快路径还是 `--to-tag`,旧 tag 已记录。
+- [ ] prod:`SETUP_TOKEN` 已在首装后清除;密钥只在 KMS。
 
-每次发布前逐项确认：
+## 15. 常见坑
 
-- [ ] 新镜像对应的提交 CI 8/8 全绿。
-- [ ] 本次迁移是否**纯 expand**？含 contract 变更则确认依赖旧 shape 的代码已下线 ≥ 1 个发布。
-- [ ] `environments/<env>.yaml` 与目标环境已核对（I.4 增补环境矩阵后逐项对照）。
-- [ ] 金丝雀阶段已观察 [Stream G 的 SLO 大盘](./slo.md)，错误率 / 延迟无异常再继续步进。
-- [ ] 发布后旧色容器仍保留（`docker compose ps` 可见、状态 `exited`），回滚快路径可用。
-- [ ] 回滚预案明确：知道用快路径还是 `--to-tag`，旧 tag 已记录。
+- **dev redis 占宿主 6379** —— 宿主已跑 redis 时集成测试用 `HELIX_TEST_COMPOSE_OVERRIDE` 指向 `redis: {ports: !reset []}` override。
+- **staging/prod 必须 `SINGLE_INSTANCE=false` + `QUOTA_REDIS_URL`** —— 否则蓝绿窗口内两色各算一份限流。
+- **green 与 sandbox-supervisor 都占 8001** —— 预存 latent 冲突;`make dev-up` 排除 green。full profile 同起需改端口(并同步断言测试)。
+- **改了 realm 的 loginTheme 不生效** —— `--import-realm` 仅首 boot 导入;重建 keycloak 容器才重导(改 CSS 则 start-dev 热加载)。
+- **沙箱镜像没预构建** —— supervisor `docker run` 找不到镜像;部署前先 build。
+- **prod 密钥落 `.env` / 进仓库** —— 禁;只走 KMS。
