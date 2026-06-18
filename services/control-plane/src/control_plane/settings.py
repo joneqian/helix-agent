@@ -283,13 +283,29 @@ class Settings(BaseSettings):
     #: ``None`` (default) disables the auto-grant entirely.
     bootstrap_admin_email: str | None = None
 
+    #: Stream ACCT — one-time setup-wizard token. ``POST /v1/setup`` (the
+    #: unauthenticated first-run endpoint that creates the first platform
+    #: ``system_admin``) REQUIRES the request to carry a matching
+    #: ``X-Setup-Token`` header. When unset, ``/v1/setup`` is refused outright
+    #: — closing the deploy-window hijack where anyone reaching the instance
+    #: before the operator could seize ``system_admin``. Clear the env after
+    #: first run. ``GET /v1/setup/status`` needs no token.
+    setup_token: str | None = None
+
+    #: Stream ACCT — reserved tenant the first platform admin is homed to (the
+    #: wizard's "[Platform]" tenant). Distinct from the dev nil tenant and the
+    #: mTLS system-sentinel; business tenants are created separately afterwards.
+    platform_tenant_id: UUID = UUID("11111111-1111-1111-1111-111111111111")
+
     #: Path-prefix exemption list. Health + metrics are always allowed
     #: through; ``/v1/webhooks`` is exempt because an external webhook
     #: caller has no helix principal — that endpoint authenticates with
-    #: a per-trigger secret instead (Stream J.10 / Mini-ADR J-42). Any
-    #: other path requires a valid JWT in M0.
+    #: a per-trigger secret instead (Stream J.10 / Mini-ADR J-42);
+    #: ``/v1/setup`` is the unauthenticated first-run wizard (gated by the
+    #: setup token + the zero-admin invariant). Any other path requires a
+    #: valid JWT in M0.
     auth_exempt_path_prefixes: list[str] = Field(
-        default_factory=lambda: ["/healthz", "/metrics", "/v1/webhooks"],
+        default_factory=lambda: ["/healthz", "/metrics", "/v1/webhooks", "/v1/setup"],
     )
 
     # ------------------------------------------------------------------ mTLS (C.2)

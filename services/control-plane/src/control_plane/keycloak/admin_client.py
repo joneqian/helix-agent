@@ -36,9 +36,19 @@ class KeycloakAdminClient(Protocol):
     """The Keycloak Admin operations member onboarding needs."""
 
     async def create_user(
-        self, *, email: str, tenant_id: UUID, display_name: str | None
+        self,
+        *,
+        email: str,
+        tenant_id: UUID,
+        display_name: str | None,
+        email_verified: bool = False,
     ) -> KeycloakUser:
         """Create a realm user carrying the ``tenant_id`` attribute.
+
+        ``email_verified`` defaults to ``False`` (the invite flow verifies via
+        the set-password email). The setup wizard (Stream ACCT) passes ``True``
+        so the first platform admin can log in immediately with a chosen
+        password, no email round-trip.
 
         Raises :class:`KeycloakUserExistsError` on 409,
         :class:`KeycloakUnavailableError` on transport / 5xx.
@@ -86,14 +96,19 @@ class HttpKeycloakAdminClient:
         return {"Authorization": f"Bearer {await self._token_provider.bearer()}"}
 
     async def create_user(
-        self, *, email: str, tenant_id: UUID, display_name: str | None
+        self,
+        *,
+        email: str,
+        tenant_id: UUID,
+        display_name: str | None,
+        email_verified: bool = False,
     ) -> KeycloakUser:
         first, last = _split_name(display_name)
         body: dict[str, object] = {
             "username": email,
             "email": email,
             "enabled": True,
-            "emailVerified": False,
+            "emailVerified": email_verified,
             "attributes": {"tenant_id": [str(tenant_id)]},
         }
         if first is not None:

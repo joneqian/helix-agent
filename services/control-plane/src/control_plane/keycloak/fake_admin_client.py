@@ -25,6 +25,7 @@ class _StoredUser:
     user: KeycloakUser
     tenant_id: UUID
     emails_sent: int = 0
+    email_verified: bool = False
 
 
 @dataclass
@@ -45,7 +46,12 @@ class FakeKeycloakAdminClient:
         return str(uuid.UUID(bytes=digest[:16]))
 
     async def create_user(
-        self, *, email: str, tenant_id: UUID, display_name: str | None
+        self,
+        *,
+        email: str,
+        tenant_id: UUID,
+        display_name: str | None,
+        email_verified: bool = False,
     ) -> KeycloakUser:
         if email.lower() in self.raise_exists_for:
             raise KeycloakUserExistsError(email)
@@ -57,7 +63,9 @@ class FakeKeycloakAdminClient:
             email=email,
             enabled=True,
         )
-        self.users[user.id] = _StoredUser(user=user, tenant_id=tenant_id)
+        self.users[user.id] = _StoredUser(
+            user=user, tenant_id=tenant_id, email_verified=email_verified
+        )
         return user
 
     async def send_setup_email(self, *, user_id: str, lifespan_s: int) -> None:
