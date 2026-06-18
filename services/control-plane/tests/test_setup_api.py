@@ -53,9 +53,7 @@ async def _make_client(
 async def setup_ctx(
     settings: Settings, lifecycle: Lifecycle, jwt_verifier: JWTVerifier
 ) -> AsyncIterator[tuple[AsyncClient, object, FakeKeycloakAdminClient]]:
-    client, app, kc = await _make_client(
-        settings, lifecycle, jwt_verifier, setup_token=SETUP_TOKEN
-    )
+    client, app, kc = await _make_client(settings, lifecycle, jwt_verifier, setup_token=SETUP_TOKEN)
     async with client:
         yield client, app, kc
 
