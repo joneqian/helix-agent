@@ -13,7 +13,7 @@
  * mock raw so it matches production.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { App } from "antd";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -109,6 +109,12 @@ function renderPage(roles: string[]) {
       </AuthProvider>
     </MemoryRouter>,
   );
+}
+
+/** Probe rendered by the detail route so the test can assert navigation. */
+function DetailProbe() {
+  const loc = useLocation();
+  return <div data-testid="detail-probe">{loc.pathname}</div>;
 }
 
 beforeEach(() => {
@@ -230,57 +236,35 @@ describe("SettingsPlatformSkills page", () => {
     expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 
-  it("manage drawer adds a version, changes status, and toggles pin", async () => {
-    let versionBody: unknown = null;
-    const patchBodies: unknown[] = [];
+  it("Manage navigates to the platform skill detail page (Phase C)", async () => {
+    // The old in-place Manage drawer is retired; "Manage" now routes to the
+    // full detail editor at /settings/platform-skills/:skillId.
     installAdapter([
       {
         match: (u, m) => u.endsWith("/platform/skills") && m === "get",
         respond: () => raw({ items: [SKILL], next_cursor: null }),
       },
-      {
-        match: (u, m) => u.endsWith("/platform/skills/psk-1/versions") && m === "get",
-        respond: () => raw({ items: [VERSION] }),
-      },
-      {
-        match: (u, m) => u.endsWith("/platform/skills/psk-1/versions") && m === "post",
-        respond: ({ data }) => {
-          versionBody = data;
-          return raw({ ...VERSION, version: 2 });
-        },
-        status: 201,
-      },
-      {
-        match: (u, m) => u.endsWith("/platform/skills/psk-1") && m === "patch",
-        respond: ({ data }) => {
-          patchBodies.push(data);
-          return raw({ ...SKILL });
-        },
-      },
     ]);
+    setStoredToken(makeJwt({ sub: "u1", tenant_id: TENANT, roles: ["system_admin"] }));
     const user = userEvent.setup();
-    renderPage(["system_admin"]);
+    render(
+      <MemoryRouter initialEntries={["/settings/platform-skills"]}>
+        <AuthProvider>
+          <App>
+            <Routes>
+              <Route path="/settings/platform-skills" element={<SettingsPlatformSkills />} />
+              <Route path="/settings/platform-skills/:skillId" element={<DetailProbe />} />
+            </Routes>
+          </App>
+        </AuthProvider>
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByTestId("ps-manage-psk-1")).toBeInTheDocument());
     await user.click(screen.getByTestId("ps-manage-psk-1"));
-    await waitFor(() => expect(screen.getByTestId("psm-add-version-form")).toBeInTheDocument());
-
-    // Existing version renders.
-    await waitFor(() => expect(screen.getByTestId("psm-version-1")).toBeInTheDocument());
-
-    // Add a version.
-    await user.type(screen.getByTestId("psm-prompt-fragment"), "Be concise.");
-    await user.click(screen.getByTestId("psm-add-version"));
-    await waitFor(() => expect(versionBody).not.toBeNull());
-    const vParsed = typeof versionBody === "string" ? JSON.parse(versionBody) : versionBody;
-    expect(vParsed.prompt_fragment).toBe("Be concise.");
-
-    // Toggle pin → PATCH { pinned: true }.
-    await user.click(screen.getByTestId("psm-pin"));
-    await waitFor(() => expect(patchBodies.length).toBeGreaterThan(0));
-    const pinParsed =
-      typeof patchBodies[0] === "string"
-        ? JSON.parse(patchBodies[0] as string)
-        : patchBodies[0];
-    expect(pinParsed).toEqual({ pinned: true });
+    await waitFor(() =>
+      expect(screen.getByTestId("detail-probe").textContent).toBe(
+        "/settings/platform-skills/psk-1",
+      ),
+    );
   });
 });
