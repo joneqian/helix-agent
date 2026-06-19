@@ -692,9 +692,7 @@ async def test_tenant_principal_forbidden_on_supporting_files(ctx: _Ctx) -> None
     deleted = await ctx.client.delete(
         f"/v1/platform/skills/{sid}/versions/1/supporting-files/references/notes.md", headers=h
     )
-    export = await ctx.client.get(
-        f"/v1/platform/skills/{sid}/versions/1/export", headers=h
-    )
+    export = await ctx.client.get(f"/v1/platform/skills/{sid}/versions/1/export", headers=h)
     assert got.status_code == 403
     assert put.status_code == 403
     assert deleted.status_code == 403
