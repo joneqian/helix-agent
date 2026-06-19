@@ -127,8 +127,8 @@ interface SkillApi {
 - 技能市场/目录浏览导入(另立)。
 - 提示词的富文本/模板化编辑(纯文本 Monaco 足够)。
 
-## 10. 开放确认点
+## 10. 确认点(已拍板 2026-06-19)
 
-1. 平台详情页路径 `/settings/platform-skills/:skillId` 是否合适?
-2. SKILL.md 保存语义:确认后端 add_version 支持"仅改 prompt_fragment、其余继承"(否则前端回填)。
-3. 是否保留一个极简"空白技能(仅 SKILL.md)"快速创建?本稿否(D1 全删,创建一律导入);若高频可后续加"从模板新建"。
+1. **平台详情页路径 = `/settings/platform-skills/:skillId`**。与租户 `/skills/:skillId` 对称、与平台页 `/settings/*` 前缀一致。退场 Manage 抽屉后,列表行「Manage」改为跳此页;TenantScope 守卫归 platform 组(`navModel.groupForPath`)。
+2. **SKILL.md 保存 = 后端继承模式,复用 `put_supporting_file` 同款代码模式**:读当前版本 → 仅换 `prompt_fragment` → 其余字段(tool_names/supporting_files/required_models/lazy_load…)继承 → 重算 content_hash/high_risk → `add_version`。前端只发新 prompt,**继承逻辑集中在后端,杜绝丢 supporting_files**。Phase A 第一件事先核 `skills.py` 的 `add_version`/store 签名确认可继承(租户 `put_supporting_file` 已是此模式,可直接照搬)。
+3. **不留"空白技能"快速创建**(D1 全删,创建一律导入)。理由:老手建是死胡同才删;配合 D3(SKILL.md 可编)+ 未来若加"从模板新建(新建即建 v1 + 跳详情)"则不再是死胡同。**先不背**,Phase D 删手建;真发现纯提示词小技能高频再补"从模板新建"(成本低、随时加)。
