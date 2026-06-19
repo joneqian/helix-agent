@@ -20,12 +20,14 @@ Every handler:
 
 from __future__ import annotations
 
+import base64
 import re
+from pathlib import PurePosixPath
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, HTTPException, Path, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from control_plane.api._skill_moderation import (
@@ -34,8 +36,17 @@ from control_plane.api._skill_moderation import (
     moderate_required_models,
     moderate_tool_names,
 )
-from control_plane.api._skill_zip import SkillZipError, parse_skill_zip
-from control_plane.api.skills import _get_audit, _get_skill_store, _skill_dict, _version_dict
+from control_plane.api._skill_zip import SkillZipError, build_skill_zip, parse_skill_zip
+from control_plane.api.skills import (
+    _MAX_SUPPORTING_FILE_SIZE,
+    _SUPPORTING_FILE_TEXT_EXTS,
+    _get_audit,
+    _get_skill_store,
+    _PutSupportingFileBody,
+    _skill_dict,
+    _validate_supporting_file_path,
+    _version_dict,
+)
 from control_plane.audit import emit as audit_emit
 from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.observability import current_trace_id_hex
@@ -56,6 +67,7 @@ from helix_agent.protocol import (
     TenantPlan,
 )
 from helix_agent.protocol.skill import (
+    SkillPackageLayoutError,
     compute_content_hash,
     is_high_risk_skill_version,
     supporting_files_to_jsonable,
@@ -531,5 +543,276 @@ def build_platform_skills_router() -> APIRouter:
         if version is None:
             raise HTTPException(status_code=404, detail="skill version not found")
         return JSONResponse(status_code=200, content=_version_dict(version))
+
+    # ── Supporting files (Stream X / skill-authoring-ia Phase A) ──────────
+    # Mirror the tenant ``/v1/skills`` supporting-file surface so the platform
+    # admin can iterate a curated skill's bundled scripts/references in-UI
+    # instead of re-importing a ZIP for every edit. NULL-tenant rows ⇒ every
+    # store call inside ``bypass_rls_session()`` + ``is_system_admin`` gate.
+
+    @router.get(
+        "/{skill_id}/versions/{version}/supporting-files/{file_path:path}",
+        response_model=None,
+    )
+    async def get_platform_supporting_file(
+        skill_id: Annotated[UUID, Path()],
+        version: int,
+        file_path: str,
+        request: Request,
+    ) -> JSONResponse:
+        """Single-file content fetch (base64). Mirrors the tenant path; skips
+        the U-21 re-scan on purpose so operators see the literal stored bytes
+        for audit/triage."""
+        _principal(request)
+        store = _get_skill_store(request)
+        try:
+            _validate_supporting_file_path(file_path)
+        except SkillPackageLayoutError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        async with bypass_rls_session():
+            row = await store.get_platform_version_by_number(skill_id=skill_id, version=version)
+        if row is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+        entry = row.supporting_files.get(file_path)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="supporting file not found")
+        return JSONResponse(
+            status_code=200,
+            content={"content": entry.content, "size": entry.size, "mime": entry.mime},
+        )
+
+    @router.put(
+        "/{skill_id}/versions/{version}/supporting-files/{file_path:path}",
+        response_model=None,
+    )
+    async def put_platform_supporting_file(
+        skill_id: Annotated[UUID, Path()],
+        version: int,
+        file_path: str,
+        body: _PutSupportingFileBody,
+        request: Request,
+    ) -> JSONResponse:
+        """Add or replace one supporting file → new platform version (U-17).
+        U-18 path validation + U-21 write-time strict scan + U-24 high_risk
+        recompute, exactly as the tenant path."""
+        principal = _principal(request)
+        store = _get_skill_store(request)
+        audit = _get_audit(request)
+
+        try:
+            _validate_supporting_file_path(file_path)
+        except SkillPackageLayoutError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if body.size > _MAX_SUPPORTING_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="invalid supporting file path")
+
+        async with bypass_rls_session():
+            prior = await store.get_platform_version_by_number(skill_id=skill_id, version=version)
+        if prior is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+
+        try:
+            raw = base64.b64decode(body.content, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="invalid supporting file path") from exc
+        if len(raw) != body.size:
+            raise HTTPException(status_code=400, detail="invalid supporting file path")
+
+        ext = PurePosixPath(file_path).suffix.lower()
+        if ext in _SUPPORTING_FILE_TEXT_EXTS:
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                record_skill_blocked(phase="supporting_file_api")
+                await audit_emit(
+                    audit,
+                    tenant_id=principal.tenant_id,
+                    actor_id=principal.subject_id,
+                    action=AuditAction.SKILL_PROMPT_INJECTION_BLOCKED,
+                    resource_type="skill_supporting_file",
+                    resource_id=f"{skill_id}/{version}/{file_path}",
+                    result=AuditResult.DENIED,
+                    trace_id=current_trace_id_hex(),
+                    details={"scope": "platform", "reason": "text_extension_binary_content"},
+                )
+                raise HTTPException(status_code=400, detail="invalid supporting file path") from exc
+            findings = scan_for_threats(text, scope="strict")
+            if findings:
+                record_threat_pattern_hits(findings, scope="strict")
+                record_skill_blocked(phase="supporting_file_api")
+                await audit_emit(
+                    audit,
+                    tenant_id=principal.tenant_id,
+                    actor_id=principal.subject_id,
+                    action=AuditAction.SKILL_PROMPT_INJECTION_BLOCKED,
+                    resource_type="skill_supporting_file",
+                    resource_id=f"{skill_id}/{version}/{file_path}",
+                    result=AuditResult.DENIED,
+                    trace_id=current_trace_id_hex(),
+                    details={
+                        "scope": "platform",
+                        "finding_count": len(findings),
+                        "findings": [
+                            {"pattern_id": f.pattern_id, "category": f.category} for f in findings
+                        ],
+                    },
+                )
+                raise HTTPException(status_code=400, detail="invalid supporting file path")
+
+        merged = supporting_files_to_jsonable(prior.supporting_files)
+        merged[file_path] = {"content": body.content, "size": body.size, "mime": body.mime}
+        new_paths = list(merged.keys())
+        new_high_risk = is_high_risk_skill_version(
+            tool_names=prior.tool_names, supporting_file_paths=new_paths
+        )
+        new_hash = compute_content_hash(prior.prompt_fragment, merged)
+
+        async with bypass_rls_session():
+            new_version = await store.add_platform_version(
+                version_id=uuid4(),
+                skill_id=skill_id,
+                prompt_fragment=prior.prompt_fragment,
+                tool_names=list(prior.tool_names),
+                description=prior.description,
+                category=prior.category,
+                required_models=list(prior.required_models),
+                authored_by=prior.authored_by,
+                supporting_files=merged,
+                lazy_load=prior.lazy_load,
+                content_hash=new_hash,
+                high_risk=new_high_risk,
+            )
+
+        await audit_emit(
+            audit,
+            tenant_id=principal.tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.SKILL_SUPPORTING_FILE_UPLOADED,
+            resource_type="skill_supporting_file",
+            resource_id=f"{skill_id}/{new_version.version}/{file_path}",
+            result=AuditResult.SUCCESS,
+            trace_id=current_trace_id_hex(),
+            details={
+                "scope": "platform",
+                "from_version": prior.version,
+                "to_version": new_version.version,
+                "path": file_path,
+                "size": body.size,
+                "high_risk_after": new_high_risk,
+            },
+        )
+        return JSONResponse(status_code=201, content=_version_dict(new_version))
+
+    @router.delete(
+        "/{skill_id}/versions/{version}/supporting-files/{file_path:path}",
+        response_model=None,
+    )
+    async def delete_platform_supporting_file(
+        skill_id: Annotated[UUID, Path()],
+        version: int,
+        file_path: str,
+        request: Request,
+    ) -> JSONResponse:
+        """Remove one supporting file → new platform version (U-17)."""
+        principal = _principal(request)
+        store = _get_skill_store(request)
+        audit = _get_audit(request)
+
+        try:
+            _validate_supporting_file_path(file_path)
+        except SkillPackageLayoutError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async with bypass_rls_session():
+            prior = await store.get_platform_version_by_number(skill_id=skill_id, version=version)
+        if prior is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+        if file_path not in prior.supporting_files:
+            raise HTTPException(status_code=404, detail="supporting file not found")
+
+        merged = supporting_files_to_jsonable(prior.supporting_files)
+        merged.pop(file_path)
+        new_paths = list(merged.keys())
+        new_high_risk = is_high_risk_skill_version(
+            tool_names=prior.tool_names, supporting_file_paths=new_paths
+        )
+        new_hash = compute_content_hash(prior.prompt_fragment, merged)
+
+        async with bypass_rls_session():
+            new_version = await store.add_platform_version(
+                version_id=uuid4(),
+                skill_id=skill_id,
+                prompt_fragment=prior.prompt_fragment,
+                tool_names=list(prior.tool_names),
+                description=prior.description,
+                category=prior.category,
+                required_models=list(prior.required_models),
+                authored_by=prior.authored_by,
+                supporting_files=merged,
+                lazy_load=prior.lazy_load,
+                content_hash=new_hash,
+                high_risk=new_high_risk,
+            )
+
+        await audit_emit(
+            audit,
+            tenant_id=principal.tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.SKILL_SUPPORTING_FILE_REMOVED,
+            resource_type="skill_supporting_file",
+            resource_id=f"{skill_id}/{new_version.version}/{file_path}",
+            result=AuditResult.SUCCESS,
+            trace_id=current_trace_id_hex(),
+            details={
+                "scope": "platform",
+                "from_version": prior.version,
+                "to_version": new_version.version,
+                "path": file_path,
+                "high_risk_after": new_high_risk,
+            },
+        )
+        return JSONResponse(status_code=200, content=_version_dict(new_version))
+
+    @router.get("/{skill_id}/versions/{version_number}/export", response_model=None)
+    async def export_platform_version(
+        skill_id: Annotated[UUID, Path()],
+        version_number: int,
+        request: Request,
+    ) -> Response:
+        """Export a platform version as a ``.skill`` ZIP. Unlike the tenant
+        export, the bundle includes ``supporting_files`` (scripts/references)
+        so a round-trip is lossless — that bundle is the whole point of the
+        platform editor."""
+        _principal(request)
+        store = _get_skill_store(request)
+        async with bypass_rls_session():
+            version = await store.get_platform_version_by_number(
+                skill_id=skill_id, version=version_number
+            )
+            skill = await store.get_platform_skill(skill_id=skill_id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+        if skill is None:
+            raise HTTPException(status_code=404, detail="skill not found")
+        blob = build_skill_zip(
+            name=skill.name,
+            description=version.description,
+            category=version.category,
+            required_models=version.required_models,
+            prompt_fragment=version.prompt_fragment,
+            tool_names=version.tool_names,
+            supporting_files=version.supporting_files,
+            lazy=version.lazy_load,
+            version=version.version,
+        )
+        return Response(
+            content=blob,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{skill.name}-v{version.version}.skill"'
+                )
+            },
+        )
 
     return router

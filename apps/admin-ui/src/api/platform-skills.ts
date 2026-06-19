@@ -187,3 +187,83 @@ export async function listPlatformSkillVersions(
   );
   return response.data;
 }
+
+// ── Supporting files + export (skill-authoring-ia Phase A) ───────────────────
+// Mirror the tenant ``/v1/skills`` supporting-file surface so the platform
+// admin can iterate a curated skill's bundled scripts/references in-UI. Each
+// mutation forks a NEW version server-side (immutable history).
+
+export interface PlatformSupportingFileBody {
+  /** Base64-encoded raw bytes. */
+  content: string;
+  size: number;
+  mime: string;
+}
+
+export interface PutPlatformSupportingFileBody {
+  content: string;
+  size: number;
+  mime: string;
+}
+
+/** Mirror FastAPI ``{path:path}``: keep slashes, encode each segment so
+ *  spaces / unicode / reserved chars survive transit. */
+function encodeFilePath(filePath: string): string {
+  return filePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+/** ``GET /v1/platform/skills/{id}/versions/{v}/supporting-files/{path}`` —
+ *  single-file base64 body (404 unknown skill/version/file, 400 bad path). */
+export async function getPlatformSupportingFile(
+  id: string,
+  version: number,
+  filePath: string,
+): Promise<PlatformSupportingFileBody> {
+  const response = await apiClient.get<PlatformSupportingFileBody>(
+    `/v1/platform/skills/${encodeURIComponent(id)}/versions/${version}/supporting-files/${encodeFilePath(filePath)}`,
+  );
+  return response.data;
+}
+
+/** ``PUT …/supporting-files/{path}`` — add/replace a file → new version
+ *  (400 threat/bad path, 404 unknown). Returns the new version. */
+export async function putPlatformSupportingFile(
+  id: string,
+  version: number,
+  filePath: string,
+  body: PutPlatformSupportingFileBody,
+): Promise<PlatformSkillVersion> {
+  const response = await apiClient.put<PlatformSkillVersion>(
+    `/v1/platform/skills/${encodeURIComponent(id)}/versions/${version}/supporting-files/${encodeFilePath(filePath)}`,
+    body,
+  );
+  return response.data;
+}
+
+/** ``DELETE …/supporting-files/{path}`` — remove a file → new version. */
+export async function deletePlatformSupportingFile(
+  id: string,
+  version: number,
+  filePath: string,
+): Promise<PlatformSkillVersion> {
+  const response = await apiClient.delete<PlatformSkillVersion>(
+    `/v1/platform/skills/${encodeURIComponent(id)}/versions/${version}/supporting-files/${encodeFilePath(filePath)}`,
+  );
+  return response.data;
+}
+
+/** ``GET …/versions/{v}/export`` — download the version as a ``.skill`` ZIP
+ *  (includes bundled supporting files). Returns the raw ``Blob``. */
+export async function exportPlatformSkillVersion(
+  id: string,
+  version: number,
+): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/v1/platform/skills/${encodeURIComponent(id)}/versions/${version}/export`,
+    { responseType: "blob" },
+  );
+  return response.data;
+}
