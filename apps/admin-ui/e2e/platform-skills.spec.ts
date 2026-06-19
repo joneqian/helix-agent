@@ -23,28 +23,28 @@ const SYS_ADMIN_ME = {
   error: null,
 };
 
+// Raw, NOT enveloped: the platform-skills backend returns bare
+// ``JSONResponse(content={...})`` (no ``{success,data,error}``). The mock
+// must mirror that or the SDK's raw read yields no rows. See
+// ``api/platform-skills.ts`` header + the matching vitest mock.
 const SKILLS = {
-  success: true,
-  data: {
-    items: [
-      {
-        id: "psk-1",
-        name: "web_search",
-        status: "active",
-        latest_version: 2,
-        description: "Search the web and return top N results.",
-        category: "web",
-        pinned: false,
-        required_tier: "pro",
-        last_used_at: "2026-05-25T10:00:00Z",
-        state_changed_at: "2026-05-20T10:00:00Z",
-        created_at: "2026-05-20T10:00:00Z",
-        updated_at: "2026-05-26T10:00:00Z",
-      },
-    ],
-    next_cursor: null,
-  },
-  error: null,
+  items: [
+    {
+      id: "psk-1",
+      name: "web_search",
+      status: "active",
+      latest_version: 2,
+      description: "Search the web and return top N results.",
+      category: "web",
+      pinned: false,
+      required_tier: "pro",
+      last_used_at: "2026-05-25T10:00:00Z",
+      state_changed_at: "2026-05-20T10:00:00Z",
+      created_at: "2026-05-20T10:00:00Z",
+      updated_at: "2026-05-26T10:00:00Z",
+    },
+  ],
+  next_cursor: null,
 };
 
 async function login(page: import("@playwright/test").Page): Promise<void> {
