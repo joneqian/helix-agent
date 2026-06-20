@@ -94,6 +94,14 @@ class _AddPlatformVersionBody(BaseModel):
     authored_by: str = Field(default="human", pattern=r"^(human|agent)$")
 
 
+class _PutPlatformPromptBody(BaseModel):
+    """``PUT /v1/platform/skills/{id}/versions/{v}/prompt`` body — edit
+    ``SKILL.md`` in place; new version inherits all other fields
+    (skill-authoring-ia Phase D-2)."""
+
+    prompt_fragment: str = Field(min_length=1)
+
+
 class _PatchPlatformSkillBody(BaseModel):
     """``PATCH /v1/platform/skills/{id}`` request body.
 
@@ -814,5 +822,93 @@ def build_platform_skills_router() -> APIRouter:
                 )
             },
         )
+
+    @router.put("/{skill_id}/versions/{version}/prompt", response_model=None)
+    async def put_platform_prompt(
+        skill_id: Annotated[UUID, Path()],
+        version: int,
+        body: _PutPlatformPromptBody,
+        request: Request,
+    ) -> JSONResponse:
+        """Edit ``SKILL.md`` (prompt_fragment) → new platform version
+        (Phase D-2). Inherits all other fields incl. supporting_files, so
+        editing the prompt never drops bundled files."""
+        principal = _principal(request)
+        store = _get_skill_store(request)
+        audit = _get_audit(request)
+
+        try:
+            moderate_prompt_fragment(body.prompt_fragment)
+        except ModerationError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+        async with bypass_rls_session():
+            prior = await store.get_platform_version_by_number(skill_id=skill_id, version=version)
+        if prior is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+
+        findings = scan_for_threats(body.prompt_fragment, scope="strict")
+        if findings:
+            record_threat_pattern_hits(findings, scope="strict")
+            record_skill_blocked(phase="supporting_file_api")
+            await audit_emit(
+                audit,
+                tenant_id=principal.tenant_id,
+                actor_id=principal.subject_id,
+                action=AuditAction.SKILL_PROMPT_INJECTION_BLOCKED,
+                resource_type="skill",
+                resource_id=str(skill_id),
+                result=AuditResult.DENIED,
+                trace_id=current_trace_id_hex(),
+                details={
+                    "scope": "platform",
+                    "finding_count": len(findings),
+                    "findings": [
+                        {"pattern_id": f.pattern_id, "category": f.category} for f in findings
+                    ],
+                    "source": "prompt_edit",
+                },
+            )
+            raise HTTPException(status_code=400, detail="invalid skill content")
+
+        merged = supporting_files_to_jsonable(prior.supporting_files)
+        new_high_risk = is_high_risk_skill_version(
+            tool_names=prior.tool_names, supporting_file_paths=list(merged.keys())
+        )
+        new_hash = compute_content_hash(body.prompt_fragment, merged)
+
+        async with bypass_rls_session():
+            new_version = await store.add_platform_version(
+                version_id=uuid4(),
+                skill_id=skill_id,
+                prompt_fragment=body.prompt_fragment,
+                tool_names=list(prior.tool_names),
+                description=prior.description,
+                category=prior.category,
+                required_models=list(prior.required_models),
+                authored_by=prior.authored_by,
+                supporting_files=merged,
+                lazy_load=prior.lazy_load,
+                content_hash=new_hash,
+                high_risk=new_high_risk,
+            )
+
+        await audit_emit(
+            audit,
+            tenant_id=principal.tenant_id,
+            actor_id=principal.subject_id,
+            action=AuditAction.SKILL_VERSION_CREATE,
+            resource_type="skill",
+            resource_id=str(skill_id),
+            result=AuditResult.SUCCESS,
+            trace_id=current_trace_id_hex(),
+            details={
+                "scope": "platform",
+                "from_version": prior.version,
+                "to_version": new_version.version,
+                "source": "prompt_edit",
+            },
+        )
+        return JSONResponse(status_code=201, content=_version_dict(new_version))
 
     return router

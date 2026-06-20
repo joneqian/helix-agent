@@ -326,10 +326,12 @@ describe("SkillDetail (PR C)", () => {
     expect(screen.getByTestId("skill-version-picker")).toBeInTheDocument();
     expect(screen.getByTestId("skill-dual-pane")).toBeInTheDocument();
     expect(screen.getByTestId("skill-file-tree")).toBeInTheDocument();
-    // Default selection is SKILL.md → editor renders read-only hint
+    // Default selection is SKILL.md → editor renders the edit hint + an
+    // Edit button (Phase D-2: SKILL.md is editable, no longer read-only).
     await waitFor(() =>
-      expect(screen.getByTestId("skill-md-readonly-hint")).toBeInTheDocument(),
+      expect(screen.getByTestId("skill-md-edit-hint")).toBeInTheDocument(),
     );
+    expect(screen.getByTestId("skill-editor-edit-btn")).toBeInTheDocument();
   });
 
   it("404 / error path renders Alert", async () => {
@@ -459,6 +461,46 @@ describe("SkillDetail (PR C)", () => {
     await user.type(editor, "updated text");
     await user.click(screen.getByTestId("skill-editor-save-btn"));
     await waitFor(() => expect(putCalls.length).toBe(1));
+  });
+
+  it("SKILL.md edit flow PUTs the prompt (Phase D-2)", async () => {
+    const promptCalls: unknown[] = [];
+    installAdapter([
+      { match: (u) => u === "/v1/me", respond: () => meResponse },
+      {
+        match: (u, m) => u === "/v1/skills/sk1" && m === "get",
+        respond: () => skillRow,
+      },
+      {
+        match: (u) => u === "/v1/skills/sk1/versions",
+        respond: () => ({ items: [versionRow] }),
+      },
+      {
+        match: (u, m) => u === "/v1/skills/sk1/versions/1/prompt" && m === "put",
+        respond: ({ data }) => {
+          promptCalls.push(data);
+          return { ...versionRow, id: "v2", version: 2, prompt_fragment: "new prompt body" };
+        },
+        status: 201,
+      },
+    ]);
+    const user = userEvent.setup();
+    renderSkillsRouter(["/skills/sk1"]);
+    // SKILL.md is the default selection → Edit button is present.
+    await waitFor(() =>
+      expect(screen.getByTestId("skill-editor-edit-btn")).toBeInTheDocument(),
+    );
+    await user.click(screen.getByTestId("skill-editor-edit-btn"));
+    const editor = screen.getByTestId("monaco-stub") as HTMLTextAreaElement;
+    await user.clear(editor);
+    await user.type(editor, "new prompt body");
+    await user.click(screen.getByTestId("skill-editor-save-btn"));
+    await waitFor(() => expect(promptCalls.length).toBe(1));
+    const parsed =
+      typeof promptCalls[0] === "string"
+        ? JSON.parse(promptCalls[0] as string)
+        : promptCalls[0];
+    expect(parsed.prompt_fragment).toBe("new prompt body");
   });
 
   it("delete flow requires typing the path to confirm", async () => {

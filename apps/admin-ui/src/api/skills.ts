@@ -222,6 +222,20 @@ export async function addSkillVersion(
   return response.data;
 }
 
+/** Edit ``SKILL.md`` (the prompt fragment) → new version that inherits all
+ *  other fields incl. supporting files (skill-authoring-ia Phase D-2). */
+export async function putSkillPrompt(
+  skillId: string,
+  versionNumber: number,
+  promptFragment: string,
+): Promise<SkillVersion> {
+  const response = await apiClient.put<SkillVersion>(
+    `/v1/skills/${encodeURIComponent(skillId)}/versions/${versionNumber}/prompt`,
+    { prompt_fragment: promptFragment },
+  );
+  return response.data;
+}
+
 export interface SkillVersionList {
   items: SkillVersion[];
 }

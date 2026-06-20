@@ -180,39 +180,49 @@ export function FileEditor({
 
   const dirty = useMemo(() => {
     if (mode !== "edit") return false;
+    // SKILL.md edits the version's prompt_fragment directly (no ``loaded``
+    // round-trip); everything else compares against the fetched file body.
+    if (isSkillMd) return buffer !== version.prompt_fragment;
     if (loaded === null) return false;
     return buffer !== (loaded.text ?? "");
-  }, [buffer, loaded, mode]);
+  }, [buffer, loaded, mode, isSkillMd, version.prompt_fragment]);
 
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
 
   const handleEdit = useCallback(() => {
-    if (loaded === null || isBinary) return;
+    // SKILL.md is editable without a ``loaded`` body; other files need one.
+    if (!isSkillMd && (loaded === null || isBinary)) return;
     setMode("edit");
     setSaveError(null);
-  }, [isBinary, loaded]);
+  }, [isBinary, loaded, isSkillMd]);
 
   const handleCancel = useCallback(() => {
-    if (loaded === null) return;
-    setBuffer(loaded.text ?? "");
+    setBuffer(isSkillMd ? version.prompt_fragment : (loaded?.text ?? ""));
     setMode("view");
     setShowDiff(false);
     setSaveError(null);
-  }, [loaded]);
+  }, [loaded, isSkillMd, version.prompt_fragment]);
 
   const handleSave = useCallback(async () => {
-    if (loaded === null || selectedPath === null) return;
+    if (selectedPath === null) return;
     setSaving(true);
     setSaveError(null);
     try {
-      const utf8 = new TextEncoder().encode(buffer);
-      const newVersion = await api.putSupportingFile(skillId, version.version, selectedPath, {
-        content: encodeUtf8Base64(buffer),
-        size: utf8.byteLength,
-        mime: loaded.body.mime || "text/plain",
-      });
+      let newVersion: SkillVersion;
+      if (isSkillMd) {
+        // Edit the prompt body → new version (inherits supporting files).
+        newVersion = await api.putPrompt(skillId, version.version, buffer);
+      } else {
+        if (loaded === null) return;
+        const utf8 = new TextEncoder().encode(buffer);
+        newVersion = await api.putSupportingFile(skillId, version.version, selectedPath, {
+          content: encodeUtf8Base64(buffer),
+          size: utf8.byteLength,
+          mime: loaded.body.mime || "text/plain",
+        });
+      }
       message.success(t("skills.file_saved", { version: newVersion.version }));
       setMode("view");
       setShowDiff(false);
@@ -238,6 +248,7 @@ export function FileEditor({
     skillId,
     t,
     version.version,
+    isSkillMd,
   ]);
 
   if (selectedPath === null) {
@@ -302,13 +313,13 @@ export function FileEditor({
         )}
       </div>
 
-      {isSkillMd && (
+      {isSkillMd && mode === "view" && (
         <Alert
           type="info"
           showIcon
-          message={t("skills.detail_skill_md_readonly_hint")}
+          message={t("skills.detail_skill_md_edit_hint")}
           style={{ marginBottom: 12 }}
-          data-testid="skill-md-readonly-hint"
+          data-testid="skill-md-edit-hint"
         />
       )}
 
@@ -398,6 +409,19 @@ export function FileEditor({
           marginTop: 12,
         }}
       >
+        {/* SKILL.md is editable (Phase D-2) but has no rename/delete — it's
+            a required member of every skill. Saving edits the prompt body. */}
+        {isSkillMd && mode === "view" && (
+          <Button
+            size="small"
+            type="primary"
+            icon={<Edit3 size={13} strokeWidth={1.75} />}
+            onClick={handleEdit}
+            data-testid="skill-editor-edit-btn"
+          >
+            {t("skills.file_action_edit")}
+          </Button>
+        )}
         {!isSkillMd && mode === "view" && !isBinary && (
           <>
             <Button
