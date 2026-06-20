@@ -43,6 +43,7 @@ import {
   ArrowRight,
   Cog,
   ShieldCheck,
+  Store,
   Webhook,
 } from "lucide-react";
 
@@ -176,6 +177,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
       { key: "go-artifacts", label: t("cmdk.label_artifacts"), path: "/artifacts", icon: <Package size={16} strokeWidth={1.5} />, sc: ["g", "f"] },
       { key: "go-knowledge", label: t("cmdk.label_knowledge"), path: "/knowledge", icon: <BookOpen size={16} strokeWidth={1.5} />, sc: ["g", "k"] },
       { key: "go-skills", label: t("cmdk.label_skills"), path: "/skills", icon: <FileText size={16} strokeWidth={1.5} />, sc: ["g", "s"] },
+      { key: "go-skill-marketplace", label: t("cmdk.label_skill_marketplace"), path: "/skill-marketplace", icon: <Store size={16} strokeWidth={1.5} />, sc: ["g", "x"] },
       { key: "go-triggers", label: t("cmdk.label_triggers"), path: "/triggers", icon: <Clock size={16} strokeWidth={1.5} />, sc: ["g", "t"] },
       { key: "go-webhooks", label: t("cmdk.label_webhooks"), path: "/webhooks", icon: <Webhook size={16} strokeWidth={1.5} />, sc: ["g", "w"] },
       { key: "go-api-keys", label: t("cmdk.label_settings_api_keys"), path: "/settings/api-keys", icon: <Key size={16} strokeWidth={1.5} />, sc: [] as string[] },

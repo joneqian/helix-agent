@@ -178,6 +178,39 @@ export async function getSkill(skillId: string): Promise<SkillRecord> {
   return response.data;
 }
 
+/** Skill Marketplace Phase 1 — a tenant→platform-skill subscription row
+ *  (raw payload; the skills router is un-enveloped). Semantic A: an
+ *  accounting/UX marker, it does not gate runtime binding. */
+export interface SkillSubscription {
+  id: string;
+  platform_skill_id: string;
+  enabled: boolean;
+  created_at: string;
+  created_by: string;
+}
+
+/** Subscribe the tenant to a platform skill (idempotent — re-subscribing a
+ *  soft-cancelled row re-enables it). */
+export async function subscribeSkill(
+  platformSkillId: string,
+): Promise<SkillSubscription> {
+  const response = await apiClient.post<SkillSubscription>(
+    `/v1/skills/${encodeURIComponent(platformSkillId)}/subscribe`,
+  );
+  return response.data;
+}
+
+/** Cancel a subscription (soft-stop — the row is kept with ``enabled=false``
+ *  for the audit trail). */
+export async function unsubscribeSkill(
+  platformSkillId: string,
+): Promise<SkillSubscription> {
+  const response = await apiClient.delete<SkillSubscription>(
+    `/v1/skills/${encodeURIComponent(platformSkillId)}/subscribe`,
+  );
+  return response.data;
+}
+
 export interface CreateSkillBody {
   name: string;
   description: string;

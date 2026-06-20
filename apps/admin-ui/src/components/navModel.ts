@@ -44,6 +44,7 @@ export const WORKSPACE_ITEMS: readonly NavEntry[] = [
   { key: "artifacts", labelKey: "nav.artifacts", path: "/artifacts", group: "workspace" },
   { key: "knowledge", labelKey: "nav.knowledge", path: "/knowledge", group: "workspace" },
   { key: "skills", labelKey: "nav.skills", path: "/skills", group: "workspace" },
+  { key: "skill-marketplace", labelKey: "nav.skill_marketplace", path: "/skill-marketplace", group: "workspace" },
   { key: "triggers", labelKey: "nav.triggers", path: "/triggers", group: "workspace" },
   { key: "webhooks", labelKey: "nav.webhooks", path: "/webhooks", group: "workspace" },
 ];

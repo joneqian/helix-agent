@@ -43,6 +43,7 @@ export interface TranslationKeys {
     artifacts: string;
     knowledge: string;
     skills: string;
+    skill_marketplace: string;
     triggers: string;
     webhooks: string;
     tenants: string;
@@ -1144,6 +1145,23 @@ export interface TranslationKeys {
     requires_tier: string;
     requires_tier_tooltip: string;
   };
+  skill_marketplace: {
+    page_title: string;
+    subtitle: string;
+    failed_to_load: string;
+    empty: string;
+    cross_tenant_title: string;
+    cross_tenant_hint: string;
+    tier_free: string;
+    tier_pro: string;
+    tier_enterprise: string;
+    requires_tier: string;
+    locked_ribbon: string;
+    enable: string;
+    enabled: string;
+    subscribed_ok: string;
+    unsubscribed_ok: string;
+  };
   platform_skills: {
     page_title: string;
     subtitle: string;
@@ -1466,6 +1484,7 @@ export interface TranslationKeys {
     label_artifacts: string;
     label_knowledge: string;
     label_skills: string;
+    label_skill_marketplace: string;
     label_triggers: string;
     label_webhooks: string;
     label_settings_api_keys: string;
@@ -1560,6 +1579,7 @@ const en: TranslationKeys = {
     artifacts: "Artifacts",
     knowledge: "Knowledge",
     skills: "Skills",
+    skill_marketplace: "Skill Marketplace",
     triggers: "Triggers",
     webhooks: "Webhooks",
     tenants: "Tenants",
@@ -2785,6 +2805,25 @@ const en: TranslationKeys = {
     requires_tier_tooltip:
       "Your plan doesn't include this skill — upgrade to {{tier}} to use it.",
   },
+  skill_marketplace: {
+    page_title: "Skill Marketplace",
+    subtitle:
+      "Browse the platform-curated skill library and enable the skills your agents should use.",
+    failed_to_load: "Failed to load the skill marketplace",
+    empty: "No platform skills are available yet.",
+    cross_tenant_title: "Pick a tenant",
+    cross_tenant_hint:
+      "The skill marketplace is per-tenant. Switch from all-tenants to a specific tenant to browse and enable skills.",
+    tier_free: "Free",
+    tier_pro: "Pro",
+    tier_enterprise: "Enterprise",
+    requires_tier: "Requires {{tier}}",
+    locked_ribbon: "Locked",
+    enable: "Enable",
+    enabled: "Enabled",
+    subscribed_ok: "Enabled “{{name}}”",
+    unsubscribed_ok: "Disabled “{{name}}”",
+  },
   platform_skills: {
     page_title: "Platform Skills",
     subtitle:
@@ -3125,6 +3164,7 @@ const en: TranslationKeys = {
     label_artifacts: "Artifacts",
     label_knowledge: "Knowledge",
     label_skills: "Skills",
+    label_skill_marketplace: "Skill Marketplace",
     label_triggers: "Triggers",
     label_webhooks: "Webhooks",
     label_settings_api_keys: "Settings · API Keys",
