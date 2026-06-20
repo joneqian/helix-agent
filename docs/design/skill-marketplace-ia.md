@@ -1,6 +1,6 @@
 # 技能 Marketplace IA — 市场浏览 + 一键启用订阅
 
-> 状态:草案(待评审)。范围:admin-ui 技能"市场"信息架构 + 轻量订阅表/端点 + merged view 标记。
+> 状态:**已全交付(2026-06-20,#722/#723/#724)**。范围:admin-ui 技能"市场"信息架构 + 轻量订阅表/端点 + merged view 标记。
 > 延伸 [skill-authoring-ia](./skill-authoring-ia.md)(创作链已交付 #709-718)/ MCP Stream W(对照参照)。
 
 ## 0. 一句话
@@ -68,11 +68,11 @@ store 三件套 `persistence/tenant_skill_subscription/{base,sql,memory}.py`(套
 
 SE-8 接线点:router(`/skill-marketplace`)/ Sidebar(紧邻技能)/ CommandPalette / SDK / i18n(en+zh)/ Storybook / Playwright。
 
-## 7. 分期
+## 7. 分期(全交付)
 
-1. **Phase 1 — 后端表+store+端点**:migration 0086 + 三件套 + protocol + app.py 注入 + subscribe/unsubscribe 端点 + 单测(sql/memory store + RLS 用例)。不碰运行期。
-2. **Phase 2 — merged view subscribed**:list_skills 读订阅集 + 标记 + SDK 字段 + 测。
-3. **Phase 3 — 前端市场页**:SkillMarketplace + SE-8 全接线 + stories + e2e。
+1. ✅ **Phase 1 — 后端表+store+端点(#722)**:migration `0086_tenant_skill_subscription` + 三件套(base/sql/memory) + protocol `TenantSkillSubscriptionRecord` + ORM row + app.py 注入 + `POST/DELETE /v1/skills/{id}/subscribe`(内联角色闸 + 软停)+ audit `SKILL_SUBSCRIBED/UNSUBSCRIBED` + 单测(in-memory 9 + SQL/RLS 6 + API 5)。不碰运行期。
+2. ✅ **Phase 2 — merged view subscribed(#723)**:`list_skills` 读活跃订阅集(只 `enabled` 行)→ platform item 加 `subscribed` + SDK `SkillRecord.subscribed?` + 测 2。软取消读作未订阅。
+3. ✅ **Phase 3 — 前端市场页(#724)**:`SkillMarketplace.tsx` 卡片墙(tier 锁 + 启用/停用 + 乐观更新 + 跨租户引导)+ SDK `subscribeSkill/unsubscribeSkill` + SE-8 全接线(router/navModel/Sidebar/CommandPalette/i18n en+zh)+ Storybook + Playwright e2e(含 axe)。
 
 每 Phase 独立合并:P1 不碰运行期、P3 不碰后端契约,回滚面最小。
 
