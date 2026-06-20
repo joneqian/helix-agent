@@ -89,8 +89,8 @@ SE-8 接线点:router(`/skill-marketplace`)/ Sidebar(紧邻技能)/ CommandPalet
 - **订阅 vs 实际可用不一致**(语义 A 固有):agent 可绑未订阅的平台技能(只要 tier 够)。前端绑定 UI 加"建议先启用"引导(纯提示),运行期不强制。文档明示此取舍。
 - RLS:新表标准 tenant-scoped,集成测真 PG 验证 FORCE + policy。
 
-## 10. 开放确认点
+## 10. 确认点(已拍板 2026-06-20)
 
-1. 订阅端点 RBAC:跟随 skills.py 内联角色惯例(本稿),还是借机统一到 `require("skill",...)`?
-2. 取消订阅 = 硬删行 还是 `enabled=false` 软停?(本稿倾向硬删,简单;软停留审计痕迹。)
-3. 市场页路径 `/skill-marketplace` 是否合适?租户 scope(非平台页)。
+1. **订阅端点 RBAC = 跟随 skills.py 内联角色惯例**(`ensure_tenant_scope` + 内联 admin/operator 检查),不动 rbac.py `Resource` 矩阵。同 router 单一风格(surgical)。
+2. **取消订阅 = `enabled=false` 软停**(非硬删):留审计痕迹,重新启用幂等翻 true,与表的 `enabled` 字段一致。
+3. **市场页路径 = `/skill-marketplace`**(租户 scope 独立顶级路径,Sidebar 紧邻"技能")。
