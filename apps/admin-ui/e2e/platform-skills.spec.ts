@@ -210,7 +210,7 @@ test("GitHub import multi-skill repo shows a candidate picker", async ({ page })
 
   // Pick a candidate from the Select, then submit → 201.
   await page.getByTestId("ps-github-skill-select").click();
-  await page.getByText("skills/find-skills", { exact: true }).click();
+  await page.getByRole("option", { name: "skills/find-skills" }).click();
   const [req] = await Promise.all([
     page.waitForRequest(
       (r) =>
