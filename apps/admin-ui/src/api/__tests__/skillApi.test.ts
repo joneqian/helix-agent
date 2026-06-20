@@ -38,6 +38,12 @@ describe("platformSkillApi", () => {
     expect(platform.getPlatformSkill).toHaveBeenCalledWith("p1");
   });
 
+  it("putPrompt delegates to the platform prompt endpoint", async () => {
+    (platform.putPlatformSkillPrompt as Mock).mockResolvedValue({ version: 7 });
+    await platformSkillApi.putPrompt("p1", 6, "new body");
+    expect(platform.putPlatformSkillPrompt).toHaveBeenCalledWith("p1", 6, "new body");
+  });
+
   it("composes rename as put-new then delete-old (using the put's version)", async () => {
     (platform.putPlatformSupportingFile as Mock).mockResolvedValue({ version: 5 });
     (platform.deletePlatformSupportingFile as Mock).mockResolvedValue({ version: 6 });

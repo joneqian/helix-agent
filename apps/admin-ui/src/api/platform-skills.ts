@@ -267,3 +267,17 @@ export async function exportPlatformSkillVersion(
   );
   return response.data;
 }
+
+/** ``PUT …/versions/{v}/prompt`` — edit SKILL.md → new version inheriting
+ *  all other fields incl. supporting files (skill-authoring-ia Phase D-2). */
+export async function putPlatformSkillPrompt(
+  id: string,
+  version: number,
+  promptFragment: string,
+): Promise<PlatformSkillVersion> {
+  const response = await apiClient.put<PlatformSkillVersion>(
+    `/v1/platform/skills/${encodeURIComponent(id)}/versions/${version}/prompt`,
+    { prompt_fragment: promptFragment },
+  );
+  return response.data;
+}

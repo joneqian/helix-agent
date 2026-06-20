@@ -107,6 +107,19 @@ class _AddVersionBody(BaseModel):
     authored_by: str = Field(default="human", pattern=r"^(human|agent)$")
 
 
+class _PutPromptBody(BaseModel):
+    """``PUT /v1/skills/{id}/versions/{v}/prompt`` request body.
+
+    skill-authoring-ia Phase D-2 — edit ``SKILL.md`` (the prompt fragment)
+    in place. Only the prompt body is sent; the new version inherits every
+    other field (tool_names / supporting_files / required_models /
+    lazy_load / …) from the base version, so editing the prompt never drops
+    bundled scripts/references.
+    """
+
+    prompt_fragment: str = Field(min_length=1)
+
+
 class _PatchStatusBody(BaseModel):
     """``PATCH /v1/skills/{id}`` request body.
 
@@ -673,6 +686,98 @@ def build_skills_router() -> APIRouter:
             },
         )
         return JSONResponse(status_code=200, content=_version_dict(new_version))
+
+    @router.put("/{skill_id}/versions/{version}/prompt", response_model=None)
+    async def put_prompt(
+        skill_id: UUID,
+        version: int,
+        body: _PutPromptBody,
+        request: Request,
+        store: Annotated[SkillStore, Depends(_get_skill_store)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> JSONResponse:
+        """Edit ``SKILL.md`` (prompt_fragment) → new version (Phase D-2).
+
+        Inherits all other fields from ``version`` (mirrors
+        ``put_supporting_file``), so editing the prompt never drops bundled
+        supporting files. Runs the same moderation + U-21 strict scan +
+        U-24 high_risk recompute as the JSON-API add-version path.
+        """
+        tenant_id: UUID = request.state.tenant_id
+        actor_id: str = getattr(request.state, "actor_id", "anonymous")
+
+        try:
+            moderate_prompt_fragment(body.prompt_fragment)
+        except ModerationError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+        prior = await store.get_version_by_number(
+            skill_id=skill_id, tenant_id=tenant_id, version=version
+        )
+        if prior is None:
+            raise HTTPException(status_code=404, detail="skill version not found")
+
+        findings = scan_for_threats(body.prompt_fragment, scope="strict")
+        if findings:
+            record_threat_pattern_hits(findings, scope="strict")
+            record_skill_blocked(phase="supporting_file_api")
+            await audit_emit(
+                audit,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action=AuditAction.SKILL_PROMPT_INJECTION_BLOCKED,
+                resource_type="skill",
+                resource_id=str(skill_id),
+                result=AuditResult.DENIED,
+                trace_id=current_trace_id_hex(),
+                details={
+                    "finding_count": len(findings),
+                    "findings": [
+                        {"pattern_id": f.pattern_id, "category": f.category} for f in findings
+                    ],
+                    "source": "prompt_edit",
+                },
+            )
+            raise HTTPException(status_code=400, detail="invalid skill content")
+
+        merged = supporting_files_to_jsonable(prior.supporting_files)
+        new_high_risk = is_high_risk_skill_version(
+            tool_names=prior.tool_names, supporting_file_paths=list(merged.keys())
+        )
+        new_hash = compute_content_hash(body.prompt_fragment, merged)
+
+        new_version = await store.add_version(
+            version_id=uuid4(),
+            skill_id=skill_id,
+            tenant_id=tenant_id,
+            prompt_fragment=body.prompt_fragment,
+            tool_names=list(prior.tool_names),
+            description=prior.description,
+            category=prior.category,
+            required_models=list(prior.required_models),
+            authored_by=prior.authored_by,
+            supporting_files=merged,
+            lazy_load=prior.lazy_load,
+            content_hash=new_hash,
+            high_risk=new_high_risk,
+        )
+
+        await audit_emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=AuditAction.SKILL_VERSION_CREATE,
+            resource_type="skill",
+            resource_id=str(skill_id),
+            result=AuditResult.SUCCESS,
+            trace_id=current_trace_id_hex(),
+            details={
+                "from_version": prior.version,
+                "to_version": new_version.version,
+                "source": "prompt_edit",
+            },
+        )
+        return JSONResponse(status_code=201, content=_version_dict(new_version))
 
     @router.patch("/{skill_id}", response_model=None)
     async def patch_status(

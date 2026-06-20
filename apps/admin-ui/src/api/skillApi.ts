@@ -29,6 +29,7 @@ import {
   putSupportingFile,
   deleteSupportingFile,
   renameSupportingFile,
+  putSkillPrompt,
   type SkillRecord,
   type SkillVersion,
   type SkillVersionList,
@@ -43,6 +44,7 @@ import {
   getPlatformSupportingFile,
   putPlatformSupportingFile,
   deletePlatformSupportingFile,
+  putPlatformSkillPrompt,
 } from "./platform-skills";
 
 export interface SkillApi {
@@ -73,6 +75,12 @@ export interface SkillApi {
     newPath: string,
     body: SupportingFileBody,
   ): Promise<SkillVersion>;
+  /** Edit SKILL.md (prompt fragment) → new version inheriting other fields. */
+  putPrompt(
+    id: string,
+    version: number,
+    promptFragment: string,
+  ): Promise<SkillVersion>;
 }
 
 /** Tenant ``/v1/skills`` — thin pass-through. */
@@ -85,6 +93,7 @@ export const tenantSkillApi: SkillApi = {
   putSupportingFile,
   deleteSupportingFile,
   renameSupportingFile,
+  putPrompt: putSkillPrompt,
 };
 
 /** Platform ``/v1/platform/skills`` — structurally-compatible wrapper. The
@@ -107,4 +116,5 @@ export const platformSkillApi: SkillApi = {
     });
     return deletePlatformSupportingFile(id, afterPut.version, oldPath);
   },
+  putPrompt: putPlatformSkillPrompt,
 };
