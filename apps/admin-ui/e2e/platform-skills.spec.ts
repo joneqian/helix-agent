@@ -208,9 +208,11 @@ test("GitHub import multi-skill repo shows a candidate picker", async ({ page })
   await expect(page.getByTestId("ps-github-candidates-hint")).toBeVisible();
   await expect(page.getByTestId("ps-github-skill-select")).toBeVisible();
 
-  // Pick a candidate from the Select, then submit → 201.
+  // Pick a candidate via the searchable Select: open → type → Enter. (Clicking
+  // the floating option is flaky under antd's dropdown animation/portal.)
   await page.getByTestId("ps-github-skill-select").click();
-  await page.getByRole("option", { name: "skills/find-skills" }).click();
+  await page.keyboard.type("skills/find-skills");
+  await page.keyboard.press("Enter");
   const [req] = await Promise.all([
     page.waitForRequest(
       (r) =>
