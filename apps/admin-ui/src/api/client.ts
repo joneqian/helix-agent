@@ -32,11 +32,20 @@ export interface ApiEnvelope<T> {
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
-  constructor(message: string, code: string, status: number) {
+  /** The raw backend ``detail`` object when it's structured (carries extra
+   *  fields like ``candidates``); ``undefined`` for plain string details. */
+  readonly details?: Record<string, unknown>;
+  constructor(
+    message: string,
+    code: string,
+    status: number,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -80,7 +89,11 @@ export function createClient(baseURL = ""): AxiosInstance {
         const detail = (error.response?.data as { detail?: unknown } | undefined)?.detail;
         const code = readDetail(detail, "code") ?? `HTTP_${status}`;
         const message = readDetail(detail, "message") ?? error.message;
-        throw new ApiError(message, code, status);
+        const details =
+          typeof detail === "object" && detail !== null
+            ? (detail as Record<string, unknown>)
+            : undefined;
+        throw new ApiError(message, code, status, details);
       }
       throw error;
     },

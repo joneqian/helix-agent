@@ -487,7 +487,15 @@ def build_platform_skills_router() -> APIRouter:
             archive = await _skill_github.download_github_archive(src)
             blob = _skill_github.select_skill_zip(archive, skill=src.skill)
         except _skill_github.GithubImportError as exc:
-            raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+            # Structured detail so the UI can render candidates as a picker
+            # instead of a raw error string.
+            detail: dict[str, object] = {
+                "code": "SKILL_AMBIGUOUS" if exc.candidates else "GITHUB_IMPORT_ERROR",
+                "message": exc.message,
+            }
+            if exc.candidates is not None:
+                detail["candidates"] = exc.candidates
+            raise HTTPException(status_code=exc.status, detail=detail) from exc
 
         origin = f"{src.owner}/{src.repo}@{src.ref}" + (f"#{src.skill}" if src.skill else "")
         return await _ingest_platform_skill_blob(

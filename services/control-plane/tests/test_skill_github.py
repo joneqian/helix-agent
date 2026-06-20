@@ -142,8 +142,8 @@ def test_select_multi_skill_without_selector_errors_with_candidates() -> None:
     )
     with pytest.raises(GithubImportError) as ei:
         select_skill_zip(archive, skill=None)
-    assert "candidates" in ei.value.message
     assert ei.value.status == 400
+    assert ei.value.candidates == ["skills/a", "skills/b"]
 
 
 def test_select_missing_skill_404() -> None:
@@ -189,8 +189,7 @@ def test_select_duplicate_basename_disambiguated_by_path() -> None:
     with pytest.raises(GithubImportError) as ei:
         select_skill_zip(archive, skill="context-surfing")
     assert ei.value.status == 400
-    assert "skills/context-surfing" in ei.value.message
-    assert "examples/context-surfing" in ei.value.message
+    assert ei.value.candidates == ["examples/context-surfing", "skills/context-surfing"]
     # Full path disambiguates.
     payload = parse_skill_zip(select_skill_zip(archive, skill="skills/context-surfing"))
     assert payload.name == "context-surfing"

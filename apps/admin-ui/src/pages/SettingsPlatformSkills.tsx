@@ -21,6 +21,7 @@ import {
   Button,
   Input,
   Modal,
+  Select,
   Space,
   Table,
   Tag,
@@ -77,6 +78,9 @@ export function SettingsPlatformSkills() {
   const [ghSkill, setGhSkill] = useState("");
   const [ghRef, setGhRef] = useState("");
   const [ghBusy, setGhBusy] = useState(false);
+  // Populated when an import hits a multi-skill repo (SKILL_AMBIGUOUS) → rendered
+  // as a Select so the operator picks instead of retyping a path.
+  const [ghCandidates, setGhCandidates] = useState<string[]>([]);
 
   const errText = useCallback(
     (err: unknown): string =>
@@ -155,11 +159,20 @@ export function SettingsPlatformSkills() {
       setGhSource("");
       setGhSkill("");
       setGhRef("");
+      setGhCandidates([]);
       void refresh();
     } catch (err) {
-      // The backend's 400 for a multi-skill repo lists candidate names in the
-      // message — surface it verbatim so the operator can fill in "skill".
-      message.error(errText(err));
+      // Multi-skill repo → the backend returns SKILL_AMBIGUOUS + a candidate
+      // list. Render it as a picker (keep the modal open) instead of a toast.
+      const candidates =
+        err instanceof ApiError && err.code === "SKILL_AMBIGUOUS"
+          ? err.details?.candidates
+          : undefined;
+      if (Array.isArray(candidates)) {
+        setGhCandidates(candidates as string[]);
+      } else {
+        message.error(errText(err));
+      }
     } finally {
       setGhBusy(false);
     }
@@ -344,7 +357,10 @@ export function SettingsPlatformSkills() {
           disabled: ghSource.trim().length === 0,
           "data-testid": "ps-github-submit",
         }}
-        onCancel={() => setGhOpen(false)}
+        onCancel={() => {
+          setGhOpen(false);
+          setGhCandidates([]);
+        }}
         destroyOnHidden
         data-testid="ps-github-modal"
       >
@@ -358,22 +374,50 @@ export function SettingsPlatformSkills() {
             </Text>
             <Input
               value={ghSource}
-              onChange={(e) => setGhSource(e.target.value)}
+              onChange={(e) => {
+                setGhSource(e.target.value);
+                setGhCandidates([]); // repo changed → stale candidate list
+              }}
               placeholder={t("platform_skills.github_source_ph")}
               data-testid="ps-github-source"
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <Text style={{ fontSize: 12, fontWeight: 600 }}>
-              {t("platform_skills.github_skill_label")}
-            </Text>
-            <Input
-              value={ghSkill}
-              onChange={(e) => setGhSkill(e.target.value)}
-              placeholder={t("platform_skills.github_skill_ph")}
-              data-testid="ps-github-skill"
-            />
-          </label>
+          {ghCandidates.length > 0 ? (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <Text style={{ fontSize: 12, fontWeight: 600 }}>
+                {t("platform_skills.github_skill_label")}
+              </Text>
+              <Alert
+                type="info"
+                showIcon
+                message={t("platform_skills.github_pick_skill", {
+                  count: ghCandidates.length,
+                })}
+                style={{ marginBottom: 4 }}
+                data-testid="ps-github-candidates-hint"
+              />
+              <Select
+                showSearch
+                value={ghSkill || undefined}
+                onChange={(v) => setGhSkill(v)}
+                placeholder={t("platform_skills.github_pick_ph")}
+                options={ghCandidates.map((c) => ({ label: c, value: c }))}
+                data-testid="ps-github-skill-select"
+              />
+            </label>
+          ) : (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <Text style={{ fontSize: 12, fontWeight: 600 }}>
+                {t("platform_skills.github_skill_label")}
+              </Text>
+              <Input
+                value={ghSkill}
+                onChange={(e) => setGhSkill(e.target.value)}
+                placeholder={t("platform_skills.github_skill_ph")}
+                data-testid="ps-github-skill"
+              />
+            </label>
+          )}
           <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Text style={{ fontSize: 12, fontWeight: 600 }}>
               {t("platform_skills.github_ref_label")}

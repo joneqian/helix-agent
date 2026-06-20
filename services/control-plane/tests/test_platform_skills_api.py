@@ -957,6 +957,35 @@ async def test_import_from_github_missing_skill_404(ctx: _Ctx, monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_import_from_github_multi_skill_returns_candidates(ctx: _Ctx, monkeypatch) -> None:
+    archive = _github_archive(
+        "skills",
+        "HEAD",
+        {
+            "skills/find-skills/SKILL.md": _skill_md("find-skills"),
+            "skills/other/SKILL.md": _skill_md("other"),
+        },
+    )
+
+    async def _fake_download(src, *, client=None):
+        return archive
+
+    monkeypatch.setattr(_skill_github, "download_github_archive", _fake_download)
+
+    # No skill selector → 400 with a structured candidate list (UI renders a
+    # picker instead of a raw error string).
+    resp = await ctx.client.post(
+        "/v1/platform/skills/import-from-github",
+        json={"source": "vercel-labs/skills"},
+        headers=ctx.admin_headers,
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["code"] == "SKILL_AMBIGUOUS"
+    assert detail["candidates"] == ["skills/find-skills", "skills/other"]
+
+
+@pytest.mark.asyncio
 async def test_import_from_github_tenant_principal_forbidden(ctx: _Ctx) -> None:
     resp = await ctx.client.post(
         "/v1/platform/skills/import-from-github",

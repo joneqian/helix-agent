@@ -1239,6 +1239,8 @@ const zhCN: TranslationKeys = {
     github_ref_label: "版本",
     github_ref_ph: "分支 / 标签 / SHA(可选,默认分支)",
     github_submit: "导入",
+    github_pick_skill: "该仓库有 {{count}} 个技能 —— 选一个导入。",
+    github_pick_ph: "选择技能",
     imported: "已导入「{{name}}」v{{version}}。",
     import_noop: "「{{name}}」内容未变，已是最新版。",
     manage: "管理",

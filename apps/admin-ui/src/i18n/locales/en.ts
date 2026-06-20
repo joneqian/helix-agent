@@ -1177,6 +1177,8 @@ export interface TranslationKeys {
     github_ref_label: string;
     github_ref_ph: string;
     github_submit: string;
+    github_pick_skill: string;
+    github_pick_ph: string;
     imported: string;
     import_noop: string;
     manage: string;
@@ -2851,6 +2853,8 @@ const en: TranslationKeys = {
     github_ref_label: "Ref",
     github_ref_ph: "branch / tag / SHA (optional, default branch)",
     github_submit: "Import",
+    github_pick_skill: "This repo has {{count}} skills — pick one to import.",
+    github_pick_ph: "Select a skill",
     imported: 'Imported "{{name}}" v{{version}}.',
     import_noop: 'No change to "{{name}}" — already the latest version.',
     manage: "Manage",

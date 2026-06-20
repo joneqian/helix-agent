@@ -53,10 +53,15 @@ _FETCH_TIMEOUT_S = 15.0
 class GithubImportError(Exception):
     """A GitHub skill import failed. ``status`` maps to the HTTP response."""
 
-    def __init__(self, message: str, *, status: int = 400) -> None:
+    def __init__(
+        self, message: str, *, status: int = 400, candidates: list[str] | None = None
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        # When set, the repo has >1 skill and the caller must pick one — the UI
+        # renders these as a selectable list instead of a raw error string.
+        self.candidates = candidates
 
 
 @dataclass(frozen=True)
@@ -214,14 +219,14 @@ def select_skill_zip(archive_bytes: bytes, *, skill: str | None) -> bytes:
         if not entries:
             raise GithubImportError("no SKILL.md found in the repository", status=404)
 
-        candidates = ", ".join(sorted(e.relpath or "." for e in entries))
+        candidate_list = sorted(e.relpath or "." for e in entries)
 
         if skill is None:
             if len(entries) > 1:
                 raise GithubImportError(
-                    "repository contains multiple skills; specify which one with "
-                    f"'skill' (name or path). candidates: {candidates}",
+                    "repository contains multiple skills; pick one.",
                     status=400,
+                    candidates=candidate_list,
                 )
             prefix = entries[0].prefix
         else:
@@ -230,15 +235,16 @@ def select_skill_zip(archive_bytes: bytes, *, skill: str | None) -> bytes:
             matches = exact or [e for e in entries if e.basename == skill]
             if not matches:
                 raise GithubImportError(
-                    f"skill {skill!r} not found. candidates: {candidates}",
+                    f"skill {skill!r} not found in the repository.",
                     status=404,
+                    candidates=candidate_list,
                 )
             if len(matches) > 1:
-                paths = ", ".join(sorted(e.relpath for e in matches))
+                paths = sorted(e.relpath for e in matches)
                 raise GithubImportError(
-                    f"skill name {skill!r} matches multiple folders; specify the full "
-                    f"path instead. matches: {paths}",
+                    f"skill name {skill!r} matches multiple folders; pick the full path.",
                     status=400,
+                    candidates=paths,
                 )
             prefix = matches[0].prefix
 
