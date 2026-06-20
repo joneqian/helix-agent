@@ -24,6 +24,7 @@ import { SettingsTenants } from "./pages/SettingsTenants";
 import { SettingsMcpServers } from "./pages/SettingsMcpServers";
 import { SettingsMcpCatalog } from "./pages/SettingsMcpCatalog";
 import { SettingsPlatformSkills } from "./pages/SettingsPlatformSkills";
+import { SettingsPlatformSkillDetail } from "./pages/SettingsPlatformSkillDetail";
 import { SettingsRateCard } from "./pages/SettingsRateCard";
 import { SettingsUsage } from "./pages/SettingsUsage";
 import { SettingsBillingChargeback } from "./pages/SettingsBillingChargeback";
@@ -65,6 +66,10 @@ export function AppRouter() {
       <Route path="/settings/platform-users" element={<SettingsPlatformUsers />} />
       <Route path="/settings/mcp-catalog" element={<SettingsMcpCatalog />} />
       <Route path="/settings/platform-skills" element={<SettingsPlatformSkills />} />
+      <Route
+        path="/settings/platform-skills/:skillId"
+        element={<SettingsPlatformSkillDetail />}
+      />
       <Route path="/settings/audit" element={<SettingsAudit />} />
       <Route path="/settings/mcp-servers" element={<SettingsMcpServers />} />
       <Route path="/settings/usage" element={<SettingsUsage />} />

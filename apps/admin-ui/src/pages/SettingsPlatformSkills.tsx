@@ -19,6 +19,7 @@ import { Alert, App, Button, Space, Table, Tag, Tooltip, Typography } from "antd
 import type { TableColumnsType } from "antd";
 import { Pin, RefreshCw, Sparkles, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { PageHeader } from "../components/PageHeader";
 import {
@@ -32,7 +33,6 @@ import {
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { PlatformSkillCreateDrawer } from "../components/platform_skills/PlatformSkillCreateDrawer";
-import { PlatformSkillManageDrawer } from "../components/platform_skills/PlatformSkillManageDrawer";
 
 const { Text } = Typography;
 
@@ -58,9 +58,8 @@ export function SettingsPlatformSkills() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
-  const [managing, setManaging] = useState<PlatformSkill | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
 
   const errText = useCallback(
     (err: unknown): string =>
@@ -78,11 +77,6 @@ export function SettingsPlatformSkills() {
     try {
       const result = await listPlatformSkills();
       setRows(result.items);
-      // Keep the open Manage drawer's skill in sync with the refreshed
-      // list so its lifecycle controls reflect the latest server state.
-      setManaging((prev) =>
-        prev !== null ? result.items.find((r) => r.id === prev.id) ?? prev : prev,
-      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -124,10 +118,12 @@ export function SettingsPlatformSkills() {
     [errText, message, refresh, t],
   );
 
-  const openManage = useCallback((row: PlatformSkill) => {
-    setManaging(row);
-    setManageOpen(true);
-  }, []);
+  // Phase C: "Manage" opens the full detail page (version editor + lifecycle
+  // + supporting files), replacing the old in-place drawer.
+  const openManage = useCallback(
+    (row: PlatformSkill) => navigate(`/settings/platform-skills/${row.id}`),
+    [navigate],
+  );
 
   const onPinToggle = useCallback(
     async (row: PlatformSkill) => {
@@ -320,13 +316,6 @@ export function SettingsPlatformSkills() {
           setCreateOpen(false);
           void refresh();
         }}
-      />
-
-      <PlatformSkillManageDrawer
-        open={manageOpen}
-        onClose={() => setManageOpen(false)}
-        onChanged={() => void refresh()}
-        skill={managing}
       />
     </div>
   );

@@ -70,6 +70,8 @@ import {
 const { Text } = Typography;
 
 const STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "stale", "archived"];
+// Platform skills have no Curator → no "stale" lifecycle state.
+const PLATFORM_STATUS_OPTIONS: SkillStatus[] = ["draft", "active", "archived"];
 
 const STATUS_COLOR: Record<SkillStatus, string> = {
   draft: "default",
@@ -78,15 +80,40 @@ const STATUS_COLOR: Record<SkillStatus, string> = {
   archived: "warning",
 };
 
+const TIER_COLOR: Record<string, string> = {
+  free: "default",
+  pro: "blue",
+  enterprise: "gold",
+};
+
 /** Tests assert against this set; keep in sync with `Role` enum on the
  *  backend (per [memory:cross-tenant-admin]). */
 const ADMIN_ROLES = new Set(["admin", "system_admin"]);
 
-export function SkillDetail({ api = tenantSkillApi }: { api?: SkillApi } = {}) {
+interface SkillDetailProps {
+  /** Transport — tenant ``/v1/skills`` (default) or platform
+   *  ``/v1/platform/skills``. See ``api/skillApi.ts``. */
+  api?: SkillApi;
+  /** ``"platform"`` hides the tenant-flywheel panels (governance / lineage /
+   *  eval evidence), drops the Curator-only "stale" status option, and shows
+   *  the ``required_tier`` entitlement tag. (skill-authoring-ia Phase C.) */
+  variant?: "tenant" | "platform";
+  /** Back-link target; defaults to the tenant skills list. */
+  backTo?: { label: string; to: string };
+}
+
+export function SkillDetail({
+  api = tenantSkillApi,
+  variant = "tenant",
+  backTo,
+}: SkillDetailProps = {}) {
   const { t } = useTranslation();
   const { message, modal } = App.useApp();
   const { skillId } = useParams<{ skillId: string }>();
   const { identity } = useAuth();
+  const isPlatform = variant === "platform";
+  const statusOptions = isPlatform ? PLATFORM_STATUS_OPTIONS : STATUS_OPTIONS;
+  const backLink = backTo ?? { label: t("nav.skills"), to: "/skills" };
 
   const [skill, setSkill] = useState<SkillRecord | null>(null);
   const [versions, setVersions] = useState<SkillVersion[]>([]);
@@ -282,10 +309,15 @@ export function SkillDetail({ api = tenantSkillApi }: { api?: SkillApi } = {}) {
       <PageHeader
         icon={<FileCode2 size={18} strokeWidth={1.5} />}
         title={skill.name}
-        backTo={{ label: t("nav.skills"), to: "/skills" }}
+        backTo={backLink}
         subtitle={
           <Space size={6} wrap>
             <Tag color={STATUS_COLOR[skill.status]}>{skill.status}</Tag>
+            {isPlatform && skill.required_tier && (
+              <Tag color={TIER_COLOR[skill.required_tier] ?? "default"}>
+                {t(`platform_skills.tier_${skill.required_tier}`)}
+              </Tag>
+            )}
             {skill.latest_version !== null && skill.latest_version > 0 && (
               <Tooltip title={t("skills.latest_version_hint")}>
                 <Tag bordered={false}>v{skill.latest_version}</Tag>
@@ -357,7 +389,7 @@ export function SkillDetail({ api = tenantSkillApi }: { api?: SkillApi } = {}) {
               disabled={statusSubmitting}
               aria-label={t("skills.change_status")}
               data-testid="skill-status-select"
-              options={STATUS_OPTIONS.map((s) => {
+              options={statusOptions.map((s) => {
                 const isActiveBlocked = s === "active" && isLatestHighRisk && !isAdmin;
                 return {
                   value: s,
@@ -382,9 +414,16 @@ export function SkillDetail({ api = tenantSkillApi }: { api?: SkillApi } = {}) {
         <MetadataPanel skill={skill} version={selectedVersion} />
       )}
 
-      <GovernancePanel skill={skill} isAdmin={isAdmin} onChanged={refresh} />
-      <EvalEvidencePanel skillId={skill.id} />
-      <LineagePanel skillId={skill.id} />
+      {/* Tenant-flywheel panels — platform skills are human-curated, not
+          agent-evolved, so governance/lineage/eval evidence don't apply
+          (skill-authoring-ia Phase C). */}
+      {!isPlatform && (
+        <>
+          <GovernancePanel skill={skill} isAdmin={isAdmin} onChanged={refresh} />
+          <EvalEvidencePanel skillId={skill.id} />
+          <LineagePanel skillId={skill.id} />
+        </>
+      )}
 
       <Card size="small" style={{ marginBottom: 16 }} data-testid="skill-version-bar">
         <Space size={12} wrap>
