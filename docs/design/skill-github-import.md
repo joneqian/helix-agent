@@ -50,13 +50,13 @@
 ## 5. scan-and-match + 重打包
 
 GitHub zip 根是 `<repo>-<ref>/`。流程(借鉴 `npx skills --skill <name>`):
-1. 解 zip,**遍历所有 `SKILL.md`** → 建 `目录名 → 目录路径` 索引(目录名 = 含 SKILL.md 的目录 basename,即 `npx --skill <name>` 的 name 约定;frontmatter name 留后续)。
-2. 按 `skill` 选择器匹配:
-   - 命中唯一 → 抽该目录子树。
+1. 解 zip,**遍历所有 `SKILL.md`** → 列出每个技能 `(relpath, basename, prefix)`(relpath = 剥掉 `<repo>-<ref>/` 根的目录路径,如 `skills/find-skills`;basename = 末段,即 `npx --skill <name>` 约定)。**允许同名**(一仓可在两路径下放同名,故用列表不去重)。
+2. 按 `skill` 选择器匹配(**路径或 basename**):
+   - 先精确 relpath 匹配(`skills/find-skills`),再退回 basename 匹配(`find-skills`)。
    - **未给 `skill` 且仓内仅一个技能** → 默认装它。
-   - 未给 `skill` 且多技能 → 400「仓内有多个技能,请用 `skill=` 指定」+ **列候选名**。
-   - 给了 `skill` 但 0 命中 → 404「未找到技能 `<name>`」+ 列候选。
-   - 多命中(目录名/frontmatter 撞名)→ 400 列冲突路径。
+   - 未给 `skill` 且多技能 → 400「请用 `skill=` 指定(名或路径)」+ 列候选 relpath。
+   - 给了 `skill` 但 0 命中 → 404 列候选 relpath。
+   - basename 撞多个路径 → 400「请用完整路径指定」+ 列冲突 relpath(用户改填 `skills/<name>`)。
 3. 把命中子树**重打包**成 `.skill` 风格 zip blob(`build_skill_zip` 或等价),路径剥到技能根。
 4. zip-slip 防护:抽取时拒绝任何归一化后逃出根的条目;`SKILL.md` 扫描限制最大遍历条目数(防超大仓 DoS)。
 
