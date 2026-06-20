@@ -150,3 +150,77 @@ test("system_admin imports a skill from GitHub", async ({ page }) => {
   expect(body.source).toBe("vercel-labs/skills");
   expect(body.skill).toBe("find-skills");
 });
+
+test("GitHub import multi-skill repo shows a candidate picker", async ({ page }) => {
+  const IMPORTED = {
+    skill: {
+      id: "psk-gh",
+      name: "find-skills",
+      status: "active",
+      latest_version: 1,
+      description: "Find skills.",
+      category: "meta",
+      pinned: false,
+      required_tier: "free",
+      last_used_at: null,
+      state_changed_at: "2026-06-20T10:00:00Z",
+      created_at: "2026-06-20T10:00:00Z",
+      updated_at: "2026-06-20T10:00:00Z",
+    },
+    version: { version: 1, tool_names: [] },
+    created: true,
+  };
+  await page.route("**/v1/me", async (route) => {
+    await route.fulfill({ json: SYS_ADMIN_ME });
+  });
+  await page.route("**/v1/platform/skills/import-from-github", async (route) => {
+    const body = route.request().postDataJSON() as { skill?: string };
+    if (!body.skill) {
+      // No selector → structured ambiguous 400 with candidates.
+      await route.fulfill({
+        status: 400,
+        json: {
+          detail: {
+            code: "SKILL_AMBIGUOUS",
+            message: "repository contains multiple skills; pick one.",
+            candidates: ["skills/find-skills", "skills/other"],
+          },
+        },
+      });
+      return;
+    }
+    await route.fulfill({ status: 201, json: IMPORTED });
+  });
+  await page.route("**/v1/platform/skills*", async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: SKILLS });
+      return;
+    }
+    await route.fallback();
+  });
+  await login(page);
+  await page.goto("/settings/platform-skills");
+
+  await page.getByTestId("ps-import-github-btn").click();
+  await page.getByTestId("ps-github-source").fill("vercel-labs/skills");
+  // First submit (no skill) → picker appears.
+  await page.getByTestId("ps-github-submit").click();
+  await expect(page.getByTestId("ps-github-candidates-hint")).toBeVisible();
+  await expect(page.getByTestId("ps-github-skill-select")).toBeVisible();
+
+  // Pick a candidate via the searchable Select: open → type → Enter. (Clicking
+  // the floating option is flaky under antd's dropdown animation/portal.)
+  await page.getByTestId("ps-github-skill-select").click();
+  await page.keyboard.type("skills/find-skills");
+  await page.keyboard.press("Enter");
+  const [req] = await Promise.all([
+    page.waitForRequest(
+      (r) =>
+        r.url().includes("/v1/platform/skills/import-from-github") &&
+        r.method() === "POST" &&
+        (r.postDataJSON() as { skill?: string }).skill === "skills/find-skills",
+    ),
+    page.getByTestId("ps-github-submit").click(),
+  ]);
+  expect((req.postDataJSON() as { skill?: string }).skill).toBe("skills/find-skills");
+});
