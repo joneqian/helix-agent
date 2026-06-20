@@ -170,30 +170,39 @@ async def download_github_archive(
             await http.aclose()
 
 
-def _skill_dir_index(archive: zipfile.ZipFile) -> dict[str, str]:
-    """Map ``skill folder basename → folder prefix`` for every ``SKILL.md`` in
-    the archive. GitHub archives nest everything under ``<repo>-<ref>/``."""
-    index: dict[str, str] = {}
+@dataclass(frozen=True)
+class _SkillEntry:
+    relpath: str  # folder path with the ``<repo>-<ref>/`` root stripped
+    basename: str  # last path segment (the ``npx --skill <name>`` key)
+    prefix: str  # full archive prefix incl. root, trailing slash
+
+
+def _skill_entries(archive: zipfile.ZipFile) -> list[_SkillEntry]:
+    """Every ``SKILL.md`` folder in the archive. GitHub archives nest
+    everything under a single ``<repo>-<ref>/`` root, which is stripped from
+    ``relpath`` so candidates read like ``skills/find-skills``. Folders may
+    share a basename (a repo can vendor the same name under two paths), so this
+    returns a list — disambiguation happens in :func:`select_skill_zip`."""
+    entries: list[_SkillEntry] = []
     for name in archive.namelist():
         if not name.endswith("/SKILL.md"):
             continue
-        folder = name[: -len("/SKILL.md")] + "/"  # ".../skills/find-skills/"
-        basename = folder.rstrip("/").rsplit("/", 1)[-1]
-        if basename in index:
-            raise GithubImportError(
-                f"ambiguous skill name {basename!r}: multiple folders match", status=400
-            )
-        index[basename] = folder
-    return index
+        prefix = name[: -len("SKILL.md")]  # ".../skills/find-skills/"
+        inner = prefix.split("/", 1)[1] if "/" in prefix.rstrip("/") else ""
+        relpath = inner.rstrip("/")  # "skills/find-skills" ("" = repo root skill)
+        basename = relpath.rsplit("/", 1)[-1] if relpath else ""
+        entries.append(_SkillEntry(relpath=relpath, basename=basename, prefix=prefix))
+    return entries
 
 
 def select_skill_zip(archive_bytes: bytes, *, skill: str | None) -> bytes:
     """Scan the GitHub archive, pick the requested skill folder, and repack it
     as a root-anchored ``.skill`` zip (``SKILL.md`` + supporting files at root).
 
-    Selection mirrors ``npx skills --skill <name>``: match the folder basename.
-    No ``skill`` + exactly one skill in the repo → that one. Ambiguity / miss →
-    :class:`GithubImportError` listing the candidates.
+    ``skill`` matches a folder **path** (``skills/find-skills``) or **basename**
+    (``find-skills``, the ``npx skills --skill <name>`` convention). No ``skill``
+    + exactly one skill in the repo → that one. Ambiguity / miss →
+    :class:`GithubImportError` listing the candidate paths.
     """
     try:
         archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
@@ -201,25 +210,37 @@ def select_skill_zip(archive_bytes: bytes, *, skill: str | None) -> bytes:
         raise GithubImportError("downloaded archive is not a valid zip") from exc
 
     with archive:
-        index = _skill_dir_index(archive)
-        if not index:
+        entries = _skill_entries(archive)
+        if not entries:
             raise GithubImportError("no SKILL.md found in the repository", status=404)
 
+        candidates = ", ".join(sorted(e.relpath or "." for e in entries))
+
         if skill is None:
-            if len(index) > 1:
+            if len(entries) > 1:
                 raise GithubImportError(
                     "repository contains multiple skills; specify which one with "
-                    f"'skill'. candidates: {', '.join(sorted(index))}",
+                    f"'skill' (name or path). candidates: {candidates}",
                     status=400,
                 )
-            prefix = next(iter(index.values()))
+            prefix = entries[0].prefix
         else:
-            prefix = index.get(skill)
-            if prefix is None:
+            # Exact path match wins; otherwise fall back to basename.
+            exact = [e for e in entries if e.relpath == skill]
+            matches = exact or [e for e in entries if e.basename == skill]
+            if not matches:
                 raise GithubImportError(
-                    f"skill {skill!r} not found. candidates: {', '.join(sorted(index))}",
+                    f"skill {skill!r} not found. candidates: {candidates}",
                     status=404,
                 )
+            if len(matches) > 1:
+                paths = ", ".join(sorted(e.relpath for e in matches))
+                raise GithubImportError(
+                    f"skill name {skill!r} matches multiple folders; specify the full "
+                    f"path instead. matches: {paths}",
+                    status=400,
+                )
+            prefix = matches[0].prefix
 
         return _repack_subtree(archive, prefix)
 

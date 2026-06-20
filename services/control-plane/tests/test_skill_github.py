@@ -160,6 +160,42 @@ def test_select_no_skill_md_404() -> None:
     assert ei.value.status == 404
 
 
+def test_select_by_full_path() -> None:
+    archive = _github_archive(
+        "repo",
+        "main",
+        {
+            "skills/a/SKILL.md": _skill_md("a"),
+            "skills/b/SKILL.md": _skill_md("b"),
+        },
+    )
+    payload = parse_skill_zip(select_skill_zip(archive, skill="skills/b"))
+    assert payload.name == "b"
+
+
+def test_select_duplicate_basename_disambiguated_by_path() -> None:
+    # Two folders share basename "context-surfing" — the old global-uniqueness
+    # index raised at scan time; now basename is ambiguous but the full path
+    # resolves it.
+    archive = _github_archive(
+        "repo",
+        "main",
+        {
+            "skills/context-surfing/SKILL.md": _skill_md("context-surfing"),
+            "examples/context-surfing/SKILL.md": _skill_md("context-surfing"),
+        },
+    )
+    # Bare basename → 400 listing both paths.
+    with pytest.raises(GithubImportError) as ei:
+        select_skill_zip(archive, skill="context-surfing")
+    assert ei.value.status == 400
+    assert "skills/context-surfing" in ei.value.message
+    assert "examples/context-surfing" in ei.value.message
+    # Full path disambiguates.
+    payload = parse_skill_zip(select_skill_zip(archive, skill="skills/context-surfing"))
+    assert payload.name == "context-surfing"
+
+
 def test_select_rejects_bad_zip() -> None:
     with pytest.raises(GithubImportError):
         select_skill_zip(b"not a zip", skill=None)
