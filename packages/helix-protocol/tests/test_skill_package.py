@@ -25,9 +25,10 @@ from helix_agent.protocol.skill_package import (
 
 
 def test_parse_minimal_frontmatter() -> None:
-    """Standard frontmatter only (no helix:) — must still parse with
-    sensible defaults for the optional helix fields. But helix.version
-    is required, so this should reject."""
+    """Standard external frontmatter (name + description only, no helix:
+    namespace — the Anthropic/Vercel format imported via GitHub) must parse.
+    ``helix.version`` is helix-internal and defaults to 1 when absent; the DB
+    owns version numbering on import."""
     text = """---
 name: my-skill
 description: A test skill
@@ -36,7 +37,27 @@ description: A test skill
 # Body
 hello
 """
-    # Required helix.version missing → reject
+    parsed = parse_skill_md(text)
+    assert parsed.name == "my-skill"
+    assert parsed.description == "A test skill"
+    assert parsed.helix_version == 1  # default, not a reject
+    assert parsed.helix_category is None
+    assert parsed.helix_required_models == ()
+    assert parsed.helix_tool_names == ()
+    assert parsed.helix_authored_by == "human"
+    assert parsed.body == "# Body\nhello"
+
+
+def test_parse_helix_version_zero_rejected() -> None:
+    """When helix.version IS present it is still type/range-checked."""
+    text = """---
+name: x
+description: y
+helix:
+  version: 0
+---
+body
+"""
     with pytest.raises(SkillPackageLayoutError, match=r"helix.version"):
         parse_skill_md(text)
 

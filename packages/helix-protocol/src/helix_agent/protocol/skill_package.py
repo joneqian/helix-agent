@@ -17,7 +17,7 @@ Standard frontmatter (other Claude clients only read these):
 
 helix-specific extensions live under the ``helix:`` namespace key so
 non-helix clients silently ignore them (Mini-ADR U-14):
-- ``version`` (required for helix, int ≥ 1)
+- ``version`` (optional, int ≥ 1, default 1 — DB owns version numbering)
 - ``category`` (optional, str)
 - ``required_models`` (optional, list[str])
 - ``tool_names`` (optional, list[str])
@@ -128,9 +128,15 @@ def parse_skill_md(text: str) -> ParsedSkillMd:
         msg = "SKILL.md 'helix:' field must be a YAML mapping"
         raise SkillPackageLayoutError(msg)
 
-    helix_version = helix_block.get("version")
-    if not isinstance(helix_version, int) or helix_version < 1:
-        msg = "SKILL.md 'helix.version' must be an integer >= 1"
+    # ``helix.version`` is a helix-internal field. Standard external SKILL.md
+    # files (Anthropic/Vercel format, imported via GitHub / skills.sh) never
+    # carry the ``helix:`` namespace, and the DB owns version numbering on
+    # import regardless — so a missing version defaults to 1 rather than
+    # rejecting the whole package. Type/range is still enforced when the field
+    # is explicitly present (``bool`` is an ``int`` subclass, so guard it out).
+    helix_version = helix_block.get("version", 1)
+    if not isinstance(helix_version, int) or isinstance(helix_version, bool) or helix_version < 1:
+        msg = "SKILL.md 'helix.version' must be an integer >= 1 when present"
         raise SkillPackageLayoutError(msg)
 
     helix_category = helix_block.get("category")
