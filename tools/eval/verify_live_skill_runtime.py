@@ -177,9 +177,20 @@ async def _create_session(client: httpx.AsyncClient, name: str, version: str) ->
     return str(_unwrap(resp.json())["thread_id"])
 
 
-async def _run_collect_tools(client: httpx.AsyncClient, thread_id: str, prompt: str) -> list[str]:
-    """Run the prompt; return every tool message's text (the bash output)."""
-    tool_texts: list[str] = []
+class _RunTrace:
+    """What the SSE stream revealed — to tell apart 'no bash call' from a run error."""
+
+    def __init__(self) -> None:
+        self.tool_texts: list[str] = []
+        self.assistant_text: str = ""
+        self.errors: list[str] = []
+        self.events: dict[str, int] = {}
+
+
+async def _run_collect(client: httpx.AsyncClient, thread_id: str, prompt: str) -> _RunTrace:
+    """Run the prompt; collect tool output + final assistant text + errors + the
+    set of SSE event types seen (so a FAIL is diagnosable)."""
+    tr = _RunTrace()
     event = ""
     async with client.stream(
         "POST", f"/v1/sessions/{thread_id}/runs", json={"input": prompt}
@@ -188,12 +199,25 @@ async def _run_collect_tools(client: httpx.AsyncClient, thread_id: str, prompt: 
         async for line in resp.aiter_lines():
             if line.startswith("event: "):
                 event = line[len("event: ") :]
-            elif line.startswith("data: ") and event == "updates":
-                payload = json.loads(line[len("data: ") :])
+                tr.events[event] = tr.events.get(event, 0) + 1
+            elif line.startswith("data: "):
+                raw = line[len("data: ") :]
+                if event in ("error", "run_error"):
+                    tr.errors.append(raw[:300])
+                    continue
+                try:
+                    payload = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
                 for msg in _iter_messages(payload):
-                    if _message_type(msg) in ("tool", "ToolMessage"):
-                        tool_texts.append(_content_text(msg))
-    return tool_texts
+                    mtype = _message_type(msg)
+                    if mtype in ("tool", "ToolMessage"):
+                        tr.tool_texts.append(_content_text(msg))
+                    elif mtype in ("ai", "AIMessage", "AIMessageChunk", "assistant"):
+                        text = _content_text(msg)
+                        if text.strip():
+                            tr.assistant_text = text
+    return tr
 
 
 async def phase_mount(client: httpx.AsyncClient, *, agent: str, skill_name: str) -> bool:
@@ -211,21 +235,28 @@ async def phase_mount(client: httpx.AsyncClient, *, agent: str, skill_name: str)
         f"verbatim:\n`if [ -f {target} ]; then echo {_SENTINEL}; head -3 {target}; "
         f"else echo MISSING; ls -la /workspace/skills 2>&1; fi`"
     )
-    tool_texts = await _run_collect_tools(client, thread_id, prompt)
-    joined = "\n".join(tool_texts)
-    print(f"  bash tool messages: {len(tool_texts)}")
+    tr = await _run_collect(client, thread_id, prompt)
+    joined = "\n".join(tr.tool_texts)
+    print(f"  sse events: {tr.events}")
+    print(f"  bash tool messages: {len(tr.tool_texts)}")
 
     if _SENTINEL in joined:
         print(f"  PASS — {target} is present in the sandbox (auto-mount works).")
         return True
-    print("  FAIL — seeded SKILL.md not found in /workspace/skills. Tool output:")
-    print(
-        "  "
-        + (
-            joined[:600].replace("\n", "\n  ")
-            or "<no tool output — did the agent call bash? check it grants bash + binds the skill>"
-        )
-    )
+
+    print("  FAIL — seeded SKILL.md not confirmed. Diagnostics:")
+    if tr.errors:
+        print("  run errors:")
+        for e in tr.errors:
+            print(f"    ! {e}")
+    if tr.tool_texts:
+        print("  tool output:")
+        print("    " + joined[:600].replace("\n", "\n    "))
+    else:
+        print("  <no tool calls — model didn't call bash, or the run errored before tools>")
+    if tr.assistant_text:
+        print("  assistant said:")
+        print("    " + tr.assistant_text[:500].replace("\n", "\n    "))
     return False
 
 
