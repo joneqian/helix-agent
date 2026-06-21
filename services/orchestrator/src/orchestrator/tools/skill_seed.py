@@ -28,9 +28,33 @@ import logging
 from helix_agent.common.threat_patterns import scan_for_threats
 from helix_agent.protocol import SkillVersion
 from helix_agent.protocol.skill import compute_content_hash, supporting_files_to_jsonable
-from orchestrator.tools.skill_view import _repack_skill_md
+from helix_agent.protocol.skill_package import ParsedSkillMd, serialize_skill_md
 
 logger = logging.getLogger(__name__)
+
+
+def _skill_md_with_name(name: str, version: SkillVersion) -> str:
+    """Serialize the version's SKILL.md with the REAL skill name in frontmatter.
+
+    ``skill_view._repack_skill_md`` falls back to ``description`` for the name
+    (the SkillVersion DTO doesn't carry the skill row's name) — fine for the
+    internal skill_view text read, but a file seeded to disk should have a
+    faithful ``name:``. Here we know the real name (the activated-skill key).
+    """
+    parsed = ParsedSkillMd(
+        name=name,
+        description=version.description or name,
+        license=None,
+        helix_version=version.version,
+        helix_category=version.category,
+        helix_required_models=version.required_models,
+        helix_tool_names=version.tool_names,
+        helix_authored_by=version.authored_by,
+        helix_lazy=version.lazy_load,
+        body=version.prompt_fragment,
+    )
+    return serialize_skill_md(parsed)
+
 
 #: Caps mirror the ``.skill`` package limits (and the supervisor's re-check):
 #: 5 MiB total / 256 entries across all activated skills.
@@ -58,7 +82,7 @@ def build_skill_seed_files(
             continue
 
         candidates: list[tuple[str, bytes]] = [
-            (f"skills/{name}/SKILL.md", _repack_skill_md(version).encode("utf-8"))
+            (f"skills/{name}/SKILL.md", _skill_md_with_name(name, version).encode("utf-8"))
         ]
         for relpath, entry in sorted(version.supporting_files.items()):
             try:

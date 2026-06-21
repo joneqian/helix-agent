@@ -19,6 +19,7 @@ def _version(
     *,
     name: str,
     prompt: str = "do the thing",
+    description: str | None = None,
     supporting: dict[str, bytes] | None = None,
     tamper_hash: bool = False,
 ) -> SkillVersion:
@@ -37,7 +38,9 @@ def _version(
         tenant_id=uuid4(),
         version=1,
         prompt_fragment=prompt,
-        description=name,
+        # Distinct from name by default so the SKILL.md repack can't pass by
+        # coincidentally using the description as the name.
+        description=description if description is not None else f"about {name}",
         supporting_files=files,
         content_hash=b"\x00" if tamper_hash else compute_content_hash(prompt, jsonable),
         created_at=datetime.now(UTC),
@@ -57,7 +60,10 @@ def test_seeds_skill_md_and_supporting_files() -> None:
     assert "skills/pptx/scripts/run.py" in paths
     body = dict(seed)
     assert body["skills/pptx/scripts/run.py"] == b"print('hi')"
-    assert b"name: pptx" in body["skills/pptx/SKILL.md"]
+    # Seeded SKILL.md carries the REAL skill name (not the description fallback).
+    skill_md = body["skills/pptx/SKILL.md"].decode()
+    assert "name: pptx" in skill_md
+    assert "name: about pptx" not in skill_md  # not the description
 
 
 def test_binary_supporting_file_seeded_without_scan() -> None:
