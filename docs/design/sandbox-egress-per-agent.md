@@ -152,12 +152,15 @@ Plumbing (the 6 known touchpoints, from the as-built trace):
   call the internet, all of it logged. Matches the principle most aggressively
   but widens the default exfil surface across all tenants.
 
-Recommendation: **default `none`, opt-in `proxy`** — keep the *necessary* gate
-(an agent talking to the internet is a per-agent operator choice, not a silent
-default), and make that the *only* gate: once on, allow-all-public + audit, host
-allowlist optional. This honors "audit over blocking" without making egress-on a
-silent platform-wide default. (Operator to confirm; flip the default if a
-smoother stance is preferred.)
+**Decided (operator, 2026-06-21): default `proxy` — egress on, audited.** Every
+agent can reach the public internet out of the box; every connection is logged
+(host/bytes/duration). This is the smoothest stance and the fullest expression
+of "audit over blocking": no per-agent toggle stands between a skill and the API
+it needs. The trade accepted is a platform-wide default egress (exfil) surface,
+governed by the *necessary* controls below — SSRF block + IP pin + tenant-scoped
+identity + full audit + volume-anomaly detection — rather than by walling egress
+off. An operator who wants a tighter posture sets `egress: none` per agent (or a
+host `allowlist`); the platform does not force it.
 
 ## 4. Security accounting (necessary vs. dropped)
 
@@ -169,7 +172,7 @@ smoother stance is preferred.)
 | Full per-connection audit + volume-anomaly detection | **necessary (the trade)** | this is how we trade up-front blocking for traceability. |
 | Mandatory per-agent host allowlist | **dropped → optional** | over-blocking; breaks F skills that hit many hosts. Opt-in hardening only. |
 | Inline content DLP on egress | **not done** | HTTPS tunneled (no MITM); volume/host anomaly off audit instead. |
-| Egress on by default | **operator decision** (§3.4) | recommend opt-in. |
+| Egress on by default | **yes — decided** (§3.4) | smoothest; governed by audit + SSRF, not a wall. Tighten per agent. |
 
 ## 5. Scope, phases, verification
 
@@ -177,7 +180,7 @@ smoother stance is preferred.)
   credential-proxy process, SSRF block + resolved-IP pin, per-sandbox token,
   per-connection audit; `NetworkSpec` wired end-to-end (§3.3). A routable egress
   network for `egress=="proxy"` sandboxes (the `internal:true` net stays for
-  `none`). Default `none` (§3.4).
+  `none`). Default `proxy` (§3.4).
 - **Phase 2 — optional allowlist + anomaly.** Consume `NetworkSpec.allowlist`
   in the proxy; volume/host anomaly signal off the audit trail.
 - **Phase 3 — admin-ui.** Per-agent egress toggle in the manifest editor; egress
@@ -198,7 +201,9 @@ confirm the audit trail shows the outbound hosts + volumes.
 2. **Audit over blocking**: when egress is on, allow any **public** host (block
    only the necessary infra/SSRF targets) + log every connection; host allowlist
    is **optional** hardening.
-3. Default `egress: none` (opt-in) — the single necessary gate (operator may
-   flip). Identity via per-sandbox token, not self-reported headers.
+3. **Default `egress: proxy` (on, audited)** — decided 2026-06-21; smoothest
+   stance, governed by SSRF block + IP pin + tenant identity + audit + anomaly
+   rather than a wall. An operator tightens per agent (`none` / `allowlist`).
+   Identity via per-sandbox token, not self-reported headers.
 4. No cert-MITM / inline content DLP; egress safety = SSRF block + IP pin + audit
    + volume anomaly.
