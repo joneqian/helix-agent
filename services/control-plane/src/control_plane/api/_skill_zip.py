@@ -68,19 +68,34 @@ logger = logging.getLogger("helix.control_plane.skill_zip")
 
 
 # ─── Limits (Mini-ADR U-16 / U-18) ───────────────────────────────────────
+#
+# Calibrated against the canonical real-world skills the GitHub import feature
+# targets — Anthropic's own ``anthropics/skills`` repo. Their ``pptx`` skill
+# bundles 59 files nested 5 dirs deep (``scripts/office/schemas/.../*.xsd``)
+# totalling ~1.1 MiB, with a tree of ``.xsd`` XML schemas. The original limits
+# (depth 3, 64 entries, no ``.xsd``) were tuned for tiny hand-authored helix
+# skills and rejected Anthropic's reference skill on three axes at once. These
+# values give real skills headroom while the per-file / total-size caps remain
+# the actual resource bound.
 
 #: Per-file uncompressed size cap.
 MAX_FILE_BYTES: Final[int] = 1 * 1024 * 1024  # 1 MiB
 #: Total uncompressed size across all entries.
 MAX_TOTAL_BYTES: Final[int] = 5 * 1024 * 1024  # 5 MiB
-#: Max number of entries (excluding pure-directory entries).
-MAX_ENTRIES: Final[int] = 64
+#: Max number of entries (excluding pure-directory entries). Real skills bundle
+#: script trees + schema sets (anthropics/skills pptx = 59), so 64 was too tight.
+MAX_ENTRIES: Final[int] = 256
 #: Max characters in a relative path.
 MAX_PATH_LENGTH: Final[int] = 256
-#: Max subdirectory nesting under the root.
-MAX_PATH_DEPTH: Final[int] = 3
+#: Max subdirectory nesting under the root. anthropics/skills pptx nests 5 deep
+#: (``scripts/office/schemas/ecma/fouth-edition/opc-*.xsd``); 6 adds headroom.
+MAX_PATH_DEPTH: Final[int] = 6
 
 #: Allow-listed file extensions (case-sensitive on suffix, lowercase compare).
+#: ``.xsd`` / ``.xml`` / ``.csv`` / ``.tsv`` / ``.ini`` / ``.cfg`` / ``.rst``
+#: cover real skill content (OOXML schemas, data tables, config, docs). All are
+#: text, so they also join ``TEXT_EXTENSIONS`` below and get threat-scanned —
+#: no new binary attack surface.
 ALLOWED_EXTENSIONS: Final[frozenset[str]] = frozenset(
     {
         ".md",
@@ -95,6 +110,13 @@ ALLOWED_EXTENSIONS: Final[frozenset[str]] = frozenset(
         ".toml",
         ".html",
         ".css",
+        ".xsd",
+        ".xml",
+        ".csv",
+        ".tsv",
+        ".ini",
+        ".cfg",
+        ".rst",
         ".png",
         ".jpg",
         ".svg",
@@ -117,6 +139,13 @@ TEXT_EXTENSIONS: Final[frozenset[str]] = frozenset(
         ".toml",
         ".html",
         ".css",
+        ".xsd",
+        ".xml",
+        ".csv",
+        ".tsv",
+        ".ini",
+        ".cfg",
+        ".rst",
     }
 )
 
@@ -436,7 +465,10 @@ def _parse_new_format(entries: _ArchiveEntries) -> SkillZipPayload:
     """Parse a SKILL.md-rooted ZIP."""
     skill_md_bytes = entries.data[_NEW_SKILL_MD]
     try:
-        skill_md_text = skill_md_bytes.decode("utf-8")
+        # utf-8-sig: tolerate a leading BOM so a BOM-prefixed SKILL.md doesn't
+        # fail the "must start with '---'" frontmatter check with a misleading
+        # error (some editors emit UTF-8-with-BOM).
+        skill_md_text = skill_md_bytes.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         _reject(
             reason="invalid_frontmatter",
@@ -641,7 +673,13 @@ def _scan_for_threats(
         if ext not in TEXT_EXTENSIONS:
             continue
         try:
-            text = raw.decode("utf-8")
+            # ``utf-8-sig`` strips a single LEADING BOM (U+FEFF) — an encoding
+            # marker, not content. UTF-8-with-BOM is standard for ECMA/MS XML
+            # (e.g. the OOXML ``.xsd`` schemas Anthropic's pptx skill bundles),
+            # and a leading BOM would otherwise trip the invisible-unicode
+            # injection rule as a false positive. A U+FEFF *inside* the text is
+            # left intact, so genuine zero-width obfuscation is still caught.
+            text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             # A "text" extension that doesn't decode is suspicious — could
             # be smuggling binary payload under a .md extension to dodge
