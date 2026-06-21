@@ -29,15 +29,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/workspace \
     MPLCONFIGDIR=/workspace/.mplconfig
 
-# System deps: CJK fonts + fontconfig (matplotlib/Pillow Chinese rendering)
-# and the locale files for zh_CN.UTF-8. `fc-cache -f` bakes the font cache
-# into the (read-only at runtime) rootfs so no cache write is needed live.
-# No compiler toolchain — every Python dep installs from a wheel.
+# System deps (OFFICE-ADR-4 / route ① §5.4):
+#   * CJK fonts + fontconfig (matplotlib/Pillow Chinese rendering) + zh_CN.UTF-8
+#     locale; `fc-cache -f` bakes the font cache into the read-only rootfs.
+#   * The system BINARIES the office skills shell out to — having the Python lib
+#     is not enough: xlsx recalc / pptx thumbnail / docx accept-changes call
+#     `soffice` (LibreOffice headless), pdf→image calls poppler, gif/video calls
+#     ffmpeg. Install LibreOffice's no-GUI components only (writer/calc/impress
+#     + core) to keep the image as small as this binary allows.
+# No compiler toolchain — every Python dep still installs from a wheel.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         fonts-noto-cjk \
         fontconfig \
         locales \
+        libreoffice-writer-nogui \
+        libreoffice-calc-nogui \
+        libreoffice-impress-nogui \
+        poppler-utils \
+        ffmpeg \
     && sed -i 's/^# *\(zh_CN.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
     && locale-gen \
     && fc-cache -f \

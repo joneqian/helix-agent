@@ -25,7 +25,7 @@ WAIT_SERVICES := $(DEV_DATA) $(DEV_APP) $(DEV_LANGFUSE)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build dev-bootstrap-admin dev-reset-admin dev-seed-keycloak dev-keycloak-config langfuse-reset dev-info
+.PHONY: help dev-up dev-down dev-clean dev-ps dev-logs dev-build build-sandbox-office dev-bootstrap-admin dev-reset-admin dev-seed-keycloak dev-keycloak-config langfuse-reset dev-info
 
 help: ## 列出可用目标
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -36,6 +36,16 @@ dev-build: ## 重建 control-plane + sandbox-supervisor 镜像(改了后端代�
 	# sandbox-supervisor 是独立服务(docker cp 种文件)——两者都要重建,否则
 	# 后端改动(如 skill-runtime auto-mount)只半数生效。
 	$(COMPOSE) $(PROFILES) build control-plane-blue sandbox-supervisor
+
+# 沙箱执行镜像不是 compose 服务,由 supervisor 运行时 docker run。minimal
+# (alpine 纯 stdlib)够轻,见 README 一行命令;office 变体重(LibreOffice
+# headless ~1.3GB),故单列、不进 dev-up。host daemon build 一次即可
+# (supervisor 经挂载 socket 用同一 daemon)。context=父目录 infra/(office
+# Dockerfile COPY 共享 sandbox-image/runner.py)。tag 对上 settings 默认值,
+# 或用 HELIX_SANDBOX_IMAGE_OFFICE 覆盖。
+build-sandbox-office: ## build office 沙箱镜像(soffice/poppler/ffmpeg ~1.3GB;office agent 需先建一次)
+	docker build -f sandbox-image-office/Dockerfile -t helix-sandbox-office:dev .
+	@echo "✓ helix-sandbox-office:dev built — image_variant: office 的 agent 现可跑"
 
 dev-up: dev-build ## 起全量 dev 栈(full+auth+observability,排除 green)
 	# 先 --wait 起带可靠 healthcheck 的服务集。
