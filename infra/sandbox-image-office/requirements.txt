@@ -12,3 +12,8 @@ pypdf==6.12.0           # PDF read / merge / split
 pdfplumber==0.11.4     # PDF text + table extraction
 Pillow==12.2.0         # image read/write/convert
 matplotlib==3.9.2      # charts (CJK rendering via fonts-noto-cjk)
+# route ① §5.4 — Python bridges to the new apt binaries (soffice/poppler/ffmpeg).
+pdf2image==1.17.0      # PDF→image; wraps the poppler-utils binaries
+imageio==2.37.3        # gif/video frames (slack-gif-creator)
+imageio-ffmpeg==0.6.0  # imageio's ffmpeg bridge (binary from apt ffmpeg)
+defusedxml==0.7.1      # office unpack/clean scripts import it directly

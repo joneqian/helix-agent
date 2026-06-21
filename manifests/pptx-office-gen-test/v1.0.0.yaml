@@ -1,0 +1,74 @@
+# Live office-image GENERATION test agent — skill-runtime route ① §5.4.
+#
+# Proves the office image's NEW system binaries work end-to-end through a real
+# agent run: the agent uses exec_python to generate a .pptx (python-pptx) and
+# convert it to .pdf via `soffice --headless` — the very binary route ① added.
+# tools/eval/verify_live_skill_runtime.py --generate drives it.
+#
+# exec_python is side_effect=irreversible. That does NOT auto-gate it — the
+# DECLARATIVE gate fires only when the tool name is listed in
+# policies.approval_required_tools (below). The verify script approves the run
+# via the resume endpoint. (Auto-mount of skill files is proven separately by
+# the read-only --setup probe; this manifest is about the office binaries.)
+#
+# MODEL: defaults to deepseek. EDIT the model block to whatever provider you
+# pasted a key for in /settings/platform and set the matching allowlist host.
+apiVersion: helix.io/v1
+kind: Agent
+metadata:
+  name: pptx-office-gen-test
+  version: '1.0.0'
+  tenant: canonical
+spec:
+  description: >-
+    Live route ① test agent: generates a .pptx then converts it to .pdf via
+    soffice in the office sandbox, proving the system binaries are wired.
+
+  tenant_config:
+    isolation_level: dedicated_sandbox
+
+  model:
+    provider: deepseek # ← change to your configured provider
+    name: deepseek-v4-pro # ← and its model name
+    temperature: 0.0
+    max_tokens: 4096
+
+  system_prompt:
+    template: |
+      You are a test agent. When asked, use the exec_python tool to run the
+      EXACT Python code given, verbatim, and report the line it prints.
+
+  tools:
+    # exec_python runs LLM-provided Python in the sandbox. Listed in
+    # approval_required_tools below so the run pauses for approval (the verify
+    # script approves it) — this is the real, gated execution path.
+    - { type: builtin, name: exec_python }
+
+  policies:
+    # Declarative gate: exec_python only pauses for approval because it is named
+    # here (side_effect=irreversible alone does NOT gate — agent_factory:711).
+    approval_required_tools:
+      - exec_python
+
+  skills: []
+
+  sandbox:
+    runtime: gvisor
+    # The office image (built via `make -C infra build-sandbox-office`) carries
+    # python-pptx + soffice/poppler/ffmpeg. Required for this test.
+    image_variant: office
+    resources:
+      cpu: '1.0'
+      memory: 2Gi
+    network:
+      egress: proxy
+      allowlist:
+        - api.deepseek.com # ← change to your model's API host
+    filesystem:
+      readonly_root: true
+      writable:
+        - /tmp
+      persistent_workspace: true
+
+  observability:
+    log_level: info
