@@ -193,14 +193,15 @@ _SKILL_REJECT_HINT: dict[str, str] = {
     "symlink": "package contains a symlink entry, which is not allowed",
     "absolute_path": "package contains an absolute path, which is not allowed",
     "invalid_chars": "a file name has illegal characters/length (only a-z A-Z 0-9 . _ -)",
-    "depth_exceeded": "folder nesting is deeper than 3 levels",
+    "depth_exceeded": "folder nesting is deeper than 6 levels",
     "extension_not_allowed": (
         "package has a disallowed file type (allowed: .md .txt .yaml .yml .json "
-        ".py .js .ts .sh .toml .html .css .png .jpg .svg)"
+        ".py .js .ts .sh .toml .html .css .xsd .xml .csv .tsv .ini .cfg .rst "
+        ".png .jpg .svg)"
     ),
     "file_too_large": "a single file exceeds the 1 MiB limit",
     "total_too_large": "the package exceeds the 5 MiB total limit",
-    "too_many_entries": "the package has more than 64 files",
+    "too_many_entries": "the package has more than 256 files",
     "prompt_injection": "skill content tripped the prompt-injection scanner",
     "legacy_format": "legacy skill layout is not supported",
     "bad_zip": "the downloaded content is not a valid zip",
@@ -679,9 +680,7 @@ def build_platform_skills_router() -> APIRouter:
             try:
                 blob = _skill_github.select_skill_zip(archive, skill=skill_path)
             except _skill_github.GithubImportError as exc:
-                results.append(
-                    {"skill": skill_path, "status": "failed", "reason": exc.message}
-                )
+                results.append({"skill": skill_path, "status": "failed", "reason": exc.message})
                 continue
             try:
                 content, _status = await _ingest_platform_skill_payload(
