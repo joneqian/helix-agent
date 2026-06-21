@@ -59,6 +59,21 @@ async def test_exec_python_runs_code_and_returns_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_exec_python_passes_skill_seed_files_to_acquire() -> None:
+    # skill-runtime §5.1 — the build-bound skill seed set reaches acquire so the
+    # supervisor materializes /workspace/skills/<name>/ before the code runs.
+    client = RecordingSupervisorClient(
+        outcome=SandboxOutcome(stdout="", stderr="", exit_code=0, timed_out=False)
+    )
+    seed = (("skills/pptx/SKILL.md", b"---\nname: pptx\n---\n"),)
+    tool = ExecPythonTool(client=client, skill_seed_files=seed)
+
+    await tool.call({"code": "pass"}, ctx=_ctx())
+
+    assert client.acquired[0][4] == seed  # 5th acquire tuple slot = seed_files
+
+
+@pytest.mark.asyncio
 async def test_exec_python_truncates_oversized_output() -> None:
     # The supervisor returns 50k chars; the tool caps each stream at 20k.
     client = RecordingSupervisorClient(
