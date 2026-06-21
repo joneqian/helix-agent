@@ -108,7 +108,7 @@ for _bin in ("soffice", "pdftoppm", "ffmpeg"):
 # pptx-thumbnail / docx-accept-changes paths all run soffice this way). A
 # throwaway profile under the writable HOME avoids a stale-lock hang.
 _soffice = subprocess.run(
-    [  # noqa: S607 (PATH lookup of soffice is intentional)
+    [
         "soffice",
         "--headless",
         "--nolockcheck",
