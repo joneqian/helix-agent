@@ -116,6 +116,7 @@ from orchestrator.tools.skill_authoring import (
     SKILL_AUTHORING_BUILTINS,
     build_skill_authoring_tools,
 )
+from orchestrator.tools.skill_seed import build_skill_seed_files
 from orchestrator.tools.update_plan import UpdatePlanTool
 
 logger = logging.getLogger("helix.orchestrator.agent_factory")
@@ -495,6 +496,24 @@ async def build_agent(
             provider_key_resolver=provider_key_resolver,
             ignore_api_key_ref=True,  # Stream Y-2 (manifest-sourced VL model)
         )
+    # Stream J.7a (Mini-ADR J-23) — resolve + merge declared skills BEFORE the
+    # tool registry so the sandbox tools can be bound with the skill seed-file
+    # set (skill-runtime §5.1 auto-mount). ``_load_skills`` is pure-read and does
+    # not touch the registry, so it safely precedes ``build_tool_registry``.
+    loaded_skills = await _load_skills(
+        spec=spec,
+        skill_resolver=skill_resolver,
+        tenant_id=tenant_id,
+        registry=None,
+        activity_recorder=skill_activity_recorder,
+    )
+    # skill-runtime §5.1 — activated skills' files (SKILL.md + scripts + reference),
+    # U-21 drift/threat-filtered, materialized under /workspace/skills/<name>/ on
+    # every sandbox acquire so bundled scripts run as authored.
+    skill_seed_files = build_skill_seed_files(
+        loaded_skills.resolved_versions, loaded_skills.activated_skill_names
+    )
+
     registry = await build_tool_registry(
         spec.spec.tools,
         tool_env=env,
@@ -503,6 +522,8 @@ async def build_agent(
         persistent_workspace=spec.spec.sandbox.filesystem.persistent_workspace,
         # Stream OFFICE-1a — select the sandbox image variant (office libs).
         image_variant=spec.spec.sandbox.image_variant,
+        # skill-runtime §5.1 — seed activated skill files into /workspace.
+        skill_seed_files=skill_seed_files,
         # Stream J.4 — assemble the manifest's sub-agents into SubAgentTools;
         # subagent_depth gates the structural recursion cap.
         subagents=spec.spec.subagents,
@@ -578,21 +599,8 @@ async def build_agent(
             keep_first_turn=wm_policy.keep_first_turn,
             estimator=estimator,
         )
-    # Stream J.7a (Mini-ADR J-23) — load + merge skills declared in
-    # ``spec.skills``. Skill prompt fragments concatenate after the
-    # base system prompt; skill-bound tools register into the same
-    # registry with a ``from_skill`` tag so the dispatch path can label
-    # metrics. Skill loader is best-effort skipped when ``skills`` is
-    # empty + the resolver path is unwired (unit tests that don't care
-    # about skills keep working).
-    loaded_skills = await _load_skills(
-        spec=spec,
-        skill_resolver=skill_resolver,
-        tenant_id=tenant_id,
-        registry=registry,
-        activity_recorder=skill_activity_recorder,
-    )
-
+    # ``loaded_skills`` was resolved above (before the tool registry) so the
+    # sandbox tools could be bound with the skill seed-file set.
     # Capability Uplift Sprint #3 (Mini-ADR U-17) — register the single
     # ``skill_view`` tool when any skill is bound. Both eager + lazy
     # skills are reachable through it (eager skills' body is also

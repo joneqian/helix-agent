@@ -83,6 +83,8 @@ class BashTool:
     workspace_lock: WorkspaceLock = field(default_factory=NullWorkspaceLock)
     #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
     image_variant: str | None = None
+    #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
+    skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
     @property
     def spec(self) -> ToolSpec:
@@ -134,6 +136,7 @@ class BashTool:
                 tool_label="bash",
                 fallback_thread_id=_FALLBACK_THREAD_ID,
                 image_variant=self.image_variant,
+                seed_files=self.skill_seed_files,
             )
         return format_sandbox_outcome(outcome, self.output_char_cap)
 

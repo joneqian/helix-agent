@@ -93,3 +93,46 @@ async def test_no_active_span_omits_traceparent(tracing_setup: None) -> None:
     await client.acquire(tenant_id=uuid4(), thread_id="t")
 
     assert TRACEPARENT_HEADER not in seen["headers"]
+
+
+async def test_acquire_serializes_seed_files_base64() -> None:
+    # skill-runtime §5.1 — seed_files land in the acquire POST body as
+    # {path, content_b64} entries (the supervisor decodes + docker-cp's them).
+    import base64
+    import json
+
+    body: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body.update(json.loads(request.content))
+        return httpx.Response(200, json={"sandbox_id": str(uuid4())})
+
+    client = HTTPSupervisorClient(
+        base_url="http://supervisor", transport=httpx.MockTransport(handler)
+    )
+    await client.acquire(
+        tenant_id=uuid4(),
+        thread_id="t",
+        seed_files=(("skills/pptx/SKILL.md", b"hello"),),
+    )
+
+    assert body["seed_files"] == [
+        {"path": "skills/pptx/SKILL.md", "content_b64": base64.b64encode(b"hello").decode()}
+    ]
+
+
+async def test_acquire_omits_seed_files_when_empty() -> None:
+    import json
+
+    body: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body.update(json.loads(request.content))
+        return httpx.Response(200, json={"sandbox_id": str(uuid4())})
+
+    client = HTTPSupervisorClient(
+        base_url="http://supervisor", transport=httpx.MockTransport(handler)
+    )
+    await client.acquire(tenant_id=uuid4(), thread_id="t")
+
+    assert "seed_files" not in body  # back-compat: no key when empty

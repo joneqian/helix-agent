@@ -177,6 +177,7 @@ async def build_tool_registry(
     tool_env: ToolEnv,
     persistent_workspace: bool = False,
     image_variant: str | None = None,
+    skill_seed_files: tuple[tuple[str, bytes], ...] = (),
     subagents: Sequence[SubAgentSpec] = (),
     subagent_depth: int = 0,
     parent_spec: AgentSpec | None = None,
@@ -223,7 +224,9 @@ async def build_tool_registry(
     registry = ToolRegistry()
     for entry in tool_specs:
         if isinstance(entry, BuiltinToolSpec):
-            _register_builtin(registry, entry, tool_env, persistent_workspace, image_variant)
+            _register_builtin(
+                registry, entry, tool_env, persistent_workspace, image_variant, skill_seed_files
+            )
         elif isinstance(entry, HTTPToolSpec):
             _register_http(registry, tool_env)
         elif isinstance(entry, MCPToolSpec):
@@ -435,6 +438,7 @@ def _register_builtin(
     env: ToolEnv,
     persistent_workspace: bool,
     image_variant: str | None,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     if entry.name not in KNOWN_BUILTINS:
         raise AgentFactoryError(
@@ -443,11 +447,13 @@ def _register_builtin(
     if entry.name == "web_search":
         _register_web_search(registry, entry, env)
     elif entry.name == "exec_python":
-        _register_exec_python(registry, env, persistent_workspace, image_variant)
+        _register_exec_python(registry, env, persistent_workspace, image_variant, skill_seed_files)
     elif entry.name == "bash":
-        _register_bash(registry, env, persistent_workspace, image_variant)
+        _register_bash(registry, env, persistent_workspace, image_variant, skill_seed_files)
     elif entry.name in ("read_file", "write_file", "edit_file", "list_dir"):
-        _register_file_op(registry, entry.name, env, persistent_workspace, image_variant)
+        _register_file_op(
+            registry, entry.name, env, persistent_workspace, image_variant, skill_seed_files
+        )
     elif entry.name == "save_artifact":
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
@@ -477,6 +483,7 @@ def _register_exec_python(
     env: ToolEnv,
     persistent_workspace: bool,
     image_variant: str | None,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     if env.supervisor_client is None:
         raise AgentFactoryError(
@@ -488,6 +495,7 @@ def _register_exec_python(
             client=env.supervisor_client,
             persistent_workspace=persistent_workspace,
             image_variant=image_variant,
+            skill_seed_files=skill_seed_files,
         )
     )
 
@@ -497,6 +505,7 @@ def _register_bash(
     env: ToolEnv,
     persistent_workspace: bool,
     image_variant: str | None,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     # Stream TE-5 — bash rides the same Sandbox Supervisor as exec_python.
     if env.supervisor_client is None:
@@ -510,6 +519,7 @@ def _register_bash(
             persistent_workspace=persistent_workspace,
             workspace_lock=env.workspace_lock,
             image_variant=image_variant,
+            skill_seed_files=skill_seed_files,
         )
     )
 
@@ -520,6 +530,7 @@ def _register_file_op(
     env: ToolEnv,
     persistent_workspace: bool,
     image_variant: str | None,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     # Stream TE-7 — read_file / write_file / list_dir ride the same Sandbox
     # Supervisor exec channel as bash / exec_python (TE-ADR-2 exec-warm locus).
@@ -534,6 +545,7 @@ def _register_file_op(
                 client=env.supervisor_client,
                 persistent_workspace=persistent_workspace,
                 image_variant=image_variant,
+                skill_seed_files=skill_seed_files,
             )
         )
     elif name == "write_file":
@@ -543,6 +555,7 @@ def _register_file_op(
                 persistent_workspace=persistent_workspace,
                 workspace_lock=env.workspace_lock,
                 image_variant=image_variant,
+                skill_seed_files=skill_seed_files,
             )
         )
     elif name == "edit_file":
@@ -552,6 +565,7 @@ def _register_file_op(
                 persistent_workspace=persistent_workspace,
                 workspace_lock=env.workspace_lock,
                 image_variant=image_variant,
+                skill_seed_files=skill_seed_files,
             )
         )
     else:  # list_dir
@@ -560,6 +574,7 @@ def _register_file_op(
                 client=env.supervisor_client,
                 persistent_workspace=persistent_workspace,
                 image_variant=image_variant,
+                skill_seed_files=skill_seed_files,
             )
         )
 

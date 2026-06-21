@@ -22,6 +22,7 @@ teardown — instead of a routine ``release`` (Mini-ADR F-8).
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -90,6 +91,7 @@ class SupervisorClient(Protocol):
         thread_id: str,
         user_id: UUID | None = None,
         image_variant: str | None = None,
+        seed_files: tuple[tuple[str, bytes], ...] = (),
     ) -> UUID:
         """Launch a sandbox for the tenant; return its id.
 
@@ -97,6 +99,9 @@ class SupervisorClient(Protocol):
         workspace volume (Stream J.15); ``None`` → an ephemeral tmpfs.
         ``image_variant`` (Stream OFFICE-1a) selects the image (``"office"``
         → office-libs image; else the default minimal image).
+        ``seed_files`` (skill-runtime §5.1) are ``(relpath, bytes)`` pairs the
+        supervisor materializes under ``/workspace`` before first exec — the
+        agent's activated skill files.
         """
 
     async def exec(self, *, sandbox_id: UUID, code: str, timeout_s: int | None) -> SandboxOutcome:
@@ -144,12 +149,18 @@ class HTTPSupervisorClient:
         thread_id: str,
         user_id: UUID | None = None,
         image_variant: str | None = None,
+        seed_files: tuple[tuple[str, bytes], ...] = (),
     ) -> UUID:
         payload: dict[str, Any] = {"tenant_id": str(tenant_id), "thread_id": thread_id}
         if user_id is not None:
             payload["user_id"] = str(user_id)
         if image_variant is not None:
             payload["image_variant"] = image_variant
+        if seed_files:
+            payload["seed_files"] = [
+                {"path": path, "content_b64": base64.b64encode(data).decode("ascii")}
+                for path, data in seed_files
+            ]
         body = await self._post("/v1/sandboxes:acquire", json=payload)
         return UUID(str(body["sandbox_id"]))
 
@@ -238,7 +249,9 @@ class RecordingSupervisorClient:
     destroy_error: Exception | None = None
     workspace_file: bytes = b""
     workspace_file_error: Exception | None = None
-    acquired: list[tuple[UUID, str, UUID | None, str | None]] = field(default_factory=list)
+    acquired: list[tuple[UUID, str, UUID | None, str | None, tuple[tuple[str, bytes], ...]]] = (
+        field(default_factory=list)
+    )
     execs: list[tuple[UUID, str]] = field(default_factory=list)
     released: list[UUID] = field(default_factory=list)
     destroyed: list[tuple[UUID, str]] = field(default_factory=list)
@@ -254,8 +267,9 @@ class RecordingSupervisorClient:
         thread_id: str,
         user_id: UUID | None = None,
         image_variant: str | None = None,
+        seed_files: tuple[tuple[str, bytes], ...] = (),
     ) -> UUID:
-        self.acquired.append((tenant_id, thread_id, user_id, image_variant))
+        self.acquired.append((tenant_id, thread_id, user_id, image_variant, seed_files))
         self._next_id += 1
         return UUID(int=self._next_id)
 
@@ -295,6 +309,7 @@ async def run_in_sandbox(
     tool_label: str,
     fallback_thread_id: str,
     image_variant: str | None = None,
+    seed_files: tuple[tuple[str, bytes], ...] = (),
 ) -> SandboxOutcome:
     """Acquire a sandbox, run ``code``, and tear it down — shared by the
     ``exec_python`` (F.4) and ``bash`` (TE-5) tools.
@@ -319,6 +334,7 @@ async def run_in_sandbox(
         thread_id=thread_id,
         user_id=user_id,
         image_variant=image_variant,
+        seed_files=seed_files,
     )
     cancelled = False
     try:
@@ -406,6 +422,9 @@ class ExecPythonTool:
     #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs
     #: image). Set from ``SandboxSpec.image_variant``; ``None`` → minimal.
     image_variant: str | None = None
+    #: skill-runtime §5.1 — the agent's activated skill files, materialized
+    #: under ``/workspace/skills/<name>/`` on each acquire. Set at build.
+    skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
     @property
     def spec(self) -> ToolSpec:
@@ -446,6 +465,7 @@ class ExecPythonTool:
             tool_label="exec_python",
             fallback_thread_id=_FALLBACK_THREAD_ID,
             image_variant=self.image_variant,
+            seed_files=self.skill_seed_files,
         )
         return format_sandbox_outcome(outcome, self.output_char_cap)
 
