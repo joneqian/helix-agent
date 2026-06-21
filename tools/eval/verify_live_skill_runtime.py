@@ -230,43 +230,42 @@ async def phase_mount(client: httpx.AsyncClient, *, agent: str, skill_name: str)
     thread_id = await _create_session(client, name, version)
     print(f"  session: {thread_id}")
 
-    target = f"/workspace/skills/{skill_name}/SKILL.md"
-    # Probe via read_file (read-only → NOT approval-gated, unlike bash/exec_python
-    # which declare side_effect=irreversible and pause the run on approval).
-    # read_file acquires a SEEDED sandbox and reads off its filesystem — so a
-    # successful read is direct proof of the auto-mount. Crucially we accept ONLY
-    # a read_file/list_dir result: if the sandbox fails the agent may fall back
-    # to skill_view (which reads the DB, NOT the filesystem) — that must NOT count.
+    # Probe via list_dir on the seeded skill dir (path is RELATIVE to /workspace
+    # — no leading slash). A directory listing proves the files are on the
+    # sandbox filesystem and is unfakeable by skill_view (which reads a single
+    # file from the DB by exact path, and can't list a directory). list_dir is
+    # read-only → NOT approval-gated (bash/exec_python are, side_effect=irreversible).
+    rel_dir = f"skills/{skill_name}"
     prompt = (
-        f"Use the read_file tool (NOT skill_view) to read the file {target} and "
-        "report its content verbatim. If the tool errors, report the exact error."
+        f"Use the list_dir tool to list the directory `{rel_dir}` (a path relative "
+        "to the workspace root — do NOT prefix it with a slash). Report the entries "
+        "exactly. Use ONLY list_dir; do not use skill_view or read_file."
     )
     tr = await _run_collect(client, thread_id, prompt)
     print(f"  sse events: {tr.events}")
-    print(f"  tools called: {[n for n, _ in tr.tool_msgs]}")
 
-    sandbox_reads = [
-        text
-        for tool, text in tr.tool_msgs
-        if tool in ("read_file", "list_dir") and "[tool error]" not in text
-    ]
-    if any(("name:" in t or "skill" in t.lower()) and len(t) > 40 for t in sandbox_reads):
-        print(f"  PASS — {target} read off the sandbox filesystem (auto-mount works).")
+    # A real listing of the seeded dir contains SKILL.md alongside the bundled
+    # scripts/ — skill_view of a single file never produces that pairing.
+    def _is_listing(text: str) -> bool:
+        return "[tool error]" not in text and "SKILL.md" in text and "scripts" in text
+
+    if any(_is_listing(text) for _tool, text in tr.tool_msgs):
+        print(f"  PASS — `{rel_dir}` listed off the sandbox filesystem (auto-mount works).")
         return True
 
-    print("  FAIL — couldn't read the seeded file off the sandbox filesystem. Diagnostics:")
+    print("  FAIL — couldn't list the seeded skill dir off the sandbox filesystem.")
+    print("  tool outputs:")
     for tool, text in tr.tool_msgs:
-        print(f"    [{tool}] {text[:200].replace(chr(10), ' ')}")
+        print(f"    [{tool}] {text[:220].replace(chr(10), ' ')}")
     if not tr.tool_msgs:
         print("    <no tool calls>")
     if tr.assistant_text:
         print("  assistant said:")
         print("    " + tr.assistant_text[:300].replace("\n", "\n    "))
     print(
-        "  NOTE: a `[tool error] SandboxSupervisorError ... runner closed the "
-        "connection` means the sandbox didn't launch (office image missing or a "
-        "dev-stack sandbox/runtime issue) — not an auto-mount failure. Check the "
-        "sandbox-supervisor logs; try the minimal image (drop image_variant)."
+        "  NOTE: `not_found` / empty listing → files weren't seeded (is the running "
+        "sandbox-supervisor rebuilt with the seed code? `make dev-up` now rebuilds it). "
+        "`runner closed the connection` → sandbox didn't launch (image/runtime issue)."
     )
     return False
 
