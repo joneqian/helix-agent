@@ -9,8 +9,7 @@ from helix_agent.protocol.skill import SkillSupportingFile
 
 def _payload(*, body: str = "do the thing", files: list[str] | None = None) -> SkillZipPayload:
     supporting = {
-        path: SkillSupportingFile(content="", size=0, mime="text/plain")
-        for path in (files or [])
+        path: SkillSupportingFile(content="", size=0, mime="text/plain") for path in (files or [])
     }
     return SkillZipPayload(
         name="x",
