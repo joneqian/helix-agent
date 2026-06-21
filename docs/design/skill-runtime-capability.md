@@ -100,9 +100,14 @@ Three counter-intuitive findings drove the next decision:
    open-ended market (every skill's arbitrary pip/binary). Widening it is a
    curated-vs-open-ended architecture choice (route ① vs ②, §5.4/§5.5).
 3. **C2 (~30%) looks largest but is the cheapest** (extend a pinned requirements
-   list); **E (browser) + F (network) are the expensive, hard ceiling** —
-   ~20% that *no* sandbox approach reaches because they need a live browser or
-   external egress, which `network=none` forbids by design → MCP territory.
+   list). **F (network, ~12%) is addressable, not a ceiling** — the sandbox is
+   not truly `network=none` (it sits behind a credential-proxy on an internal
+   net), and the per-agent `NetworkSpec` already exists but is unwired; wiring a
+   transparent, audited egress proxy lets F-bucket skills reach public APIs (see
+   [sandbox-egress-per-agent.md](./sandbox-egress-per-agent.md)). **E (browser,
+   ~8%) is the real hard part** — a live headless browser is heavy and its job is
+   inherently external/stateful → MCP territory. (An earlier draft called F a
+   hard ceiling; that was overstated.)
 
 ## 4. Architectural division: Skill vs MCP
 
