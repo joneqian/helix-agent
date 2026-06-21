@@ -25,8 +25,13 @@ Usage (bring the dev stack up first — ``make dev-up``)::
     # Phase 1 only (no agent needed):
     uv run python tools/eval/verify_live_skill_runtime.py --import-only
 
-    # Both phases — the agent must bind the skill + grant `bash`
-    # (and `image_variant: office` for the Anthropic doc skills):
+    # One-shot end-to-end (import → activate skill → register the bundled
+    # manifests/pptx-skill-test agent → auto-mount proof). Edit the manifest's
+    # model block to your configured provider first:
+    uv run python tools/eval/verify_live_skill_runtime.py --setup
+
+    # Phase 2 against an agent you already registered (binds the skill + bash,
+    # image_variant: office):
     uv run python tools/eval/verify_live_skill_runtime.py --agent pptx-agent@1.0.0
 
 Defaults import ``anthropics/skills`` → ``skills/pptx``. Exit code is non-zero
@@ -40,6 +45,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -93,11 +99,11 @@ def _content_text(msg: dict[str, Any]) -> str:
 
 async def phase_import(
     client: httpx.AsyncClient, *, source: str, skill: str
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, str | None]:
     """Import the skill from GitHub; assert a runtime classification is returned.
 
-    Returns ``(ok, stored_skill_name)``. The platform skills routes are raw
-    (NOT enveloped), so the response is read directly.
+    Returns ``(ok, stored_skill_name, skill_id)``. The platform skills routes
+    are raw (NOT enveloped), so the response is read directly.
     """
     print(f"[phase 1] import {source} #{skill}")
     resp = await client.post(
@@ -106,19 +112,58 @@ async def phase_import(
     )
     if resp.status_code not in (200, 201):
         print(f"  FAIL — import HTTP {resp.status_code}: {resp.text[:300]}")
-        return False, None
+        return False, None, None
     body = resp.json()
-    name = (body.get("skill") or {}).get("name")
+    skill_obj = body.get("skill") or {}
+    name = skill_obj.get("name")
+    skill_id = skill_obj.get("id")
     runtime = body.get("runtime")
     print(f"  imported name={name!r} created={body.get('created')}")
     if not isinstance(runtime, dict):
         print("  FAIL — response carries no `runtime` classification (§5.2 regressed)")
-        return False, name
+        return False, name, skill_id
     print(
         f"  runtime: kind={runtime.get('kind')} runnable={runtime.get('runnable')}\n"
         f"           hint={runtime.get('hint')}"
     )
-    return True, name
+    return True, name, skill_id
+
+
+async def activate_platform_skill(client: httpx.AsyncClient, *, skill_id: str) -> bool:
+    """PATCH the platform skill to ACTIVE (imported skills start DRAFT, and an
+    agent can only bind an ACTIVE platform skill). Idempotent."""
+    print(f"[setup] activate platform skill {skill_id}")
+    resp = await client.patch(f"/v1/platform/skills/{skill_id}", json={"status": "active"})
+    if resp.status_code not in (200, 201):
+        print(f"  FAIL — activate HTTP {resp.status_code}: {resp.text[:200]}")
+        return False
+    print(f"  status now: {resp.json().get('status')}")
+    return True
+
+
+async def register_agent(
+    client: httpx.AsyncClient, *, manifest_path: str
+) -> tuple[str, str] | None:
+    """Register the agent from a manifest YAML; return ``(name, version)``.
+
+    Idempotent: a 409 (already registered) is treated as success. Returns None
+    on a real failure.
+    """
+    import yaml
+
+    text = Path(manifest_path).read_text()
+    meta = (yaml.safe_load(text) or {}).get("metadata", {})
+    name, version = meta.get("name"), str(meta.get("version"))
+    print(f"[setup] register agent {name}@{version} from {manifest_path}")
+    resp = await client.post("/v1/agents", json={"manifest_yaml": text})
+    if resp.status_code == 409:
+        print("  already registered — reusing")
+        return name, version
+    if resp.status_code not in (200, 201):
+        print(f"  FAIL — register HTTP {resp.status_code}: {resp.text[:300]}")
+        return None
+    print("  registered")
+    return name, version
 
 
 # ── Phase 2 — auto-mount proof ───────────────────────────────────────────────
@@ -187,6 +232,11 @@ async def phase_mount(client: httpx.AsyncClient, *, agent: str, skill_name: str)
 # ── main ─────────────────────────────────────────────────────────────────────
 
 
+_DEFAULT_MANIFEST = (
+    Path(__file__).resolve().parents[2] / "manifests" / "pptx-skill-test" / "v1.0.0.yaml"
+)
+
+
 async def _amain(args: argparse.Namespace) -> int:
     base_url = args.base_url or _require_env("HELIX_API_URL")
     token = _require_env("HELIX_API_TOKEN")  # never logged
@@ -194,12 +244,30 @@ async def _amain(args: argparse.Namespace) -> int:
 
     ok = True
     async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=180.0) as client:
-        import_ok, skill_name = await phase_import(client, source=args.source, skill=args.skill)
+        import_ok, skill_name, skill_id = await phase_import(
+            client, source=args.source, skill=args.skill
+        )
         ok = ok and import_ok
-        if not args.import_only:
+        target_name = args.skill_name or skill_name
+
+        if args.setup:
+            # One-shot: activate the imported skill → register the agent →
+            # auto-mount proof. Each step idempotent.
+            if skill_id:
+                ok = ok and await activate_platform_skill(client, skill_id=skill_id)
+            registered = await register_agent(client, manifest_path=args.manifest)
+            if registered is None:
+                ok = False
+            else:
+                name, version = registered
+                if not target_name:
+                    raise SystemExit("could not determine the stored skill name")
+                ok = ok and await phase_mount(
+                    client, agent=f"{name}@{version}", skill_name=target_name
+                )
+        elif not args.import_only:
             if not args.agent:
-                raise SystemExit("phase 2 needs --agent name@version (or pass --import-only)")
-            target_name = args.skill_name or skill_name
+                raise SystemExit("phase 2 needs --agent name@version (or --import-only / --setup)")
             if not target_name:
                 raise SystemExit("could not determine the stored skill name; pass --skill-name")
             ok = ok and await phase_mount(client, agent=args.agent, skill_name=target_name)
@@ -220,6 +288,16 @@ def main(argv: list[str] | None = None) -> int:
         help="stored skill name for the /workspace path (else taken from import response)",
     )
     parser.add_argument("--import-only", action="store_true", help="run phase 1 only")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="one-shot: import → activate skill → register agent → auto-mount proof",
+    )
+    parser.add_argument(
+        "--manifest",
+        default=str(_DEFAULT_MANIFEST),
+        help="agent manifest YAML for --setup (default: manifests/pptx-skill-test/v1.0.0.yaml)",
+    )
     args = parser.parse_args(argv)
     return asyncio.run(_amain(args))
 
