@@ -14,16 +14,19 @@ apiVersion: helix.io/v1
 kind: Agent
 metadata:
   name: pptx-skill-test
-  version: "1.0.0"
+  version: '1.0.0'
   tenant: canonical
 spec:
   description: >-
     Live auto-mount test agent: binds the platform pptx skill + bash in the
     office sandbox to prove /workspace/skills/pptx/ is seeded on acquire.
 
+  tenant_config:
+    isolation_level: dedicated_sandbox
+
   model:
-    provider: anthropic # ← change to your configured provider
-    name: claude-sonnet-4-5 # ← and its model name
+    provider: deepseek # ← change to your configured provider
+    name: deepseek-v4-pro # ← and its model name
     temperature: 0.2
     max_tokens: 4096
 
@@ -44,12 +47,12 @@ spec:
     runtime: gvisor
     image_variant: office # pptx scripts need pandas/Pillow → office image
     resources:
-      cpu: "1.0"
+      cpu: '1.0'
       memory: 1Gi
     network:
       egress: proxy
       allowlist:
-        - api.anthropic.com # ← change to your model's API host
+        - api.deepseek.com # ← change to your model's API host
     filesystem:
       readonly_root: true
       writable:
