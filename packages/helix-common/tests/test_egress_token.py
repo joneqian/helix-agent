@@ -2,29 +2,35 @@
 
 from __future__ import annotations
 
+import pytest
+
 from helix_agent.common.egress_token import (
+    host_in_allowlist,
     mint_egress_token,
     verify_egress_token,
 )
 
 _SECRET = "test-secret"
-_FIELDS = {
-    "tenant_id": "11111111-1111-1111-1111-111111111111",
-    "agent_name": "pptx-agent",
-    "agent_version": "1.0.0",
-    "sandbox_id": "sbx-abc",
-}
+_TENANT = "11111111-1111-1111-1111-111111111111"
 
 
-def _mint(*, expires_at: float = 1000.0) -> str:
-    return mint_egress_token(_SECRET, expires_at=expires_at, **_FIELDS)
+def _mint(*, expires_at: float = 1000.0, allowlist: tuple[str, ...] = ()) -> str:
+    return mint_egress_token(
+        _SECRET,
+        tenant_id=_TENANT,
+        agent_name="pptx-agent",
+        agent_version="1.0.0",
+        sandbox_id="sbx-abc",
+        expires_at=expires_at,
+        allowlist=allowlist,
+    )
 
 
 def test_round_trip_returns_identity() -> None:
     token = _mint(expires_at=1000.0)
     identity = verify_egress_token(_SECRET, token, now=500.0)
     assert identity is not None
-    assert identity.tenant_id == _FIELDS["tenant_id"]
+    assert identity.tenant_id == _TENANT
     assert identity.agent_name == "pptx-agent"
     assert identity.agent_version == "1.0.0"
     assert identity.sandbox_id == "sbx-abc"
@@ -58,3 +64,32 @@ def test_malformed_tokens_return_none() -> None:
 def test_empty_secret_rejected_on_verify() -> None:
     token = _mint()
     assert verify_egress_token("", token, now=500.0) is None
+
+
+def test_allowlist_round_trips_in_token() -> None:
+    token = _mint(allowlist=("api.openai.com", "files.example.com"))
+    identity = verify_egress_token(_SECRET, token, now=500.0)
+    assert identity is not None
+    assert identity.allowlist == ("api.openai.com", "files.example.com")
+
+
+def test_no_allowlist_defaults_empty() -> None:
+    identity = verify_egress_token(_SECRET, _mint(), now=500.0)
+    assert identity is not None
+    assert identity.allowlist == ()
+
+
+@pytest.mark.parametrize(
+    ("host", "allowlist", "expected"),
+    [
+        ("api.openai.com", (), True),  # empty allowlist → allow all
+        ("api.openai.com", ("api.openai.com",), True),  # exact
+        ("api.openai.com", ("openai.com",), True),  # subdomain of entry
+        ("openai.com", ("openai.com",), True),  # apex
+        ("evilopenai.com", ("openai.com",), False),  # not a subdomain
+        ("api.evil.com", ("openai.com",), False),  # unrelated
+        ("API.OpenAI.com", ("openai.com",), True),  # case-insensitive
+    ],
+)
+def test_host_in_allowlist(host: str, allowlist: tuple[str, ...], expected: bool) -> None:
+    assert host_in_allowlist(host, allowlist) is expected
