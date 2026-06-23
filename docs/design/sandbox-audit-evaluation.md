@@ -65,8 +65,10 @@ governance the operator already chose**, not safety over-blocks — out of scope
 - **Sandbox exec code was not recorded** (`_emit_tool_audit` logged arg *names*
   only). **Phase 1 fixes this**: `exec_python`/`bash` now record a capped code
   preview + full-content `sha256` + byte size in the tool-call audit row.
-- (Phase 3/4) `skill_seed` drops files with only a log; egress 407/405 and
-  output-screen blocks emit metrics but no durable audit row — to be closed.
+- (Phase 3/4 — **now closed in Phase 6**) `skill_seed` dropped files with only a
+  log; egress 407/405 and output-screen blocks emitted metrics but no durable
+  audit row. Egress 407 + output-screen closed in Phase 4; `skill_seed` closed in
+  Phase 6.
 
 ## 6. Change set (phased)
 
@@ -102,3 +104,13 @@ governance the operator already chose**, not safety over-blocks — out of scope
    shape), and `TenantRateLimitMiddleware` resolves the per-tenant override
    (cached, TTL, own-tenant RLS read) and applies it. admin-ui shows the current
    override in the tenant-config read view (edit via the JSON surface).
+6. **Phase 6 (DONE):** closed the last "audit-trail substitute" gap — `skill_seed`
+   no longer silently drops a file with only a log line. `build_skill_seed_files`
+   now returns the dropped files alongside the seed set; `build_agent` writes one
+   durable `audit_log` row per security-relevant drop (`drift` /
+   `bad_base64` → `SKILL_DRIFT_DETECTED`; `injection` →
+   `SKILL_PROMPT_INJECTION_BLOCKED`), `actor=system`, `result=denied`, details
+   carry skill name + path only (never the dropped content — which could be the
+   injection payload itself). A **cap-truncation** drop stays a log line: it is a
+   capacity limit, not a tamper/injection signal (the "no silent caps" warning
+   already names the dropped count + bytes).

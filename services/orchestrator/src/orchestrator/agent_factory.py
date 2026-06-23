@@ -116,7 +116,7 @@ from orchestrator.tools.skill_authoring import (
     SKILL_AUTHORING_BUILTINS,
     build_skill_authoring_tools,
 )
-from orchestrator.tools.skill_seed import build_skill_seed_files
+from orchestrator.tools.skill_seed import build_skill_seed_files, seed_drop_audit_entries
 from orchestrator.tools.update_plan import UpdatePlanTool
 
 logger = logging.getLogger("helix.orchestrator.agent_factory")
@@ -510,9 +510,19 @@ async def build_agent(
     # skill-runtime §5.1 — activated skills' files (SKILL.md + scripts + reference),
     # U-21 drift/threat-filtered, materialized under /workspace/skills/<name>/ on
     # every sandbox acquire so bundled scripts run as authored.
-    skill_seed_files = build_skill_seed_files(
+    seed_result = build_skill_seed_files(
         loaded_skills.resolved_versions, loaded_skills.activated_skill_names
     )
+    skill_seed_files = seed_result.files
+    # skill-runtime §5.1 — a seeded file dropped for drift/injection/corruption
+    # is a security signal; write a durable audit row so the silent drop is
+    # traceable (audit-over-blocking). Best-effort: never fail a build on audit.
+    if seed_result.drops and audit_logger is not None and isinstance(tenant_id, UUID):
+        for entry in seed_drop_audit_entries(tenant_id, seed_result.drops):
+            try:
+                await audit_logger.write(entry)
+            except Exception:
+                logger.warning("skill_seed.audit_emit_failed", exc_info=True)
 
     # sandbox-egress §3.3 — bind the agent's egress policy + identity onto the
     # supervisor client so EVERY sandbox acquire (exec_python/bash/file_ops/
