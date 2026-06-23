@@ -454,6 +454,38 @@ async def test_get_supporting_file_returns_base64_content(setup: Setup) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_supporting_file_deep_nested_path(setup: Setup) -> None:
+    """Regression: a deeply-nested ``.py``/``.xsd`` path (as shipped by the real
+    anthropics/skills pptx catalog) imported fine but the single-file API's
+    validator had drifted (depth 3, no ``.xsd``) → "invalid supporting file
+    path". The validator now reuses the ZIP importer's depth + extension lists."""
+    import base64
+
+    client, _ = setup
+    deep_py = b"# init\n"
+    deep_xsd = b"<xsd:schema/>\n"
+    blob = _build_skill_md_zip(
+        extras={
+            "scripts/office/helpers/__init__.py": deep_py,
+            "scripts/office/schemas/ecma/fouth-edition/opc-contentTypes.xsd": deep_xsd,
+        }
+    )
+    create = await client.post(
+        "/v1/skills/import", files={"file": ("foo.skill", blob, "application/zip")}
+    )
+    skill_id = create.json()["skill"]["id"]
+    version_n = create.json()["version"]["version"]
+
+    base = f"/v1/skills/{skill_id}/versions/{version_n}/supporting-files"
+    r1 = await client.get(f"{base}/scripts/office/helpers/__init__.py")
+    assert r1.status_code == 200
+    assert base64.b64decode(r1.json()["content"]) == deep_py
+    r2 = await client.get(f"{base}/scripts/office/schemas/ecma/fouth-edition/opc-contentTypes.xsd")
+    assert r2.status_code == 200
+    assert base64.b64decode(r2.json()["content"]) == deep_xsd
+
+
+@pytest.mark.asyncio
 async def test_get_supporting_file_404_for_unknown_path(setup: Setup) -> None:
     client, _ = setup
     blob = _build_skill_md_zip(extras={"reference/notes.md": b"hello"})

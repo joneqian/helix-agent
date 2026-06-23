@@ -39,6 +39,9 @@ from control_plane.api._skill_moderation import (
     moderate_tool_names,
 )
 from control_plane.api._skill_zip import (
+    ALLOWED_EXTENSIONS,
+    MAX_PATH_DEPTH,
+    TEXT_EXTENSIONS,
     SkillZipError,
     build_skill_zip,
     parse_skill_zip,
@@ -154,47 +157,16 @@ class _PutSupportingFileBody(BaseModel):
     mime: str = Field(default="", max_length=128)
 
 
-# Path-validation allowlist used by the supporting-files single-file
-# mutation API. Stays in sync with the U-18 ZIP validator extension list
-# in ``_skill_zip.py``; if you add an extension here, mirror there.
-_SUPPORTING_FILE_EXT_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        ".md",
-        ".txt",
-        ".yaml",
-        ".yml",
-        ".json",
-        ".py",
-        ".js",
-        ".ts",
-        ".sh",
-        ".toml",
-        ".html",
-        ".css",
-        ".png",
-        ".jpg",
-        ".svg",
-    }
-)
-_SUPPORTING_FILE_TEXT_EXTS: frozenset[str] = frozenset(
-    {
-        ".md",
-        ".txt",
-        ".yaml",
-        ".yml",
-        ".json",
-        ".py",
-        ".js",
-        ".ts",
-        ".sh",
-        ".toml",
-        ".html",
-        ".css",
-    }
-)
+# Path-validation lists for the supporting-files single-file mutation API —
+# REUSE the canonical U-18 ZIP-validator sets so the two never drift (a skill
+# imported with ``.xsd`` files nested 6 dirs deep, e.g. anthropics/skills pptx,
+# must also be readable/editable through this single-file API). Previously these
+# were hand-duplicated + drifted (depth 3, no ``.xsd``) → "invalid supporting
+# file path" on legitimately-imported nested files.
+_SUPPORTING_FILE_EXT_ALLOWLIST: frozenset[str] = ALLOWED_EXTENSIONS
+_SUPPORTING_FILE_TEXT_EXTS: frozenset[str] = TEXT_EXTENSIONS
 _MAX_SUPPORTING_FILE_SIZE: int = 1 * 1024 * 1024  # 1 MB per file
 _MAX_SUPPORTING_PATH_LEN: int = 256
-_MAX_SUPPORTING_DEPTH: int = 3
 _SUPPORTING_PATH_SEGMENT_RE: re.Pattern[str] = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 
@@ -210,7 +182,9 @@ def _validate_supporting_file_path(path: str) -> str:
     if "\\" in path or path.startswith("/") or ".." in path.split("/"):
         raise SkillPackageLayoutError("invalid supporting file path")
     segments = path.split("/")
-    if len(segments) > _MAX_SUPPORTING_DEPTH:
+    # Dir-depth cap mirrors the ZIP validator (``len(dirs) > MAX_PATH_DEPTH``);
+    # segments = dirs + filename, so subtract one.
+    if len(segments) - 1 > MAX_PATH_DEPTH:
         raise SkillPackageLayoutError("invalid supporting file path")
     for segment in segments:
         if not _SUPPORTING_PATH_SEGMENT_RE.fullmatch(segment):
