@@ -127,3 +127,15 @@ a:hover { color: var(--hx-text-link-hover); }
 .skill-file-tree .ant-tree .ant-tree-switcher {
   width: 16px;
 }
+/* Let a long file/dir name truncate (text-overflow: ellipsis) instead of
+   overflowing the panel: the node content wrapper + title must be allowed to
+   shrink below their content width (min-width: 0) and clip. */
+.skill-file-tree .ant-tree .ant-tree-node-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.skill-file-tree .ant-tree .ant-tree-node-content-wrapper .ant-tree-title {
+  display: block;
+  overflow: hidden;
+}

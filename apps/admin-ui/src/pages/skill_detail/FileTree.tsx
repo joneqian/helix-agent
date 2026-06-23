@@ -41,14 +41,25 @@ function TreeRow({
   color?: string;
 }) {
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+    <span
+      style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, width: "100%" }}
+    >
       <span style={{ flexShrink: 0, display: "inline-flex" }}>{icon}</span>
-      <Text
-        ellipsis={{ tooltip: label }}
-        style={{ fontFamily: "var(--hx-font-mono)", fontSize: 12, color }}
+      <span
+        title={label}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          fontFamily: "var(--hx-font-mono)",
+          fontSize: 12,
+          color,
+        }}
       >
         {label}
-      </Text>
+      </span>
     </span>
   );
 }
@@ -167,7 +178,7 @@ export function FileTree({
       <div
         data-testid="skill-file-tree"
         className="skill-file-tree"
-        style={{ maxHeight: 480, overflow: "auto" }}
+        style={{ maxHeight: 480, overflowY: "auto", overflowX: "hidden" }}
       >
         <Tree<DataNode>
           treeData={[treeData[0], treeData[treeData.length - 1]]}
@@ -203,7 +214,7 @@ export function FileTree({
     <div
       data-testid="skill-file-tree"
       className="skill-file-tree"
-      style={{ maxHeight: 480, overflow: "auto" }}
+      style={{ maxHeight: 480, overflowY: "auto", overflowX: "hidden" }}
     >
       <Tree<DataNode>
         treeData={treeData}
