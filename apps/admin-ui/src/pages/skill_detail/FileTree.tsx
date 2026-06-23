@@ -19,7 +19,7 @@ import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { Empty, Tree, Typography } from "antd";
 import type { DataNode } from "antd/es/tree";
-import { FileCode2, FilePlus, Folder, FolderOpen } from "lucide-react";
+import { ChevronDown, ChevronRight, FileCode2, FilePlus, Folder } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
@@ -232,9 +232,9 @@ export function FileTree({
         }}
         switcherIcon={({ expanded }) =>
           expanded ? (
-            <FolderOpen size={11} strokeWidth={1.5} />
+            <ChevronDown size={13} strokeWidth={2} />
           ) : (
-            <Folder size={11} strokeWidth={1.5} />
+            <ChevronRight size={13} strokeWidth={2} />
           )
         }
         showIcon={false}
