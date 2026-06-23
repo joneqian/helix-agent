@@ -15,6 +15,7 @@
  * ``onSelect``; the parent gates the click on the "do you have unsaved
  * changes?" warning before re-rendering the editor.
  */
+import type { ReactNode } from "react";
 import { useMemo } from "react";
 import { Empty, Tree, Typography } from "antd";
 import type { DataNode } from "antd/es/tree";
@@ -25,6 +26,32 @@ const { Text } = Typography;
 
 export const SKILL_MD_PATH = "SKILL.md";
 const ADD_FILE_NODE_KEY = "__add_file__";
+
+/** One tree row: a non-shrinking icon + a mono label that truncates with an
+ * ellipsis and reveals the full text in a tooltip on hover (GitHub-style). The
+ * ``minWidth: 0`` on the flex row is what lets the label actually ellipsize
+ * inside antd's ``blockNode`` width instead of wrapping char-by-char. */
+function TreeRow({
+  icon,
+  label,
+  color,
+}: {
+  icon: ReactNode;
+  label: string;
+  color?: string;
+}) {
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+      <span style={{ flexShrink: 0, display: "inline-flex" }}>{icon}</span>
+      <Text
+        ellipsis={{ tooltip: label }}
+        style={{ fontFamily: "var(--hx-font-mono)", fontSize: 12, color }}
+      >
+        {label}
+      </Text>
+    </span>
+  );
+}
 
 interface FileTreeProps {
   paths: readonly string[];
@@ -39,14 +66,7 @@ function buildTree(paths: readonly string[], t: (k: string) => string): DataNode
   const root: DataNode[] = [
     {
       key: SKILL_MD_PATH,
-      title: (
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <FileCode2 size={13} strokeWidth={1.5} />
-          <Text style={{ fontFamily: "var(--hx-font-mono)", fontSize: 12 }}>
-            {SKILL_MD_PATH}
-          </Text>
-        </span>
-      ),
+      title: <TreeRow icon={<FileCode2 size={13} strokeWidth={1.5} />} label={SKILL_MD_PATH} />,
       isLeaf: true,
     },
   ];
@@ -88,12 +108,7 @@ function buildTree(paths: readonly string[], t: (k: string) => string): DataNode
       const childPrefix = prefix ? `${prefix}/${seg}` : seg;
       out.push({
         key: `dir:${childPrefix}`,
-        title: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Folder size={13} strokeWidth={1.5} />
-            <Text style={{ fontFamily: "var(--hx-font-mono)", fontSize: 12 }}>{seg}/</Text>
-          </span>
-        ),
+        title: <TreeRow icon={<Folder size={13} strokeWidth={1.5} />} label={`${seg}/`} />,
         selectable: false,
         children: toNodes(child, childPrefix),
       });
@@ -102,12 +117,7 @@ function buildTree(paths: readonly string[], t: (k: string) => string): DataNode
       const name = path.slice(path.lastIndexOf("/") + 1);
       out.push({
         key: path,
-        title: (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <FileCode2 size={12} strokeWidth={1.5} />
-            <Text style={{ fontFamily: "var(--hx-font-mono)", fontSize: 12 }}>{name}</Text>
-          </span>
-        ),
+        title: <TreeRow icon={<FileCode2 size={12} strokeWidth={1.5} />} label={name} />,
         isLeaf: true,
       });
     }
@@ -151,23 +161,14 @@ export function FileTree({
 }: FileTreeProps) {
   const { t } = useTranslation();
   const treeData = useMemo(() => buildTree(paths, t), [paths, t]);
-  const expandedKeys = useMemo(() => {
-    // Expand every ancestor directory so the full nested tree is visible.
-    const dirs = new Set<string>();
-    for (const p of paths) {
-      const segs = p.split("/");
-      let prefix = "";
-      for (let i = 0; i < segs.length - 1; i++) {
-        prefix = prefix ? `${prefix}/${segs[i]}` : segs[i];
-        dirs.add(`dir:${prefix}`);
-      }
-    }
-    return Array.from(dirs);
-  }, [paths]);
 
   if (paths.length === 0) {
     return (
-      <div data-testid="skill-file-tree">
+      <div
+        data-testid="skill-file-tree"
+        className="skill-file-tree"
+        style={{ maxHeight: 480, overflow: "auto" }}
+      >
         <Tree<DataNode>
           treeData={[treeData[0], treeData[treeData.length - 1]]}
           selectedKeys={selected ? [selected] : []}
@@ -199,11 +200,15 @@ export function FileTree({
   }
 
   return (
-    <div data-testid="skill-file-tree">
+    <div
+      data-testid="skill-file-tree"
+      className="skill-file-tree"
+      style={{ maxHeight: 480, overflow: "auto" }}
+    >
       <Tree<DataNode>
         treeData={treeData}
         selectedKeys={selected ? [selected] : []}
-        defaultExpandedKeys={expandedKeys}
+        defaultExpandedKeys={[]}
         onSelect={(keys) => {
           const key = keys[0];
           if (typeof key !== "string") return;
