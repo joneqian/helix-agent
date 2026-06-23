@@ -1172,17 +1172,6 @@ export interface TranslationKeys {
     unpinned_toast: string;
     pin_tooltip_on: string;
     pin_tooltip_off: string;
-    batch_toolbar_aria: string;
-    batch_select_row: string;
-    batch_select_all: string;
-    batch_selected: string;
-    batch_lock: string;
-    batch_unlock: string;
-    batch_archive: string;
-    batch_activate: string;
-    batch_clear: string;
-    batch_done: string;
-    batch_partial: string;
     eta_days_to_stale: string;
     eta_due_soon: string;
     // Stream X-6 — merged tenant/platform library badges.
@@ -1237,6 +1226,17 @@ export interface TranslationKeys {
     manage: string;
     pin: string;
     unpin: string;
+    batch_toolbar_aria: string;
+    batch_select_row: string;
+    batch_select_all: string;
+    batch_selected: string;
+    batch_lock: string;
+    batch_unlock: string;
+    batch_archive: string;
+    batch_activate: string;
+    batch_clear: string;
+    batch_done: string;
+    batch_partial: string;
     not_admin_title: string;
     not_admin_body: string;
     failed_to_load: string;
@@ -2899,17 +2899,6 @@ const en: TranslationKeys = {
       "Locked — auto-cleanup never marks this skill stale/archived, no matter how long it goes unused.",
     pin_tooltip_off:
       "Lock: stop auto-cleanup from ever marking this skill stale/archived (by default a long-unused skill goes stale, then archived).",
-    batch_toolbar_aria: "Bulk-edit the selected skills",
-    batch_select_row: "Select skill {{name}}",
-    batch_select_all: "Select all skills on this page",
-    batch_selected: "{{count}} selected",
-    batch_lock: "Lock",
-    batch_unlock: "Unlock",
-    batch_archive: "Archive",
-    batch_activate: "Activate",
-    batch_clear: "Clear",
-    batch_done: "Done: {{ok}} updated",
-    batch_partial: "Done: {{ok}} updated, {{failed}} failed",
     eta_days_to_stale: "{{days}}d to stale",
     eta_due_soon: "stale soon",
     source_platform: "Platform",
@@ -2968,6 +2957,17 @@ const en: TranslationKeys = {
     manage: "Manage",
     pin: "Lock",
     unpin: "Unlock",
+    batch_toolbar_aria: "Bulk-edit the selected skills",
+    batch_select_row: "Select skill {{name}}",
+    batch_select_all: "Select all skills on this page",
+    batch_selected: "{{count}} selected",
+    batch_lock: "Lock",
+    batch_unlock: "Unlock",
+    batch_archive: "Archive",
+    batch_activate: "Activate",
+    batch_clear: "Clear",
+    batch_done: "Done: {{ok}} updated",
+    batch_partial: "Done: {{ok}} updated, {{failed}} failed",
     not_admin_title: "System admin only",
     not_admin_body:
       "The platform skill catalog is managed by system admins. Ask one to add skills.",

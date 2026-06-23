@@ -172,6 +172,8 @@ describe("SettingsPlatformSkills page", () => {
     const checkboxes = screen.getAllByRole("checkbox");
     await userEvent.click(checkboxes[0]);
     await waitFor(() => expect(screen.getByTestId("ps-batch-toolbar")).toBeInTheDocument());
+    // Labels must resolve, not render raw i18n keys (regression #769).
+    expect(screen.getByTestId("ps-batch-lock").textContent).not.toContain("platform_skills");
 
     await userEvent.click(screen.getByTestId("ps-batch-lock"));
     await waitFor(() => expect(patched.length).toBe(2));

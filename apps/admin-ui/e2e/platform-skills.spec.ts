@@ -303,6 +303,8 @@ test("system_admin batch-locks selected skills from the toolbar", async ({ page 
   // Header checkbox selects all rows → the batch toolbar appears.
   await page.getByRole("checkbox").first().check();
   await expect(page.getByTestId("ps-batch-toolbar")).toBeVisible();
+  // Guard: labels must resolve, not show raw i18n keys (regression #769).
+  await expect(page.getByTestId("ps-batch-lock")).not.toContainText("platform_skills");
 
   const patched: string[] = [];
   page.on("request", (r) => {
