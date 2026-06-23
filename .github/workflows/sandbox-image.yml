@@ -45,14 +45,25 @@ permissions:
 
 jobs:
   build:
-    name: Build + smoke + Trivy (+ push on main)
+    name: Build + smoke + Trivy (+ multi-arch push on main)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # QEMU-emulated arm64 build (push step) is slower than the native amd64
+    # load build; allow headroom for the cold emulated pass (cache warms it
+    # after the first main push).
+    timeout-minutes: 30
     steps:
       # Actions are SHA-pinned (a mutable tag could be re-pointed at malicious
       # code in this credential-holding workflow); the trailing comment tracks
       # the human-readable version.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # QEMU lets the amd64 runner cross-build the linux/arm64 image for the
+      # multi-arch push (Apple-silicon dev machines pull arm64). Only the push
+      # step is multi-arch — the local-load build below stays native amd64
+      # (docker load can't ingest a multi-platform image; the smoke/Trivy gate
+      # runs on the native arch, which is the standard pattern).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
@@ -117,13 +128,17 @@ jobs:
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
-      - name: Build + push to ACR
+      - name: Build + push to ACR (multi-arch)
         if: github.event_name != 'pull_request' && vars.ALIYUN_ACR_REGISTRY != ''
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: infra/sandbox-image
           file: infra/sandbox-image/Dockerfile
           push: true
+          # amd64 (Linux prod hosts) + arm64 (Apple-silicon dev). The Dockerfile
+          # has no arch-specific pins — apk/pip resolve per-arch — so one build
+          # yields a manifest list covering both.
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ vars.ALIYUN_ACR_REGISTRY }}/${{ vars.ALIYUN_ACR_NAMESPACE }}/helix-sandbox:${{ github.sha }}
             ${{ vars.ALIYUN_ACR_REGISTRY }}/${{ vars.ALIYUN_ACR_NAMESPACE }}/helix-sandbox:latest
