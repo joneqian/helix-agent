@@ -244,9 +244,14 @@ class FilesystemSpec(BaseModel):
     readonly_root: bool = True
     writable: list[str] = Field(default_factory=list)
     mounts: list[MountSpec] = Field(default_factory=list)
-    #: Stream J.15 — when ``True``, ``exec_python`` mounts the run's
-    #: user's persistent workspace volume at ``/workspace`` so files
-    #: survive across runs. ``False`` (default) → an ephemeral tmpfs.
+    #: When ``True``, enables CM-0 plan/state projection to the user's
+    #: workspace (``PLAN.md`` / ``TODO.md`` / ``MEMORY.md`` written at
+    #: turn-end and ingested at run-start). It does NOT control file
+    #: durability: any user-scoped run automatically mounts that user's
+    #: persistent workspace volume at ``/workspace`` (so files survive
+    #: idle-reclaim and restore on the next acquire), independent of this
+    #: flag. ``False`` (default) → no plan-projection; durability is still
+    #: automatic for user runs.
     persistent_workspace: bool = False
 
 

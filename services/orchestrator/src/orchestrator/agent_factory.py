@@ -130,11 +130,7 @@ def _make_workspace_writer_factory(
     per-invocation); the supervisor client is run-stable."""
 
     def factory(ctx: ToolContext) -> WorkspaceFileWriter:
-        return SandboxWorkspaceWriter(
-            client=client,
-            ctx=ctx,
-            persistent_workspace=True,
-        )
+        return SandboxWorkspaceWriter(client=client, ctx=ctx)
 
     return factory
 
@@ -545,9 +541,6 @@ async def build_agent(
     registry = await build_tool_registry(
         spec.spec.tools,
         tool_env=env,
-        # Stream J.15 — opt the exec_python sandbox into the run user's
-        # persistent workspace volume when the manifest asks for it.
-        persistent_workspace=spec.spec.sandbox.filesystem.persistent_workspace,
         # skill-runtime §5.1 — seed activated skill files into /workspace.
         skill_seed_files=skill_seed_files,
         # Stream J.4 — assemble the manifest's sub-agents into SubAgentTools;
@@ -703,10 +696,7 @@ async def build_agent(
         workspace_writer_factory = _make_workspace_writer_factory(env.supervisor_client)
         # Stream CM-0 PR2b — the file→DB counterpart: ingest a human-edited
         # PLAN.md at run start. Same gate as the projection writer.
-        workspace_ingest_node = make_workspace_ingest_node(
-            client=env.supervisor_client,
-            persistent_workspace=True,
-        )
+        workspace_ingest_node = make_workspace_ingest_node(client=env.supervisor_client)
     # Stream PI-1b — one unguessable nonce per build (stable across the
     # session so the spotlighted memory block stays prompt-cache friendly;
     # the untrusted content's author never sees it, so it can't forge the

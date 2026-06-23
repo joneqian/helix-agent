@@ -388,7 +388,6 @@ async def run_in_sandbox(
     code: str,
     timeout_s: int | None,
     ctx: ToolContext,
-    persistent_workspace: bool,
     tool_label: str,
     fallback_thread_id: str,
     seed_files: tuple[tuple[str, bytes], ...] = (),
@@ -402,19 +401,23 @@ async def run_in_sandbox(
     Tenant-scoped (the sandbox quota is per-tenant); a cancellation
     mid-exec SIGKILLs the sandbox rather than releasing it gracefully
     (Mini-ADR F-8 — a graceful release would burn the gate-#8 ≤1s budget).
+
+    Workspace durability is **automatic**: any user-scoped run (``ctx.user_id``
+    set) acquires against that user's persistent workspace volume, so files
+    survive idle-reclaim and restore on the next acquire — no manifest opt-in.
+    A run with no ``user_id`` falls back to an ephemeral tmpfs.
     """
     if ctx.tenant_id is None:
         msg = f"{tool_label} requires a tenant binding (ctx.tenant_id)"
         raise ToolBlockedError(msg)
     thread_id = str(ctx.run_id) if ctx.run_id is not None else fallback_thread_id
-    # Stream J.15 — a persistent-workspace agent acquires against the run's
-    # user volume; without the opt-in (or a user binding) the sandbox falls
-    # back to an ephemeral tmpfs.
-    user_id = ctx.user_id if persistent_workspace else None
+    # Durability is automatic for user-scoped runs: pass through the run's
+    # user so the supervisor mounts that user's persistent workspace volume;
+    # no ``user_id`` (e.g. a system run) → an ephemeral tmpfs.
     sandbox_id = await client.acquire(
         tenant_id=ctx.tenant_id,
         thread_id=thread_id,
-        user_id=user_id,
+        user_id=ctx.user_id,
         seed_files=seed_files,
     )
     cancelled = False
@@ -496,10 +499,6 @@ class ExecPythonTool:
 
     client: SupervisorClient
     output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP
-    #: Stream J.15 — when ``True`` and the run is user-scoped, acquire
-    #: the sandbox against the user's persistent workspace volume so
-    #: files survive across runs. Set from ``SandboxSpec.filesystem``.
-    persistent_workspace: bool = False
     #: skill-runtime §5.1 — the agent's activated skill files, materialized
     #: under ``/workspace/skills/<name>/`` on each acquire. Set at build.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
@@ -539,7 +538,6 @@ class ExecPythonTool:
             code=code,
             timeout_s=timeout_s,
             ctx=ctx,
-            persistent_workspace=self.persistent_workspace,
             tool_label="exec_python",
             fallback_thread_id=_FALLBACK_THREAD_ID,
             seed_files=self.skill_seed_files,

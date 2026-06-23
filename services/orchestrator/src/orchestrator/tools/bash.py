@@ -74,10 +74,6 @@ class BashTool:
 
     client: SupervisorClient
     output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP
-    #: Stream J.15 — acquire against the run user's persistent workspace
-    #: volume when ``True`` and the run is user-scoped, so files written by
-    #: a command survive across runs. Set from ``SandboxSpec.filesystem``.
-    persistent_workspace: bool = False
     #: Stream TE-8 — cross-replica per-workspace write lock. bash can write
     #: anything, so it takes the same exclusive workspace lock as write_file.
     workspace_lock: WorkspaceLock = field(default_factory=NullWorkspaceLock)
@@ -123,14 +119,14 @@ class BashTool:
         timeout_s = coerce_timeout(args.get("timeout_s"))
         # Stream TE-8 — hold the per-workspace write lock around the command so
         # bash serialises against write_file (and other bash) across replicas.
-        lock_user = ctx.user_id if self.persistent_workspace else None
-        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=lock_user):
+        # The lock scopes to the run's user — the durable workspace that may be
+        # shared across replicas; a user-less (ephemeral) run needs no lock.
+        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=ctx.user_id):
             outcome = await run_in_sandbox(
                 self.client,
                 code=_build_wrapper(command),
                 timeout_s=timeout_s,
                 ctx=ctx,
-                persistent_workspace=self.persistent_workspace,
                 tool_label="bash",
                 fallback_thread_id=_FALLBACK_THREAD_ID,
                 seed_files=self.skill_seed_files,

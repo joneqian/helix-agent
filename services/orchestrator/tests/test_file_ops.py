@@ -596,18 +596,20 @@ async def test_missing_tenant_blocked() -> None:
         await ListDirTool(client=client).call({"path": "."}, ctx=ctx)
 
 
-async def test_persistent_workspace_passes_user() -> None:
+async def test_user_run_passes_user_automatically() -> None:
+    # Durability is automatic: a user-scoped run mounts the user's persistent
+    # workspace volume — no manifest flag involved.
     client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
     ctx = _ctx()
-    await ReadFileTool(client=client, persistent_workspace=True).call({"path": "a.txt"}, ctx=ctx)
+    await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=ctx)
     # acquire received the run's user_id (persistent workspace volume).
     assert client.acquired[0][2] == ctx.user_id
 
 
-async def test_ephemeral_workspace_omits_user() -> None:
+async def test_user_less_run_omits_user() -> None:
     client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
-    tool = ReadFileTool(client=client, persistent_workspace=False)
-    await tool.call({"path": "a.txt"}, ctx=_ctx())
+    ctx = ToolContext(tenant_id=uuid4(), run_id=uuid4(), user_id=None)
+    await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=ctx)
     assert client.acquired[0][2] is None
 
 

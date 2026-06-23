@@ -75,12 +75,14 @@ async def _emit_state_ingested_audit(
         logger.exception("workspace_ingest.audit_failed")
 
 
-def make_workspace_ingest_node(
-    *, client: SupervisorClient, persistent_workspace: bool
-) -> MemoryNode:
+def make_workspace_ingest_node(*, client: SupervisorClient) -> MemoryNode:
     """Build the entry-chain ingest node. Reads ``PLAN.md`` via the warm
     sandbox, parses it, and returns ``{"plan": ...}`` only on a genuine,
-    injection-clean edit; otherwise ``{}`` (DB authoritative)."""
+    injection-clean edit; otherwise ``{}`` (DB authoritative).
+
+    The node's *existence* stays gated by the manifest ``persistent_workspace``
+    flag in ``agent_factory`` (CM-0 plan-projection opt-in); the workspace mount
+    itself follows ``ctx.user_id`` (durability automatic)."""
 
     async def workspace_ingest_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         token = cancellation_token(config)
@@ -94,11 +96,7 @@ def make_workspace_ingest_node(
             user_id=configurable_uuid(config, "user_id"),
             cancellation_token=token,
         )
-        reader = SandboxWorkspaceReader(
-            client=client,
-            ctx=ctx,
-            persistent_workspace=persistent_workspace,
-        )
+        reader = SandboxWorkspaceReader(client=client, ctx=ctx)
         current = state.get("plan")
         try:
             candidate = await token.run_cancellable(

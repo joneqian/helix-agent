@@ -63,7 +63,7 @@ def _read_envelope(content: str) -> SandboxOutcome:
 async def _run_with_plan_md(*, plan_md: str, db_plan: Plan) -> AgentState:
     """One run whose ingest node reads ``plan_md`` from the (faked) workspace."""
     client = RecordingSupervisorClient(outcome=_read_envelope(plan_md))
-    node = make_workspace_ingest_node(client=client, persistent_workspace=True)
+    node = make_workspace_ingest_node(client=client)
     llm = _ScriptedLLM(responses=[AIMessage(content="done")])
     async with make_checkpointer("memory") as cp:
         compiled = GraphRunner(checkpointer=cp).compile(

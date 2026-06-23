@@ -206,7 +206,7 @@ def _ok_envelope(path: str) -> SandboxOutcome:
 
 async def test_sandbox_writer_writes_through_warm_sandbox() -> None:
     client = RecordingSupervisorClient(outcome=_ok_envelope("PLAN.md"))
-    writer = SandboxWorkspaceWriter(client=client, ctx=_ctx(), persistent_workspace=True)
+    writer = SandboxWorkspaceWriter(client=client, ctx=_ctx())
     await writer.write(rel="PLAN.md", content="abc")
     assert len(client.execs) == 1
     code = client.execs[0][1]
@@ -224,7 +224,7 @@ async def test_sandbox_writer_raises_on_sandbox_failure() -> None:
             timed_out=False,
         )
     )
-    writer = SandboxWorkspaceWriter(client=client, ctx=_ctx(), persistent_workspace=True)
+    writer = SandboxWorkspaceWriter(client=client, ctx=_ctx())
     # The projector swallows this best-effort; the writer itself raises.
     with pytest.raises(FileOpError):
         await writer.write(rel="PLAN.md", content="abc")
