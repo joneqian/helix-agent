@@ -458,10 +458,6 @@ class ReadFileTool:
 
     client: SupervisorClient
     output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP
-    #: Stream J.15 — acquire against the run user's persistent workspace.
-    persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
@@ -497,10 +493,8 @@ class ReadFileTool:
             code=build_read_wrapper(rel, cap=self.output_char_cap),
             timeout_s=None,
             ctx=ctx,
-            persistent_workspace=self.persistent_workspace,
             tool_label="read_file",
             fallback_thread_id="read_file",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="read_file")
@@ -521,9 +515,6 @@ class WriteFileTool:
     """Atomically write a UTF-8 text file in the workspace (exposed as ``write_file``)."""
 
     client: SupervisorClient
-    persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
     #: Stream TE-8 — cross-replica per-workspace write lock held around the
@@ -569,19 +560,17 @@ class WriteFileTool:
             msg = f"write_file content exceeds the {_MAX_WRITE_CHARS}-character limit"
             raise ValueError(msg)
         # Stream TE-8 — hold the per-workspace write lock around the write exec
-        # so concurrent writes (and bash) across replicas serialise. Only a
-        # persistent workspace is shared; an ephemeral one needs no lock.
-        lock_user = ctx.user_id if self.persistent_workspace else None
-        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=lock_user):
+        # so concurrent writes (and bash) across replicas serialise. The lock
+        # scopes to the run's user (the durable workspace that may be shared);
+        # a user-less (ephemeral) run needs no lock.
+        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=ctx.user_id):
             outcome = await run_in_sandbox(
                 self.client,
                 code=build_write_wrapper(rel, content),
                 timeout_s=None,
                 ctx=ctx,
-                persistent_workspace=self.persistent_workspace,
                 tool_label="write_file",
                 fallback_thread_id="write_file",
-                image_variant=self.image_variant,
                 seed_files=self.skill_seed_files,
             )
         env = parse_envelope(outcome, tool="write_file")
@@ -602,9 +591,6 @@ class ListDirTool:
     """List a workspace directory (exposed as ``list_dir``)."""
 
     client: SupervisorClient
-    persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
@@ -639,10 +625,8 @@ class ListDirTool:
             code=build_list_wrapper(rel),
             timeout_s=None,
             ctx=ctx,
-            persistent_workspace=self.persistent_workspace,
             tool_label="list_dir",
             fallback_thread_id="list_dir",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="list_dir")
@@ -670,9 +654,6 @@ class EditFileTool:
     read. Exact match only here; fuzzy/anchored fallbacks land in TE-9b."""
 
     client: SupervisorClient
-    persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
     #: Stream TE-8 — write lock held around the edit exec.
@@ -738,17 +719,16 @@ class EditFileTool:
         if expected is not None and not isinstance(expected, str):
             msg = "edit_file 'expected_hash' must be a string"
             raise ValueError(msg)
-        lock_user = ctx.user_id if self.persistent_workspace else None
-        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=lock_user):
+        # Stream TE-8 — lock scopes to the run's user (durable workspace that
+        # may be shared across replicas); a user-less run needs no lock.
+        async with self.workspace_lock.acquire(tenant_id=ctx.tenant_id, user_id=ctx.user_id):
             outcome = await run_in_sandbox(
                 self.client,
                 code=build_edit_wrapper(rel, old, new, expected_hash=expected),
                 timeout_s=None,
                 ctx=ctx,
-                persistent_workspace=self.persistent_workspace,
                 tool_label="edit_file",
                 fallback_thread_id="edit_file",
-                image_variant=self.image_variant,
                 seed_files=self.skill_seed_files,
             )
         env = parse_envelope(outcome, tool="edit_file")
@@ -780,8 +760,6 @@ class SandboxWorkspaceWriter:
 
     client: SupervisorClient
     ctx: ToolContext
-    persistent_workspace: bool
-    image_variant: str | None = None
     #: skill-runtime §5.1 — unused by the projection helpers (they write/read
     #: agent state, not skills); kept so the shared seed plumbing is uniform.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
@@ -789,16 +767,18 @@ class SandboxWorkspaceWriter:
     async def write(self, *, rel: str, content: str) -> None:
         """Atomically write ``content`` to workspace-relative ``rel``. Raises
         :class:`FileOpError` / :class:`ToolBlockedError` on failure — the
-        projector swallows those best-effort (Mini-ADR CM-A8)."""
+        projector swallows those best-effort (Mini-ADR CM-A8).
+
+        The mount follows ``ctx.user_id`` (durability automatic); this carrier's
+        *existence* is still gated by the manifest ``persistent_workspace`` flag
+        in ``agent_factory`` (CM-0 plan/state projection opt-in)."""
         outcome = await run_in_sandbox(
             self.client,
             code=build_write_wrapper(rel, content),
             timeout_s=None,
             ctx=self.ctx,
-            persistent_workspace=self.persistent_workspace,
             tool_label="workspace_projection",
             fallback_thread_id="workspace_projection",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="workspace_projection")
@@ -817,22 +797,20 @@ class SandboxWorkspaceReader:
 
     client: SupervisorClient
     ctx: ToolContext
-    persistent_workspace: bool
-    image_variant: str | None = None
     #: skill-runtime §5.1 — unused by the projection helpers (they write/read
     #: agent state, not skills); kept so the shared seed plumbing is uniform.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
     async def read(self, rel: str) -> str | None:
+        # The mount follows ctx.user_id (durability automatic); this carrier's
+        # existence stays gated by the manifest flag in agent_factory (CM-0).
         outcome = await run_in_sandbox(
             self.client,
             code=build_read_wrapper(rel, cap=DEFAULT_OUTPUT_CHAR_CAP),
             timeout_s=None,
             ctx=self.ctx,
-            persistent_workspace=self.persistent_workspace,
             tool_label="workspace_ingest",
             fallback_thread_id="workspace_ingest",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="workspace_ingest")

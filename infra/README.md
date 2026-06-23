@@ -186,12 +186,24 @@ to this compose; ADR-0008 keeps that pathway optional.
 
 ## Sandbox image (`sandbox-image/`)
 
-The image the `exec_python` tool runs LLM-generated code in (Stream F.2 —
+The single image the `exec_python` / `bash` / `file_ops` tools run
+LLM-generated code in (Stream F.2 —
 [STREAM-F-DESIGN](../docs/streams/STREAM-F-DESIGN.md)). It is **not** a
 compose service: the Sandbox Supervisor (F.1) `docker run`s it per call.
 
+The former `minimal`/`office` variant split was collapsed into this one image
+(`docs/design/sandbox-image-consolidation.md`): `python:3.12-slim` + the
+office/data/media Python libs (pandas/openpyxl/python-docx/python-pptx/pypdf/
+pdfplumber/Pillow/matplotlib) **and** the system binaries skills shell out to —
+`soffice` (LibreOffice headless, no-GUI), `poppler-utils`, `ffmpeg` — **and**
+Node.js, plus CJK fonts/locale. So the Anthropic `docx`/`xlsx`/`pptx`/`pdf`
+catalog runs whole and JS-bundled skills run via `bash`. LibreOffice makes it
+~1.3 GB; build it once on the host daemon the supervisor drives (not by
+`make dev-up`):
+
 ```bash
-docker build -t helix-sandbox:dev infra/sandbox-image
+make -C infra build-sandbox
+# or: docker build -t helix-sandbox:dev infra/sandbox-image
 ```
 
 `runner.py` is the container's PID 1 — it reads line-delimited JSON
@@ -200,32 +212,6 @@ STREAM-F-DESIGN § 4.2). Image-level hardening (non-root uid 10000, no
 pip, exec-form entrypoint) lives in the `Dockerfile`; the `docker run`
 flags (read-only rootfs, `--cap-drop=ALL`, pids/memory limits, network)
 are applied by the F.3 `SandboxRuntimeProvider`, not baked into the image.
-
-### Office image (`sandbox-image-office/`)
-
-The heavier variant an agent gets when its manifest sets
-`sandbox.image_variant: office`. It is `python:3.12-slim` + the office
-Python libs (pandas/openpyxl/python-docx/python-pptx/pypdf/pdfplumber/
-Pillow/matplotlib) **and** the system binaries those skills shell out to —
-`soffice` (LibreOffice headless, no-GUI), `poppler-utils`, `ffmpeg` — so
-the Anthropic `docx`/`xlsx`/`pptx`/`pdf` catalog runs whole (formula
-recalc, thumbnails, accept-changes, PDF→image) rather than half-broken
-(see `docs/design/skill-runtime-capability.md` §5.4).
-
-It is **not** built by `make dev-up` (LibreOffice makes it ~1.3 GB).
-Build it once on the host daemon the supervisor drives:
-
-```bash
-make -C infra build-sandbox-office
-# or: docker build -f infra/sandbox-image-office/Dockerfile -t helix-sandbox-office:dev infra/
-```
-
-The build context is `infra/` (the **parent** dir), not the
-`sandbox-image-office/` subdir, so the Dockerfile can `COPY` the single
-shared `sandbox-image/runner.py`. The tag must match
-`HELIX_SANDBOX_IMAGE_OFFICE` (default `helix-sandbox-office:dev`). soffice
-adds ~1–3 s to the *first* `soffice` call in a container, not to container
-startup (it is not launched at boot).
 
 ### Postgres at-rest (dev)
 

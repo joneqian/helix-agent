@@ -71,7 +71,7 @@ async def test_exec_python_passes_skill_seed_files_to_acquire() -> None:
 
     await tool.call({"code": "pass"}, ctx=_ctx())
 
-    assert client.acquired[0][4] == seed  # 5th acquire tuple slot = seed_files
+    assert client.acquired[0][3] == seed  # 4th acquire tuple slot = seed_files
 
 
 @pytest.mark.asyncio
@@ -151,15 +151,16 @@ def test_exec_python_spec_advertises_code_param() -> None:
 
 
 # ---------------------------------------------------------------------------
-# J.15 — persistent workspace
+# workspace durability — automatic for user-scoped runs (no manifest flag)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_exec_python_persistent_workspace_passes_user_id() -> None:
-    # persistent_workspace + a user-scoped run → acquire carries user_id.
+async def test_exec_python_user_run_passes_user_id_without_flag() -> None:
+    # Durability is automatic: a user-scoped run acquires against the user's
+    # persistent workspace volume even though no manifest flag is set.
     client = RecordingSupervisorClient()
-    tool = ExecPythonTool(client=client, persistent_workspace=True)
+    tool = ExecPythonTool(client=client)  # no persistent_workspace knob anymore
     user_id = uuid4()
 
     await tool.call({"code": "print(1)"}, ctx=_ctx(user_id=user_id))
@@ -168,21 +169,10 @@ async def test_exec_python_persistent_workspace_passes_user_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exec_python_default_does_not_pass_user_id() -> None:
-    # Without the opt-in the sandbox stays ephemeral even for a user run.
+async def test_exec_python_without_user_falls_back_to_tmpfs() -> None:
+    # No user binding → no volume mount (ephemeral tmpfs).
     client = RecordingSupervisorClient()
     tool = ExecPythonTool(client=client)
-
-    await tool.call({"code": "print(1)"}, ctx=_ctx(user_id=uuid4()))
-
-    assert client.acquired[0][2] is None
-
-
-@pytest.mark.asyncio
-async def test_exec_python_persistent_workspace_without_user_falls_back() -> None:
-    # persistent_workspace on but the run has no user binding → tmpfs.
-    client = RecordingSupervisorClient()
-    tool = ExecPythonTool(client=client, persistent_workspace=True)
 
     await tool.call({"code": "print(1)"}, ctx=_ctx())
 
@@ -243,12 +233,16 @@ async def test_exec_python_builtin_missing_supervisor_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exec_python_builtin_carries_persistent_workspace_flag() -> None:
-    # The manifest's sandbox.filesystem.persistent_workspace reaches the tool.
+async def test_exec_python_builtin_durability_is_automatic() -> None:
+    # No manifest flag is threaded; the assembled tool relies on ctx.user_id at
+    # call time for durability. Acquire carries the run's user.
     env = ToolEnv(supervisor_client=RecordingSupervisorClient())
-    registry = await build_tool_registry(
-        [BuiltinToolSpec(name="exec_python")], tool_env=env, persistent_workspace=True
-    )
+    registry = await build_tool_registry([BuiltinToolSpec(name="exec_python")], tool_env=env)
     tool = registry.get("exec_python")
     assert isinstance(tool, ExecPythonTool)
-    assert tool.persistent_workspace is True
+
+    user_id = uuid4()
+    await tool.call({"code": "print(1)"}, ctx=_ctx(user_id=user_id))
+    client = env.supervisor_client
+    assert isinstance(client, RecordingSupervisorClient)
+    assert client.acquired[0][2] == user_id

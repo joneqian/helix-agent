@@ -126,19 +126,21 @@ async def test_bash_destroys_sandbox_on_cancellation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bash_persistent_workspace_passes_user_id() -> None:
+async def test_bash_user_run_passes_user_id_automatically() -> None:
+    # Durability is automatic: a user-scoped run mounts the user's workspace
+    # volume, no manifest flag needed.
     client = RecordingSupervisorClient()
     user_id = uuid4()
-    tool = BashTool(client=client, persistent_workspace=True)
+    tool = BashTool(client=client)
     await tool.call({"command": "ls"}, ctx=_ctx(user_id=user_id))
     assert client.acquired[0][2] == user_id
 
 
 @pytest.mark.asyncio
-async def test_bash_default_does_not_pass_user_id() -> None:
+async def test_bash_without_user_falls_back_to_tmpfs() -> None:
     client = RecordingSupervisorClient()
-    tool = BashTool(client=client)  # persistent_workspace defaults False
-    await tool.call({"command": "ls"}, ctx=_ctx(user_id=uuid4()))
+    tool = BashTool(client=client)
+    await tool.call({"command": "ls"}, ctx=_ctx())
     assert client.acquired[0][2] is None
 
 

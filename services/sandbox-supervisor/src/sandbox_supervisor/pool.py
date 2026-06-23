@@ -162,17 +162,16 @@ class PoolReplenisher:
         self._docker = docker
         self._runtime = runtime_provider
         self._settings = settings
-        #: Per-variant targets resolved once — (variant, image ref,
-        #: READY count). A tuple list (not an image-keyed dict) so two
-        #: variants configured onto the same image cannot shadow each
-        #: other's target.
+        #: Warm-pool target — (label, image ref, READY count). One entry since
+        #: the variant split was collapsed into a single image
+        #: (sandbox-image-consolidation); kept as a tuple list so the reconcile
+        #: loop + gauge labelling stay unchanged.
         self._targets: tuple[tuple[str, str, int], ...] = (
-            ("minimal", settings.sandbox_image, settings.pool_size_minimal),
-            ("office", settings.sandbox_image_office, settings.pool_size_office),
+            ("default", settings.sandbox_image, settings.pool_size),
         )
 
     async def run_once(self) -> None:
-        """Reconcile every variant, then re-set the READY gauge (PR2)."""
+        """Reconcile the pool target, then re-set the READY gauge (PR2)."""
         for variant, image_ref, target in self._targets:
             await self._reconcile(image_ref, target)
             _pool_ready.labels(variant=variant).set(self._pool.size(image_ref))
@@ -254,7 +253,7 @@ async def prefetch_images(docker: DockerClient, settings: SandboxSupervisorSetti
     background lifespan task so service readiness never waits on a
     registry.
     """
-    for image in dict.fromkeys((settings.sandbox_image, settings.sandbox_image_office)):
+    for image in (settings.sandbox_image,):
         try:
             present = await docker.image_exists(image)
         except OSError:

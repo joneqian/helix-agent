@@ -51,7 +51,6 @@ class _LockProbeClient:
         tenant_id: UUID,
         thread_id: str,
         user_id: UUID | None = None,
-        image_variant: str | None = None,
         seed_files: tuple[tuple[str, bytes], ...] = (),
     ) -> UUID:
         return uuid4()
@@ -92,20 +91,20 @@ async def test_write_file_holds_lock_during_exec() -> None:
     lock = RecordingWorkspaceLock()
     client = _LockProbeClient(lock=lock, envelope=_OK_WRITE)
     ctx = _ctx()
-    tool = WriteFileTool(client=client, persistent_workspace=True, workspace_lock=lock)
+    tool = WriteFileTool(client=client, workspace_lock=lock)
     await tool.call({"path": "a.txt", "content": "x"}, ctx=ctx)
     assert client.active_at_exec == 1  # exec ran inside the lock
     assert lock.acquired == [(ctx.tenant_id, ctx.user_id)]
     assert lock.active == 0  # released on exit
 
 
-async def test_write_file_ephemeral_locks_with_none_user() -> None:
-    # Without a persistent workspace the volume isn't shared; the lock key
-    # uses user_id=None (the PG impl then treats it as a no-op).
+async def test_write_file_user_less_locks_with_none_user() -> None:
+    # A user-less (ephemeral) run isn't shared; the lock key uses user_id=None
+    # (the PG impl then treats it as a no-op).
     lock = RecordingWorkspaceLock()
     client = _LockProbeClient(lock=lock, envelope=_OK_WRITE)
-    ctx = _ctx()
-    tool = WriteFileTool(client=client, persistent_workspace=False, workspace_lock=lock)
+    ctx = ToolContext(tenant_id=uuid4(), run_id=uuid4(), user_id=None)
+    tool = WriteFileTool(client=client, workspace_lock=lock)
     await tool.call({"path": "a.txt", "content": "x"}, ctx=ctx)
     assert lock.acquired == [(ctx.tenant_id, None)]
 
@@ -114,7 +113,7 @@ async def test_bash_holds_lock_during_exec() -> None:
     lock = RecordingWorkspaceLock()
     client = _LockProbeClient(lock=lock, envelope="done")
     ctx = _ctx()
-    tool = BashTool(client=client, persistent_workspace=True, workspace_lock=lock)
+    tool = BashTool(client=client, workspace_lock=lock)
     await tool.call({"command": "echo hi"}, ctx=ctx)
     assert client.active_at_exec == 1
     assert lock.acquired == [(ctx.tenant_id, ctx.user_id)]
@@ -127,7 +126,7 @@ async def test_write_file_releases_lock_on_cancel() -> None:
     lock = RecordingWorkspaceLock()
     client = RecordingSupervisorClient()
     client.exec_error = asyncio.CancelledError()
-    tool = WriteFileTool(client=client, persistent_workspace=True, workspace_lock=lock)
+    tool = WriteFileTool(client=client, workspace_lock=lock)
     with pytest.raises(asyncio.CancelledError):
         await tool.call({"path": "a.txt", "content": "x"}, ctx=_ctx())
     assert lock.acquired  # the lock was taken
@@ -138,18 +137,18 @@ async def test_edit_file_holds_lock_during_exec() -> None:
     lock = RecordingWorkspaceLock()
     client = _LockProbeClient(lock=lock, envelope=_OK_WRITE)
     ctx = _ctx()
-    tool = EditFileTool(client=client, persistent_workspace=True, workspace_lock=lock)
+    tool = EditFileTool(client=client, workspace_lock=lock)
     await tool.call({"path": "a.txt", "old_string": "a", "new_string": "b"}, ctx=ctx)
     assert client.active_at_exec == 1
     assert lock.acquired == [(ctx.tenant_id, ctx.user_id)]
     assert lock.active == 0
 
 
-async def test_edit_file_ephemeral_locks_with_none_user() -> None:
+async def test_edit_file_user_less_locks_with_none_user() -> None:
     lock = RecordingWorkspaceLock()
     client = _LockProbeClient(lock=lock, envelope=_OK_WRITE)
-    ctx = _ctx()
-    tool = EditFileTool(client=client, persistent_workspace=False, workspace_lock=lock)
+    ctx = ToolContext(tenant_id=uuid4(), run_id=uuid4(), user_id=None)
+    tool = EditFileTool(client=client, workspace_lock=lock)
     await tool.call({"path": "a.txt", "old_string": "a", "new_string": "b"}, ctx=ctx)
     assert lock.acquired == [(ctx.tenant_id, None)]
 

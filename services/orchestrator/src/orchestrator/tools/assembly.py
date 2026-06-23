@@ -175,8 +175,6 @@ async def build_tool_registry(
     tool_specs: Sequence[ToolSpecEntry],
     *,
     tool_env: ToolEnv,
-    persistent_workspace: bool = False,
-    image_variant: str | None = None,
     skill_seed_files: tuple[tuple[str, bytes], ...] = (),
     subagents: Sequence[SubAgentSpec] = (),
     subagent_depth: int = 0,
@@ -189,14 +187,9 @@ async def build_tool_registry(
 ) -> ToolRegistry:
     """Build a :class:`ToolRegistry` from a manifest's ``tools:`` entries.
 
-    ``persistent_workspace`` comes from the manifest's
-    ``sandbox.filesystem`` block (Stream J.15) — it makes the
-    ``exec_python`` builtin acquire against the run user's persistent
-    workspace volume.
-
-    ``image_variant`` comes from the manifest's ``sandbox.image_variant``
-    (Stream OFFICE-1a) — it selects the sandbox image (``"office"`` → the
-    office-libs image) for every sandbox-backed builtin.
+    Workspace durability is automatic: the sandbox tools acquire against the
+    run user's persistent workspace volume whenever the run is user-scoped
+    (no manifest opt-in) — see :func:`run_in_sandbox`.
 
     ``subagents`` is the manifest's ``spec.subagents`` block (Stream J.4);
     each entry becomes a :class:`SubAgentTool`. ``subagent_depth`` is the
@@ -224,9 +217,7 @@ async def build_tool_registry(
     registry = ToolRegistry()
     for entry in tool_specs:
         if isinstance(entry, BuiltinToolSpec):
-            _register_builtin(
-                registry, entry, tool_env, persistent_workspace, image_variant, skill_seed_files
-            )
+            _register_builtin(registry, entry, tool_env, skill_seed_files)
         elif isinstance(entry, HTTPToolSpec):
             _register_http(registry, tool_env)
         elif isinstance(entry, MCPToolSpec):
@@ -436,8 +427,6 @@ def _register_builtin(
     registry: ToolRegistry,
     entry: BuiltinToolSpec,
     env: ToolEnv,
-    persistent_workspace: bool,
-    image_variant: str | None,
     skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     if entry.name not in KNOWN_BUILTINS:
@@ -447,13 +436,11 @@ def _register_builtin(
     if entry.name == "web_search":
         _register_web_search(registry, entry, env)
     elif entry.name == "exec_python":
-        _register_exec_python(registry, env, persistent_workspace, image_variant, skill_seed_files)
+        _register_exec_python(registry, env, skill_seed_files)
     elif entry.name == "bash":
-        _register_bash(registry, env, persistent_workspace, image_variant, skill_seed_files)
+        _register_bash(registry, env, skill_seed_files)
     elif entry.name in ("read_file", "write_file", "edit_file", "list_dir"):
-        _register_file_op(
-            registry, entry.name, env, persistent_workspace, image_variant, skill_seed_files
-        )
+        _register_file_op(registry, entry.name, env, skill_seed_files)
     elif entry.name == "save_artifact":
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
@@ -481,8 +468,6 @@ def _register_web_search(registry: ToolRegistry, entry: BuiltinToolSpec, env: To
 def _register_exec_python(
     registry: ToolRegistry,
     env: ToolEnv,
-    persistent_workspace: bool,
-    image_variant: str | None,
     skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     if env.supervisor_client is None:
@@ -493,8 +478,6 @@ def _register_exec_python(
     registry.register(
         ExecPythonTool(
             client=env.supervisor_client,
-            persistent_workspace=persistent_workspace,
-            image_variant=image_variant,
             skill_seed_files=skill_seed_files,
         )
     )
@@ -503,8 +486,6 @@ def _register_exec_python(
 def _register_bash(
     registry: ToolRegistry,
     env: ToolEnv,
-    persistent_workspace: bool,
-    image_variant: str | None,
     skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     # Stream TE-5 — bash rides the same Sandbox Supervisor as exec_python.
@@ -516,9 +497,7 @@ def _register_bash(
     registry.register(
         BashTool(
             client=env.supervisor_client,
-            persistent_workspace=persistent_workspace,
             workspace_lock=env.workspace_lock,
-            image_variant=image_variant,
             skill_seed_files=skill_seed_files,
         )
     )
@@ -528,8 +507,6 @@ def _register_file_op(
     registry: ToolRegistry,
     name: str,
     env: ToolEnv,
-    persistent_workspace: bool,
-    image_variant: str | None,
     skill_seed_files: tuple[tuple[str, bytes], ...],
 ) -> None:
     # Stream TE-7 — read_file / write_file / list_dir ride the same Sandbox
@@ -543,8 +520,6 @@ def _register_file_op(
         registry.register(
             ReadFileTool(
                 client=env.supervisor_client,
-                persistent_workspace=persistent_workspace,
-                image_variant=image_variant,
                 skill_seed_files=skill_seed_files,
             )
         )
@@ -552,9 +527,7 @@ def _register_file_op(
         registry.register(
             WriteFileTool(
                 client=env.supervisor_client,
-                persistent_workspace=persistent_workspace,
                 workspace_lock=env.workspace_lock,
-                image_variant=image_variant,
                 skill_seed_files=skill_seed_files,
             )
         )
@@ -562,9 +535,7 @@ def _register_file_op(
         registry.register(
             EditFileTool(
                 client=env.supervisor_client,
-                persistent_workspace=persistent_workspace,
                 workspace_lock=env.workspace_lock,
-                image_variant=image_variant,
                 skill_seed_files=skill_seed_files,
             )
         )
@@ -572,8 +543,6 @@ def _register_file_op(
         registry.register(
             ListDirTool(
                 client=env.supervisor_client,
-                persistent_workspace=persistent_workspace,
-                image_variant=image_variant,
                 skill_seed_files=skill_seed_files,
             )
         )

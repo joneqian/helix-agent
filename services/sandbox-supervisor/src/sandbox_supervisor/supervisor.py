@@ -632,18 +632,15 @@ class SandboxSupervisor:
             raise QuotaExceededError(tenant_id, limit)
 
     def _select_image(self, image_variant: str | None) -> str:
-        """Map the requested image variant to a configured image name.
+        """The single sandbox image (sandbox-image-consolidation).
 
-        Stream OFFICE-1a — ``"office"`` → the office-libs image; anything
-        else (``None`` / ``"minimal"`` / unknown) → the default minimal
-        image, so an unrecognised value degrades safely."""
-        if image_variant == "office":
-            return self._settings.sandbox_image_office
-        if image_variant not in (None, "minimal"):
-            logger.warning(
-                "unknown image_variant %r — falling back to the minimal image",
-                image_variant,
-            )
+        The variant split (``minimal``/``office``) was collapsed into one
+        image, so the now-deprecated ``image_variant`` request field is ignored
+        — every acquire resolves to ``sandbox_image``. Kept as a method (not
+        inlined) so the ``_reuse_session`` image-change check still routes
+        through one place: if ``sandbox_image`` is reconfigured, a live session
+        on the old image is recreated."""
+        del image_variant  # deprecated, ignored
         return self._settings.sandbox_image
 
     def _new_record(

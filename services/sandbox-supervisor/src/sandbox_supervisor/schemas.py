@@ -42,9 +42,10 @@ class AcquireRequest(BaseModel):
     #: user's persistent workspace volume at ``/workspace``; omitted →
     #: an ephemeral tmpfs workspace (the pre-J.15 behaviour).
     user_id: UUID | None = None
-    #: Stream OFFICE-1a — prebuilt image variant to launch ("minimal" /
-    #: "office"). Omitted / unknown → the default (minimal) image. The
-    #: supervisor maps it to a configured image name via ``_select_image``.
+    #: DEPRECATED (sandbox-image-consolidation) — the variant split was
+    #: collapsed into one image. Kept for back-compat so an older orchestrator
+    #: that still sends it doesn't 422; the value is ignored (every acquire uses
+    #: the single ``sandbox_image``).
     image_variant: str | None = None
     #: sandbox-egress §3.3 — the agent's egress policy. ``"proxy"``/``"direct"``
     #: → the sandbox is given ``HTTPS_PROXY`` + a per-sandbox token so its code

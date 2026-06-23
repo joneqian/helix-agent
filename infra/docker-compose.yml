@@ -439,13 +439,13 @@ services:
       # Direct Postgres (5432) — the supervisor issues plain inserts /
       # updates with no need for the PgBouncer pool.
       HELIX_SANDBOX_DB_DSN: postgresql+asyncpg://${HELIX_DB_USER:-helix_agent}:${HELIX_DB_PASSWORD:-helix_agent_dev}@postgres:5432/${HELIX_DB_NAME:-helix_agent_dev}
-      # Image for the "office" sandbox variant (Stream OFFICE-1b). Selected
-      # per-acquire when an agent manifest sets image_variant: office. Set
-      # HELIX_SANDBOX_IMAGE_OFFICE in infra/.env to the pushed registry path,
-      # e.g. <acr-host>/<namespace>/helix-sandbox-office:latest. The host
-      # docker daemon (sandboxes launch via the mounted socket) must be able
-      # to pull it — `docker login` to the registry or pre-pull the image.
-      HELIX_SANDBOX_SANDBOX_IMAGE_OFFICE: ${HELIX_SANDBOX_IMAGE_OFFICE:-helix-sandbox-office:dev}
+      # The single sandbox image (sandbox-image-consolidation): python +
+      # office/data/media libs + soffice/poppler/ffmpeg/node + CJK. Set
+      # HELIX_SANDBOX_IMAGE in infra/.env to the pushed registry path, e.g.
+      # <acr-host>/<namespace>/helix-sandbox:latest. The host docker daemon
+      # (sandboxes launch via the mounted socket) must be able to pull it —
+      # `docker login` to the registry or pre-pull the image.
+      HELIX_SANDBOX_SANDBOX_IMAGE: ${HELIX_SANDBOX_IMAGE:-helix-sandbox:dev}
       # Stream HX-10 — OCI runtime. Unset = runc (settings default; required
       # on macOS dev — gVisor is Linux-only). A multi-tenant production host
       # sets HELIX_SANDBOX_OCI_RUNTIME=runsc (gVisor) to close the shared-kernel

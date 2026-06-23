@@ -596,18 +596,20 @@ async def test_missing_tenant_blocked() -> None:
         await ListDirTool(client=client).call({"path": "."}, ctx=ctx)
 
 
-async def test_persistent_workspace_passes_user() -> None:
+async def test_user_run_passes_user_automatically() -> None:
+    # Durability is automatic: a user-scoped run mounts the user's persistent
+    # workspace volume — no manifest flag involved.
     client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
     ctx = _ctx()
-    await ReadFileTool(client=client, persistent_workspace=True).call({"path": "a.txt"}, ctx=ctx)
+    await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=ctx)
     # acquire received the run's user_id (persistent workspace volume).
     assert client.acquired[0][2] == ctx.user_id
 
 
-async def test_ephemeral_workspace_omits_user() -> None:
+async def test_user_less_run_omits_user() -> None:
     client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
-    tool = ReadFileTool(client=client, persistent_workspace=False)
-    await tool.call({"path": "a.txt"}, ctx=_ctx())
+    ctx = ToolContext(tenant_id=uuid4(), run_id=uuid4(), user_id=None)
+    await ReadFileTool(client=client).call({"path": "a.txt"}, ctx=ctx)
     assert client.acquired[0][2] is None
 
 
@@ -629,30 +631,3 @@ def test_specs_metadata() -> None:
     listing = ListDirTool(client=_client()).spec
     assert listing.is_read_only is True
     assert listing.resolved_side_effect == "read_only"
-
-
-async def test_read_file_threads_image_variant_to_acquire() -> None:
-    # OFFICE-1a — the tool's image_variant reaches the supervisor acquire call.
-    client = _client(json.dumps({"ok": True, "content": "", "content_hash": "x", "size": 0}))
-    await ReadFileTool(client=client, image_variant="office").call({"path": "a.txt"}, ctx=_ctx())
-    assert client.acquired[0][3] == "office"
-
-
-async def test_http_acquire_sends_image_variant(monkeypatch: pytest.MonkeyPatch) -> None:
-    # OFFICE-1a — the wire payload carries image_variant when set, omits when None.
-    from orchestrator.tools.sandbox import HTTPSupervisorClient
-
-    client = HTTPSupervisorClient(base_url="http://x")
-    seen: dict[str, Any] = {}
-
-    async def fake_post(path: str, *, json: Any, expect_body: bool = True) -> dict[str, Any]:
-        seen["json"] = json
-        return {"sandbox_id": str(uuid4())}
-
-    monkeypatch.setattr(client, "_post", fake_post)
-    await client.acquire(tenant_id=uuid4(), thread_id="t", image_variant="office")
-    assert seen["json"]["image_variant"] == "office"
-
-    seen.clear()
-    await client.acquire(tenant_id=uuid4(), thread_id="t")
-    assert "image_variant" not in seen["json"]

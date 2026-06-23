@@ -244,9 +244,14 @@ class FilesystemSpec(BaseModel):
     readonly_root: bool = True
     writable: list[str] = Field(default_factory=list)
     mounts: list[MountSpec] = Field(default_factory=list)
-    #: Stream J.15 — when ``True``, ``exec_python`` mounts the run's
-    #: user's persistent workspace volume at ``/workspace`` so files
-    #: survive across runs. ``False`` (default) → an ephemeral tmpfs.
+    #: When ``True``, enables CM-0 plan/state projection to the user's
+    #: workspace (``PLAN.md`` / ``TODO.md`` / ``MEMORY.md`` written at
+    #: turn-end and ingested at run-start). It does NOT control file
+    #: durability: any user-scoped run automatically mounts that user's
+    #: persistent workspace volume at ``/workspace`` (so files survive
+    #: idle-reclaim and restore on the next acquire), independent of this
+    #: flag. ``False`` (default) → no plan-projection; durability is still
+    #: automatic for user runs.
     persistent_workspace: bool = False
 
 
@@ -256,13 +261,12 @@ class SandboxSpec(BaseModel):
     runtime: Literal["gvisor", "docker", "none"] = "gvisor"
     image: str | None = None
     image_build: dict[str, Any] | None = None
-    #: Stream OFFICE-1a — selects which prebuilt sandbox image variant the
-    #: tools run in. ``None``/``"minimal"`` → the default pure-stdlib image;
-    #: ``"office"`` → the image with office libraries (pandas/openpyxl/
-    #: python-docx/python-pptx/pypdf/Pillow) + CJK fonts. A controlled enum
-    #: (not the free-form ``image`` field) so a manifest can't point the
-    #: sandbox at an arbitrary image. The supervisor maps it to a configured
-    #: image name; an unknown value falls back to the default.
+    #: DEPRECATED (sandbox-image-consolidation) — the ``minimal``/``office``
+    #: variant split was collapsed into one full image, so this field is no
+    #: longer read. Retained (not removed) because ``SandboxSpec`` is
+    #: ``extra="forbid"`` and dogfooded agents stored ``image_variant: office``;
+    #: dropping it would 422 on load. Safe to remove in a later breaking cleanup
+    #: once no stored manifest carries it.
     image_variant: Literal["minimal", "office"] | None = None
     resources: ResourceSpec
     network: NetworkSpec

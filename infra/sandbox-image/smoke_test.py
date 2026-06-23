@@ -1,14 +1,12 @@
-"""Minimal-image smoke test — host-side driver (Stream HX-10 PR3).
+"""Sandbox-image smoke test — host-side driver.
 
-Boots the built minimal image and drives the runner's line-delimited JSON
+Boots the built sandbox image and drives the runner's line-delimited JSON
 protocol (one ``{"code": ...}`` request → one response), sending
 ``smoke_payload.py`` as the code. Passes iff the runner reports
-``exit_code == 0`` and the payload printed ``OK`` — i.e. the base image
-ships a working Python 3.12 + stdlib and the baked runner.py loads.
-
-Mirrors the office image's smoke driver (infra/sandbox-image-office/
-smoke_test.py); the two stay separate because each ships its own payload
-(stdlib-only here, office libs there). Run under runc in CI.
+``exit_code == 0`` and the payload printed ``OK`` — i.e. the single full image
+ships a working Python 3.12 + the office/data/media libraries + the
+soffice/poppler/ffmpeg/node binaries, and the baked runner.py loads. Run under
+runc in CI.
 
 Usage:
     python smoke_test.py <image-tag>
