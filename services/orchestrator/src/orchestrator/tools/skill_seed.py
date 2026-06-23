@@ -24,13 +24,77 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+from dataclasses import dataclass
+from uuid import UUID
 
 from helix_agent.common.threat_patterns import scan_for_threats
-from helix_agent.protocol import SkillVersion
+from helix_agent.protocol import AuditAction, AuditResult, SkillVersion
+from helix_agent.protocol.audit import AuditEntry
 from helix_agent.protocol.skill import compute_content_hash, supporting_files_to_jsonable
 from helix_agent.protocol.skill_package import ParsedSkillMd, serialize_skill_md
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SeedDrop:
+    """One file (or whole skill) excluded from the sandbox seed set.
+
+    ``path`` is ``None`` for a whole-skill drop (drift makes every file
+    untrustworthy); otherwise it is the supporting file's relpath. ``reason`` is
+    one of ``drift`` / ``bad_base64`` / ``injection`` — the security-relevant
+    drops that earn a durable audit row (the cap-truncation drop stays a log
+    line: it is a capacity limit, not a tamper/injection signal)."""
+
+    skill_name: str
+    reason: str
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class SkillSeedResult:
+    """Outcome of :func:`build_skill_seed_files`: the seed set plus the dropped
+    files, so the caller can write an audit row per drop (audit-over-blocking —
+    a silently-dropped file must still be traceable)."""
+
+    files: tuple[tuple[str, bytes], ...]
+    drops: tuple[SeedDrop, ...]
+
+
+#: A dropped file maps to the closest existing skill audit action. ``drift`` and
+#: ``bad_base64`` are both content-integrity failures (stored bytes not as
+#: expected) → ``SKILL_DRIFT_DETECTED``; an ``injection`` hit → the dedicated
+#: ``SKILL_PROMPT_INJECTION_BLOCKED``.
+_DROP_ACTION: dict[str, AuditAction] = {
+    "drift": AuditAction.SKILL_DRIFT_DETECTED,
+    "bad_base64": AuditAction.SKILL_DRIFT_DETECTED,
+    "injection": AuditAction.SKILL_PROMPT_INJECTION_BLOCKED,
+}
+
+
+def seed_drop_audit_entries(tenant_id: UUID, drops: tuple[SeedDrop, ...]) -> list[AuditEntry]:
+    """Map seed drops to ``audit_log`` rows. Build-time (no run yet) so the
+    actor is ``system``. ``details`` carries skill name + path only — no file
+    content (which could be the very injection payload that got it dropped)."""
+    entries: list[AuditEntry] = []
+    for drop in drops:
+        details: dict[str, object] = {"skill": drop.skill_name, "stage": "skill_seed"}
+        if drop.path is not None:
+            details["path"] = drop.path
+        entries.append(
+            AuditEntry(
+                tenant_id=tenant_id,
+                actor_type="system",
+                actor_id="skill_seed",
+                action=_DROP_ACTION[drop.reason],
+                resource_type="skill",
+                resource_id=drop.skill_name,
+                result=AuditResult.DENIED,
+                reason=f"seed_dropped:{drop.reason}",
+                details=details,
+            )
+        )
+    return entries
 
 
 def _skill_md_with_name(name: str, version: SkillVersion) -> str:
@@ -65,11 +129,14 @@ _MAX_SEED_FILES = 256
 def build_skill_seed_files(
     resolved_versions: dict[str, SkillVersion],
     activated_skill_names: list[str],
-) -> tuple[tuple[str, bytes], ...]:
-    """Return ``(relpath, raw_bytes)`` pairs for every activated skill's files,
-    anchored under ``skills/<name>/``. Drift-skipped + threat-filtered + capped.
+) -> SkillSeedResult:
+    """Return the ``(relpath, raw_bytes)`` seed set (anchored under
+    ``skills/<name>/``) plus the dropped files. Drift-skipped + threat-filtered
+    + capped; each security-relevant drop is recorded in ``.drops`` so the
+    caller can audit it.
     """
     out: list[tuple[str, bytes]] = []
+    drops: list[SeedDrop] = []
     total = 0
     for name in activated_skill_names:
         version = resolved_versions.get(name)
@@ -79,6 +146,7 @@ def build_skill_seed_files(
         jsonable = supporting_files_to_jsonable(version.supporting_files)
         if compute_content_hash(version.prompt_fragment, jsonable) != version.content_hash:
             logger.warning("skill_seed.drift_skipped skill=%s", name)
+            drops.append(SeedDrop(skill_name=name, reason="drift"))
             continue
 
         candidates: list[tuple[str, bytes]] = [
@@ -89,6 +157,7 @@ def build_skill_seed_files(
                 raw = base64.b64decode(entry.content, validate=True)
             except (ValueError, binascii.Error):
                 logger.warning("skill_seed.bad_base64 skill=%s path=%s", name, relpath)
+                drops.append(SeedDrop(skill_name=name, reason="bad_base64", path=relpath))
                 continue
             # Re-scan text files (context scope); binary can't carry a prompt.
             try:
@@ -97,15 +166,18 @@ def build_skill_seed_files(
                 text = None
             if text is not None and scan_for_threats(text, scope="context"):
                 logger.warning("skill_seed.blocked skill=%s path=%s", name, relpath)
+                drops.append(SeedDrop(skill_name=name, reason="injection", path=relpath))
                 continue
             candidates.append((f"skills/{name}/{relpath}", raw))
 
         for path, data in candidates:
             if len(out) >= _MAX_SEED_FILES or total + len(data) > _MAX_SEED_TOTAL_BYTES:
+                # Capacity limit, not a tamper/injection signal → log only (the
+                # "no silent caps" rule names what was dropped). No audit row.
                 logger.warning(
                     "skill_seed.truncated reason=cap files=%d total_bytes=%d", len(out), total
                 )
-                return tuple(out)
+                return SkillSeedResult(files=tuple(out), drops=tuple(drops))
             out.append((path, data))
             total += len(data)
-    return tuple(out)
+    return SkillSeedResult(files=tuple(out), drops=tuple(drops))
