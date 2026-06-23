@@ -145,11 +145,12 @@ MODEL_CATALOG: dict[Provider, tuple[ModelEntry, ...]] = {
         ModelEntry(name="moonshot-v1-32k", vision=False, context_window=32_000, deprecated=True),
     ),
     # Zhipu GLM — docs.bigmodel.cn (2026-06)
-    # glm-5.1 (2026-04, 200K ctx / 128K out, deep-thinking) is the text flagship;
+    # glm-5.2 (200K ctx, deep-thinking) is the current text flagship; glm-5.1
     # glm-4.7 (355B MoE, 200K) and glm-4.6 (200K) are current text models. Vision
     # goes through glm-4.6v (128K) and glm-4.5v. The older glm-4*-plus line is
     # kept deprecated so existing manifests resolve.
     "glm": (
+        ModelEntry(name="glm-5.2", vision=False, context_window=200_000, thinking="toggle"),
         ModelEntry(name="glm-5.1", vision=False, context_window=200_000, thinking="toggle"),
         ModelEntry(name="glm-4.7", vision=False, context_window=200_000, thinking="toggle"),
         ModelEntry(name="glm-4.6", vision=False, context_window=200_000, thinking="toggle"),
@@ -182,9 +183,16 @@ MODEL_CATALOG: dict[Provider, tuple[ModelEntry, ...]] = {
         ModelEntry(name="qwen-vl-max", vision=True, context_window=32_000, deprecated=True),
     ),
     # Doubao (ByteDance Volcano Engine) — volcengine.com (2026-06)
-    # Seed 2.0 family (released 2026-02-14) is current; all tiers support vision
-    # and 256K context. Older doubao-*-32k series superseded.
+    # Seed 2.1 (doubao-seed-2-1-pro-260628, dated model ID) is the current
+    # flagship; Seed 2.0 family stays. All tiers support vision and 256K
+    # context. Older doubao-*-32k series superseded.
     "doubao": (
+        ModelEntry(
+            name="doubao-seed-2-1-pro-260628",
+            vision=True,
+            context_window=256_000,
+            thinking="budget",
+        ),
         ModelEntry(
             name="doubao-seed-2.0-pro", vision=True, context_window=256_000, thinking="budget"
         ),
