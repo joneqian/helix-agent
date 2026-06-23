@@ -24,6 +24,9 @@ const SKILL_ID = "sk-1";
  * supporting file nested under a folder is clickable. */
 async function expandFileTree(page: Page): Promise<void> {
   const tree = page.getByTestId("skill-file-tree");
+  // Wait for the tree to render before querying switchers — querying too early
+  // returns [] and the loop no-ops, leaving folders collapsed.
+  await tree.getByText("SKILL.md").waitFor();
   for (let i = 0; i < 8; i += 1) {
     const closed = await tree.locator(".ant-tree-switcher_close").all();
     if (closed.length === 0) break;
