@@ -51,7 +51,6 @@ class _LockProbeClient:
         tenant_id: UUID,
         thread_id: str,
         user_id: UUID | None = None,
-        image_variant: str | None = None,
         seed_files: tuple[tuple[str, bytes], ...] = (),
     ) -> UUID:
         return uuid4()

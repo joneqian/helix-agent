@@ -71,7 +71,7 @@ async def test_exec_python_passes_skill_seed_files_to_acquire() -> None:
 
     await tool.call({"code": "pass"}, ctx=_ctx())
 
-    assert client.acquired[0][4] == seed  # 5th acquire tuple slot = seed_files
+    assert client.acquired[0][3] == seed  # 4th acquire tuple slot = seed_files
 
 
 @pytest.mark.asyncio

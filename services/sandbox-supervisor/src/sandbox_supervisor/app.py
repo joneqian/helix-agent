@@ -184,7 +184,7 @@ def create_app(
                     tasks.append(
                         asyncio.create_task(_run_daily_backup(lifecycle, resolved_settings, stop))
                     )
-            if resolved_settings.pool_size_minimal > 0 or resolved_settings.pool_size_office > 0:
+            if resolved_settings.pool_size > 0:
                 replenisher = PoolReplenisher(
                     pool=pool,
                     store=store,
@@ -201,13 +201,11 @@ def create_app(
             prefetch_task = asyncio.create_task(prefetch_images(docker, resolved_settings))
             tasks.append(prefetch_task)
             logger.info(
-                "sandbox_supervisor.start reaper=%s lifecycle=%s backup_hour=%d "
-                "pool_minimal=%d pool_office=%d",
+                "sandbox_supervisor.start reaper=%s lifecycle=%s backup_hour=%d pool=%d",
                 enable_reaper,
                 lifecycle is not None,
                 resolved_settings.workspace_backup_hour,
-                resolved_settings.pool_size_minimal,
-                resolved_settings.pool_size_office,
+                resolved_settings.pool_size,
             )
             try:
                 yield

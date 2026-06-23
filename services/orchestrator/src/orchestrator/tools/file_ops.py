@@ -460,8 +460,6 @@ class ReadFileTool:
     output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP
     #: Stream J.15 — acquire against the run user's persistent workspace.
     persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
@@ -500,7 +498,6 @@ class ReadFileTool:
             persistent_workspace=self.persistent_workspace,
             tool_label="read_file",
             fallback_thread_id="read_file",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="read_file")
@@ -522,8 +519,6 @@ class WriteFileTool:
 
     client: SupervisorClient
     persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
     #: Stream TE-8 — cross-replica per-workspace write lock held around the
@@ -581,7 +576,6 @@ class WriteFileTool:
                 persistent_workspace=self.persistent_workspace,
                 tool_label="write_file",
                 fallback_thread_id="write_file",
-                image_variant=self.image_variant,
                 seed_files=self.skill_seed_files,
             )
         env = parse_envelope(outcome, tool="write_file")
@@ -603,8 +597,6 @@ class ListDirTool:
 
     client: SupervisorClient
     persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
 
@@ -642,7 +634,6 @@ class ListDirTool:
             persistent_workspace=self.persistent_workspace,
             tool_label="list_dir",
             fallback_thread_id="list_dir",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="list_dir")
@@ -671,8 +662,6 @@ class EditFileTool:
 
     client: SupervisorClient
     persistent_workspace: bool = False
-    #: Stream OFFICE-1a — sandbox image variant ("office" → office-libs image).
-    image_variant: str | None = None
     #: skill-runtime §5.1 — activated skill files seeded under /workspace/skills/.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
     #: Stream TE-8 — write lock held around the edit exec.
@@ -748,7 +737,6 @@ class EditFileTool:
                 persistent_workspace=self.persistent_workspace,
                 tool_label="edit_file",
                 fallback_thread_id="edit_file",
-                image_variant=self.image_variant,
                 seed_files=self.skill_seed_files,
             )
         env = parse_envelope(outcome, tool="edit_file")
@@ -781,7 +769,6 @@ class SandboxWorkspaceWriter:
     client: SupervisorClient
     ctx: ToolContext
     persistent_workspace: bool
-    image_variant: str | None = None
     #: skill-runtime §5.1 — unused by the projection helpers (they write/read
     #: agent state, not skills); kept so the shared seed plumbing is uniform.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
@@ -798,7 +785,6 @@ class SandboxWorkspaceWriter:
             persistent_workspace=self.persistent_workspace,
             tool_label="workspace_projection",
             fallback_thread_id="workspace_projection",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="workspace_projection")
@@ -818,7 +804,6 @@ class SandboxWorkspaceReader:
     client: SupervisorClient
     ctx: ToolContext
     persistent_workspace: bool
-    image_variant: str | None = None
     #: skill-runtime §5.1 — unused by the projection helpers (they write/read
     #: agent state, not skills); kept so the shared seed plumbing is uniform.
     skill_seed_files: tuple[tuple[str, bytes], ...] = ()
@@ -832,7 +817,6 @@ class SandboxWorkspaceReader:
             persistent_workspace=self.persistent_workspace,
             tool_label="workspace_ingest",
             fallback_thread_id="workspace_ingest",
-            image_variant=self.image_variant,
             seed_files=self.skill_seed_files,
         )
         env = parse_envelope(outcome, tool="workspace_ingest")

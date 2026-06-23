@@ -638,7 +638,7 @@ async def test_warm_pool_claim_exec_release() -> None:
     store = _InMemoryStore()
     docker = CliDockerClient()
     settings = SandboxSupervisorSettings(
-        sandbox_image=_IMAGE, oci_runtime=_OCI_RUNTIME, pool_size_minimal=1
+        sandbox_image=_IMAGE, oci_runtime=_OCI_RUNTIME, pool_size=1
     )
     runtime = SandboxRuntimeProvider(oci_runtime=_OCI_RUNTIME, egress_network=_NETWORK)
     pool = SandboxPool()

@@ -114,7 +114,7 @@ async def _pause_edit_resume(
     )
     client = RecordingSupervisorClient(outcome=_read_envelope(render_plan_md(_db_plan())))
     node = (
-        make_workspace_ingest_node(client=client, persistent_workspace=True, image_variant=None)
+        make_workspace_ingest_node(client=client, persistent_workspace=True)
         if wire_ingest
         else None
     )

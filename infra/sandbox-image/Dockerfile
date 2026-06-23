@@ -1,42 +1,95 @@
-# Helix sandbox image — minimal Python 3.12 runner for the `exec_python` tool.
+# Helix sandbox image — the single full toolchain for the `exec_python` / `bash`
+# / `file_ops` tools: Python 3.12 + data/office/media libraries + the system
+# binaries skills shell out to (LibreOffice headless / poppler / ffmpeg) + Node.js
+# + CJK fonts & locale. (sandbox-image-consolidation: one image, no variants.)
 #
-# Hardening per STREAM-F-DESIGN Mini-ADR F-5 / subsystem 14 § 5.6. This file
-# covers the *image-level* items; the *runtime* flags (--read-only rootfs,
-# --cap-drop=ALL, --security-opt=no-new-privileges, --pids-limit, --memory,
-# --cpus, --network) are applied at `docker run` time by the Stream F.3
-# SandboxRuntimeProvider — keeping them out of the image so one image works
-# under both the dev (runc) and prod (runsc / gVisor) runtimes.
+# Why slim, not alpine: the data/office wheels (pandas/numpy/Pillow/matplotlib)
+# ship manylinux/glibc wheels — on alpine's musl pip would compile from source.
+# The full image must be Debian-based regardless, so there is no lighter base.
+#
+# Hardening per STREAM-F-DESIGN Mini-ADR F-5 / subsystem 14 § 5.6 — image-level
+# only; the *runtime* flags (--read-only rootfs, --cap-drop=ALL,
+# --security-opt=no-new-privileges, --pids-limit, --memory, --cpus, --network,
+# tmpfs on /workspace + /tmp) are applied at `docker run` by the F.3
+# SandboxRuntimeProvider, so one image works under both runc (dev) and
+# runsc/gVisor (prod).
 #
 # Stream HX-10: the pinned seccomp profile lives beside this Dockerfile as
-# `seccomp-profile.json` (a vendored, version-pinned moby v27 default — its
-# syscall floor no longer drifts with the host's Docker version). It is NOT
-# baked into the image: docker-out-of-docker means the host daemon launches
-# the sandbox, so the profile is a *host-visible* path passed to `docker run`
-# via `--security-opt seccomp=`. Production pre-places it on the host and sets
-# HELIX_SANDBOX_SECCOMP_PROFILE_PATH; dev leaves it unset (host default).
-#
-# Base = alpine, not slim (Mini-ADR F-13): the sandbox runs pure-stdlib
-# Python with no package-install path (Mini-ADR F-2), so the ~150 MB Debian
-# userland in `python:3.12-slim` is dead weight — alpine is ~50 MB.
-FROM python:3.12-alpine
+# `seccomp-profile.json` — NOT baked in (docker-out-of-docker means the host
+# daemon launches the sandbox), passed to `docker run` via `--security-opt
+# seccomp=`. Prod pre-places it + sets HELIX_SANDBOX_SECCOMP_PROFILE_PATH; dev
+# leaves it unset (host default).
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    # Read-only rootfs at runtime: point per-user cache/config dirs at the tmpfs
+    # F.3 mounts on /workspace, so matplotlib & friends can write.
+    HOME=/workspace \
+    MPLCONFIGDIR=/workspace/.mplconfig
 
-# Drop pip / setuptools / wheel: the sandbox has no package-install path
-# (egress is credential-proxy-only, Mini-ADR F-2) so a present installer is
-# nothing but attack surface.
+# System deps:
+#   * CJK fonts + fontconfig (matplotlib/Pillow Chinese rendering) + zh_CN.UTF-8
+#     locale; `fc-cache -f` bakes the font cache into the read-only rootfs.
+#   * The binaries office skills shell out to — the Python lib alone is not
+#     enough: xlsx recalc / pptx thumbnail / docx accept-changes call `soffice`
+#     (LibreOffice headless), pdf→image calls poppler, gif/video calls ffmpeg.
+#     LibreOffice no-GUI components only (writer/calc/impress + core).
+#   * Node.js + npm (Debian apt — no NodeSource repo/key, keeps the install
+#     surface minimal) so skill-bundled `.js` runs via the `bash` tool. Browser
+#     automation (Chromium/Playwright) is intentionally NOT here — that belongs
+#     in an MCP server, not the sandbox image.
+# No compiler toolchain — every Python dep still installs from a wheel.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+        fontconfig \
+        locales \
+        libreoffice-writer-nogui \
+        libreoffice-calc-nogui \
+        libreoffice-impress-nogui \
+        poppler-utils \
+        ffmpeg \
+        nodejs \
+        npm \
+    && sed -i 's/^# *\(zh_CN.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
+    && locale-gen \
+    && fc-cache -f \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the CJK locale only AFTER locale-gen created it — declaring it earlier
+# makes intervening build steps warn "cannot set LC_ALL". So str/bytes
+# round-trips and library output default to UTF-8.
+ENV LANG=zh_CN.UTF-8 \
+    LC_ALL=zh_CN.UTF-8
+
+# Python libraries (pins in requirements.txt) — these are the de-facto standard
+# libs every agent gets (requests-via-stdlib-urllib + pandas/openpyxl/docx/pptx/
+# pdf/Pillow/matplotlib/...).
+COPY requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+# Bake CJK-capable matplotlib defaults into the (read-only at runtime) rootfs so
+# agent charts render Chinese without per-call font config.
+COPY mpl_cjk_rc.py /tmp/mpl_cjk_rc.py
+RUN python /tmp/mpl_cjk_rc.py && rm /tmp/mpl_cjk_rc.py
+
+# Drop pip / setuptools / wheel AFTER install: the sandbox has no runtime
+# package-install path (egress is credential-proxy-only, Mini-ADR F-2) so a
+# present installer is pure attack surface. Imports of installed packages keep
+# working — only the installer is gone.
 RUN python -m pip uninstall -y pip setuptools wheel 2>/dev/null || true
 
-# Non-root user, uid 10000 (subsystem 14 § 5.6). `nologin` shell — the
-# container is never meant to be exec'd into interactively. busybox
-# `adduser -D` (alpine) also creates the matching group.
-RUN adduser -D -u 10000 -s /sbin/nologin agent
+# Non-root user, uid 10000 (subsystem 14 § 5.6). `-m` creates the home dir; we
+# then repoint HOME at /workspace (writable tmpfs at runtime). `nologin` shell —
+# the container is never meant to be exec'd into interactively.
+RUN useradd -u 10000 -m -s /usr/sbin/nologin agent
 
-# `/workspace` is where submitted code runs; at runtime a writable tmpfs is
-# mounted over it (F.3). Created here so WORKDIR resolves even before the
-# mount.
-RUN mkdir /workspace && chown agent:agent /workspace
+# /workspace is the run root; a writable tmpfs is mounted over it at runtime.
+# Created + owned here so WORKDIR resolves and the matplotlib config dir is
+# writable even before (and without) the mount.
+RUN mkdir -p /workspace/.mplconfig && chown -R agent:agent /workspace
 WORKDIR /workspace
 
 COPY runner.py /opt/runner.py

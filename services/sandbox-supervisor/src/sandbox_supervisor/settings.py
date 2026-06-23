@@ -30,12 +30,11 @@ class SandboxSupervisorSettings(BaseSettings):
     db_echo: bool = False
 
     # -------------------------------------------------------------- sandbox
-    #: Image the `exec_python` sandbox runs (built from infra/sandbox-image).
+    #: The single sandbox image (built from infra/sandbox-image): Python +
+    #: office/data/media libs + soffice/poppler/ffmpeg/node + CJK fonts. The
+    #: former ``minimal``/``office`` variant split was collapsed into this one
+    #: image (sandbox-image-consolidation).
     sandbox_image: str = "helix-sandbox:dev"
-    #: Stream OFFICE-1a — image for the "office" variant (built from
-    #: infra/sandbox-image-office: slim + office libs + CJK fonts). Selected
-    #: per-acquire via ``AcquireRequest.image_variant == "office"``.
-    sandbox_image_office: str = "helix-sandbox-office:dev"
     #: OCI runtime — `runc` for dev / macOS, `runsc` (gVisor) for Linux prod.
     oci_runtime: Literal["runc", "runsc"] = "runc"
     #: Stream HX-10 — host-visible path to a pinned seccomp profile JSON
@@ -107,15 +106,13 @@ class SandboxSupervisorSettings(BaseSettings):
     default_max_sandboxes: int = Field(default=50, gt=0, le=1000)
 
     # ------------------------------------------------------- pool (HX-6)
-    #: Warm-pool target per image variant (STREAM-HX-DESIGN § 7.2-①):
-    #: how many READY containers the replenisher keeps pre-launched.
-    #: ``0`` disables the pool for that variant (dev / CI default for
-    #: office). Defensively clamped to [0, 16] rather than rejected —
-    #: a bad value must not take the supervisor down (fail-open).
-    pool_size_minimal: int = 2
-    pool_size_office: int = 0
+    #: Warm-pool target (STREAM-HX-DESIGN § 7.2-①): how many READY containers
+    #: the replenisher keeps pre-launched for the single image. ``0`` disables
+    #: the pool (dev / CI). Defensively clamped to [0, 16] rather than rejected
+    #: — a bad value must not take the supervisor down (fail-open).
+    pool_size: int = 2
 
-    @field_validator("pool_size_minimal", "pool_size_office")
+    @field_validator("pool_size")
     @classmethod
     def _clamp_pool_size(cls, value: int) -> int:
         return max(0, min(16, value))

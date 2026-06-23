@@ -76,7 +76,7 @@ async def _emit_state_ingested_audit(
 
 
 def make_workspace_ingest_node(
-    *, client: SupervisorClient, persistent_workspace: bool, image_variant: str | None
+    *, client: SupervisorClient, persistent_workspace: bool
 ) -> MemoryNode:
     """Build the entry-chain ingest node. Reads ``PLAN.md`` via the warm
     sandbox, parses it, and returns ``{"plan": ...}`` only on a genuine,
@@ -98,7 +98,6 @@ def make_workspace_ingest_node(
             client=client,
             ctx=ctx,
             persistent_workspace=persistent_workspace,
-            image_variant=image_variant,
         )
         current = state.get("plan")
         try:

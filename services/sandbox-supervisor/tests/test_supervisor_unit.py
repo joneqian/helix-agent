@@ -329,14 +329,12 @@ def _acquire_request(
     tenant_id: UUID | None = None,
     *,
     user_id: UUID | None = None,
-    image_variant: str | None = None,
     seed_files: list[SeedFile] | None = None,
 ) -> AcquireRequest:
     return AcquireRequest(
         tenant_id=tenant_id or uuid4(),
         thread_id="t-1",
         user_id=user_id,
-        image_variant=image_variant,
         seed_files=seed_files or [],
     )
 
@@ -1180,43 +1178,19 @@ def test_health_route_reports_docker_status() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stream OFFICE-1a — image variant selection
+# Image selection — single image (variant collapsed)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_acquire_office_variant_selects_office_image() -> None:
-    settings = SandboxSupervisorSettings(sandbox_image_office="helix-sandbox-office:test")
-    h = _harness(settings=settings)
-    resp = await h.supervisor.acquire(_acquire_request(image_variant="office"))
-    assert h.store.rows[resp.sandbox_id].image_ref == "helix-sandbox-office:test"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("variant", [None, "minimal", "bogus"])
-async def test_acquire_default_variant_selects_minimal_image(variant: str | None) -> None:
+async def test_acquire_always_selects_single_image() -> None:
+    # The image variant split was collapsed into one image — acquire always
+    # uses settings.sandbox_image regardless of the (deprecated, ignored)
+    # request field.
     settings = SandboxSupervisorSettings(sandbox_image="helix-sandbox:test")
     h = _harness(settings=settings)
-    resp = await h.supervisor.acquire(_acquire_request(image_variant=variant))
+    resp = await h.supervisor.acquire(_acquire_request())
     assert h.store.rows[resp.sandbox_id].image_ref == "helix-sandbox:test"
-
-
-@pytest.mark.asyncio
-async def test_warm_session_not_reused_across_image_variants() -> None:
-    # A minimal warm session must not be reused for an office acquire — the
-    # office agent needs the office-libs image (Stream OFFICE-1a).
-    user = uuid4()
-    tenant = uuid4()
-    h = _harness()
-    r1 = await h.supervisor.acquire(_acquire_request(tenant, user_id=user, image_variant=None))
-    assert r1.cold_start is True
-    r2 = await h.supervisor.acquire(_acquire_request(tenant, user_id=user, image_variant="office"))
-    assert r2.cold_start is True  # NOT reused
-    assert r2.sandbox_id != r1.sandbox_id
-    assert h.store.rows[r2.sandbox_id].image_ref == h.supervisor._settings.sandbox_image_office
-    # The stale-variant session is torn down now (not left for the reaper),
-    # so it stops counting toward the tenant sandbox quota (review MEDIUM).
-    assert h.store.rows[r1.sandbox_id].state is SandboxState.DESTROYED
 
 
 # ---------------------------------------------------------------------------
@@ -1228,12 +1202,9 @@ def _replenisher(
     h: _Harness,
     pool: SandboxPool,
     *,
-    pool_size_minimal: int = 1,
-    pool_size_office: int = 0,
+    pool_size: int = 1,
 ) -> PoolReplenisher:
-    settings = SandboxSupervisorSettings(
-        pool_size_minimal=pool_size_minimal, pool_size_office=pool_size_office
-    )
+    settings = SandboxSupervisorSettings(pool_size=pool_size)
     return PoolReplenisher(
         pool=pool,
         store=h.store,
@@ -1247,7 +1218,7 @@ def _replenisher(
 async def test_replenisher_tops_up_to_target() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+    await _replenisher(h, pool, pool_size=2).run_once()
 
     settings = SandboxSupervisorSettings()
     assert pool.size(settings.sandbox_image) == 2
@@ -1263,7 +1234,7 @@ async def test_replenisher_tops_up_to_target() -> None:
 async def test_replenisher_zero_target_launches_nothing() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=0, pool_size_office=0).run_once()
+    await _replenisher(h, pool, pool_size=0).run_once()
 
     assert h.docker.launches == []
     assert h.store.rows == {}
@@ -1273,10 +1244,10 @@ async def test_replenisher_zero_target_launches_nothing() -> None:
 async def test_replenisher_shrinks_past_target() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+    await _replenisher(h, pool, pool_size=2).run_once()
 
     # The operator lowered the target — the next sweep destroys extras.
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
 
     settings = SandboxSupervisorSettings()
     assert pool.size(settings.sandbox_image) == 1
@@ -1292,7 +1263,7 @@ async def test_replenisher_launch_failure_is_fail_open() -> None:
     h = _harness(pool=pool, docker=RecordingDockerClient(launch_error=DockerError("daemon down")))
 
     # No raise: the pool just stays short; the next tick retries.
-    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+    await _replenisher(h, pool, pool_size=2).run_once()
 
     settings = SandboxSupervisorSettings()
     assert pool.size(settings.sandbox_image) == 0
@@ -1304,7 +1275,7 @@ async def test_replenisher_launch_failure_is_fail_open() -> None:
 async def test_acquire_claims_pooled_container() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
     tenant = uuid4()
 
     request = AcquireRequest(
@@ -1351,7 +1322,7 @@ async def test_claim_update_failure_destroys_and_cold_starts() -> None:
     pool = SandboxPool()
     docker = RecordingDockerClient(update_error=DockerError("update refused"))
     h = _harness(pool=pool, docker=docker)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
 
     response = await h.supervisor.acquire(_acquire_request())
 
@@ -1371,7 +1342,7 @@ async def test_concurrent_claims_one_hit_one_cold() -> None:
 
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
 
     first, second = await _asyncio.gather(
         h.supervisor.acquire(_acquire_request()),
@@ -1388,7 +1359,7 @@ async def test_concurrent_claims_one_hit_one_cold() -> None:
 async def test_claim_cas_lost_falls_back_without_touching_container() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
     # Simulate the defensive CAS-lost branch: the row is no longer READY.
     (ready_id,) = [r.id for r in h.store.rows.values() if r.state is SandboxState.READY]
     h.store.rows[ready_id] = h.store.rows[ready_id].with_state(SandboxState.IN_USE)
@@ -1405,7 +1376,7 @@ async def test_claim_cas_lost_falls_back_without_touching_container() -> None:
 async def test_user_scoped_acquire_bypasses_pool() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
 
     response = await h.supervisor.acquire(_acquire_request(user_id=uuid4()))
 
@@ -1421,7 +1392,7 @@ async def test_user_scoped_acquire_bypasses_pool() -> None:
 async def test_warm_session_takes_priority_over_pool() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
     tenant, user = uuid4(), uuid4()
 
     first = await h.supervisor.acquire(_acquire_request(tenant, user_id=user))
@@ -1439,7 +1410,7 @@ async def test_ready_pool_rows_do_not_count_toward_tenant_quota() -> None:
     pool = SandboxPool()
     store = InMemorySandboxStore(limit=1)
     h = _harness(pool=pool, store=store)
-    await _replenisher(h, pool, pool_size_minimal=2).run_once()
+    await _replenisher(h, pool, pool_size=2).run_once()
 
     # READY rows count against nobody — the sentinel has no active rows...
     assert await store.count_active_for_tenant(POOL_TENANT_ID) == 0
@@ -1453,16 +1424,15 @@ async def test_ready_pool_rows_do_not_count_toward_tenant_quota() -> None:
 
 def test_pool_size_settings_clamped_to_bounds() -> None:
     # Defensive parse (fail-open): out-of-range targets clamp, not crash.
-    assert SandboxSupervisorSettings(pool_size_minimal=99).pool_size_minimal == 16
-    assert SandboxSupervisorSettings(pool_size_minimal=-3).pool_size_minimal == 0
-    assert SandboxSupervisorSettings(pool_size_office=99).pool_size_office == 16
+    assert SandboxSupervisorSettings(pool_size=99).pool_size == 16
+    assert SandboxSupervisorSettings(pool_size=-3).pool_size == 0
 
 
 @pytest.mark.asyncio
 async def test_released_pooled_claim_is_destroyed_like_any_ephemeral() -> None:
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
 
     response = await h.supervisor.acquire(_acquire_request())
     assert response.cold_start is False
@@ -1482,19 +1452,17 @@ async def test_released_pooled_claim_is_destroyed_like_any_ephemeral() -> None:
 @pytest.mark.asyncio
 async def test_prefetch_pulls_missing_images() -> None:
     docker = RecordingDockerClient()
-    settings = SandboxSupervisorSettings(
-        sandbox_image="helix-sandbox:dev", sandbox_image_office="helix-sandbox-office:dev"
-    )
+    settings = SandboxSupervisorSettings(sandbox_image="helix-sandbox:dev")
 
     await prefetch_images(docker, settings)
 
-    assert docker.pulled == ["helix-sandbox:dev", "helix-sandbox-office:dev"]
+    assert docker.pulled == ["helix-sandbox:dev"]
 
 
 @pytest.mark.asyncio
 async def test_prefetch_skips_present_images() -> None:
     docker = RecordingDockerClient(
-        existing_images={"helix-sandbox:dev", "helix-sandbox-office:dev"}
+        existing_images={SandboxSupervisorSettings().sandbox_image}
     )
 
     await prefetch_images(docker, SandboxSupervisorSettings())
@@ -1514,21 +1482,20 @@ async def test_prefetch_pull_failure_is_fail_open() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replenisher_sets_ready_gauge_per_variant() -> None:
+async def test_replenisher_sets_ready_gauge() -> None:
     from sandbox_supervisor.pool import _pool_ready
 
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=2, pool_size_office=0).run_once()
+    await _replenisher(h, pool, pool_size=2).run_once()
 
-    assert float(_pool_ready.labels(variant="minimal")._value.get()) == 2.0  # type: ignore[attr-defined]
-    assert float(_pool_ready.labels(variant="office")._value.get()) == 0.0  # type: ignore[attr-defined]
+    assert float(_pool_ready.labels(variant="default")._value.get()) == 2.0  # type: ignore[attr-defined]
 
     # A claim drains one; the next sweep re-records the lower level
     # (target raced down to 1 keeps the claimed one out of the pool).
     await h.supervisor.acquire(_acquire_request())
-    await _replenisher(h, pool, pool_size_minimal=1, pool_size_office=0).run_once()
-    assert float(_pool_ready.labels(variant="minimal")._value.get()) == 1.0  # type: ignore[attr-defined]
+    await _replenisher(h, pool, pool_size=1).run_once()
+    assert float(_pool_ready.labels(variant="default")._value.get()) == 1.0  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -1629,7 +1596,7 @@ async def test_egress_acquire_bypasses_pool() -> None:
     # (the pooled container has no per-sandbox token baked in).
     pool = SandboxPool()
     h = _harness(pool=pool)
-    await _replenisher(h, pool, pool_size_minimal=1).run_once()
+    await _replenisher(h, pool, pool_size=1).run_once()
     launches_after_fill = len(h.docker.launches)
     settings = SandboxSupervisorSettings()
     assert pool.size(settings.sandbox_image) == 1
