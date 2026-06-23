@@ -1583,9 +1583,25 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
   - [x] **HX-10-F2 gVisor fork-bomb 语义**（2026-06-13，方案 A 拍板）：`--pids-limit` 在 gVisor 下限 sentry 宿主线程非 guest（google/gvisor#2490），fork bomb panic sentry 杀沙箱。**已决方案 A「接受沙箱阵亡+重建」**（否决 B guest cgroupfs pids.max）——业界实证背书：gVisor Security Model 明文资源耗尽委托宿主 cgroup / #2490·#2489·#3942 三 issue 长期 open 不修 / Modal·GKE Agent Sandbox 全走 ephemeral+重建（实证落 research §6）。横切公理：F2 非安全洞是错误优雅度，安全目标（爆炸半径锁沙箱）已达成。落地零生产代码（宿主 cgroup 限总量 + ephemeral + warm pool[HX-6] + reaper 重建[已在]，workspace volume[J.15] 持久故数据零损失）；gate_56 由 xfail 转正为显式 A 语义断言（fork bomb 杀自身沙箱 → supervisor 存活 + 全新沙箱重建执行成功）。设计 STREAM-HX §12.2.4
 - [ ] **HX-11 online A/B + 自动 prompt 优化**（评估 ⑦ 远期，依赖 HX-5）：流量分桶 + 评测数字回流
 
+### Wave — 2026-06 沙箱出网 + 审计评估 + 镜像合并
+
+> 起点：用户问「沙箱 network=none 是不是把 F 类技能能力锁死了」+「审计规则是否过度拦截」。
+> 纠正「network=none 硬天花板」误判（实为 internal 网 + 死字段 NetworkSpec），落「能力优先、
+> 审计追溯优先于过度拦截」原则（设计 `docs/design/sandbox-egress-per-agent.md` /
+> `sandbox-audit-evaluation.md` / `sandbox-image-consolidation.md`）。
+
+- [x] **per-agent 沙箱出网**（#745-750）：沙箱内代码经审计代理访问公网解锁 F 类技能。**1a** 透明 CONNECT 代理（裸 asyncio 同进程 listener）+ per-sandbox HMAC token + `resolve_and_pin_host` 防 rebind + `sandbox_egress_audit`（0087，不记 payload）；**1b** `EgressContext` + `_EgressBindingClient` 包 supervisor_client 零 per-tool 穿线 + token 注 `HTTPS_PROXY`；**Phase 2** per-agent host allowlist 消费（#747，opt-in 硬化非默认闸）；**Phase 3** admin-ui 出网审计页 + agent egress 徽章（#748/#749）；真栈 e2e（#750）。默认 `egress:proxy` 开 + 全连接审计。
+- [x] **egress urllib CONNECT 鉴权 shim**（#752）：stdlib urllib 在 CONNECT 不带 `Proxy-Authorization`（requests/httpx/urllib3 带）→ `sitecustomize.py` monkeypatch `set_tunnel` 从 `HELIX_EGRESS_PROXY_AUTH` 补头，烤进镜像全局 site-packages（`python -I` 仍跑 site）。真栈 e2e 转绿（#750）。
+- [x] **egress 明文 HTTP**（#762，audit-eval 衍生 backlog②）：代理加 absolute-form HTTP 分支（`GET http://host/path`），与 CONNECT 同 `_secure_connect` 闸（auth/allowlist/SSRF-pin/审计）；改写 origin-form + 剥代理头 + Host 由 URL 重建 + 强制 `Connection: close`（单请求/连接防管道化 host 混淆）；`HTTP_PROXY` 早已注入零 supervisor 改。设计 §3.6。
+- [x] **审计规则全面评估**（设计 `sandbox-audit-evaluation.md`，Phase 1-6）：必要安全（gVisor 隔离/egress SSRF-pin/URL host-pivot/RBAC-ABAC/不可逆审批/PI-1 spotlight/PI-2 输出筛/技能导入结构拒）保留；过度拦截放成 allow+审计。**P1** #754 删 `sandbox_audit` 拦截剧场(bash 早绕过且 gVisor 才是边界)+ 录沙箱 exec 代码进审计；**P2** egress `_ip_is_blocked` 收窄显式 RFC1918(放行 198.18 fake-ip)；**P3** user-authored 写路径 strict→warn+审计(保留运行时注入向量硬拦)；**P4** #758 output-guard 持久审计行 + egress 407 `blocked_auth`(migration 0088 tenant_id nullable)；**P5** #759 `rate_limit_override` 死字段接成真生效(per-tenant 限流+422 校验+admin-ui 展示)；**P6** #760 skill_seed 丢文件(drift/injection/坏 base64)落审计行(`SKILL_DRIFT_DETECTED`/`SKILL_PROMPT_INJECTION_BLOCKED`，只记名+path 不记内容)。
+- [x] **沙箱镜像多架构发布**（#761，backlog①）：CI 单镜像加 `setup-qemu` + push 步 `platforms: linux/amd64,linux/arm64` → manifest list；本地 load+smoke+Trivy 仍原生 amd64 门控；Apple-silicon 开发机不再手动 `docker tag` 兜架构错配。main 构建+推送 live 实证。
+- [x] **双镜像合并为单一 full 镜像 + node**（#763，backlog③ node 并入）：`minimal`(纯 stdlib 实用性太薄)+`office` 合并为单一 `helix-sandbox`(python+办公/数据/媒体库+soffice/poppler/ffmpeg+**node**+CJK)；删 `image_variant` 机制(字段保留 deprecated+忽略,SandboxSpec extra=forbid 防旧 agent 422)；node 经 `bash` 跑零新 tool，browser→MCP；单 pool/单 CI(CRITICAL 门,office 大基底)。胖镜像成本真相=磁盘单份共享/RAM 按需，唯一真残留 CVE 面。`.env.example` 收尾 #765。
+- [x] **持久 workspace 对 user 运行自动开**（#763 B）：文件耐久从 manifest 开关解绑→跟 `ctx.user_id` 绑(有 user 自动挂命名卷,reaper rm 容器不删卷,跨回收还原)；`FilesystemSpec.persistent_workspace` 降级只控 CM-0 计划投影(与耐久解耦,投影每 run 读 PLAN.md 有成本不默认开)。语义：`/workspace`(user)=命名卷还原 / `/tmp`=tmpfs 永清。
+- [x] **live 三件套验证**（CI 绿≠live）：① soffice pptx→pdf ② node ③ 持久还原。`infra/sandbox-image/smoke_test.py` 一把验 soffice+poppler+node+办公库+CJK；`tools/eval/verify_live_persist.py`（#766）驱动 supervisor :8001(无鉴权)验持久(POSITIVE restored / NEGATIVE gone)。本地真栈全过。
+
 ### 显式不做（理由在册，需求出现随时重议）
 
-- 浏览器执行面 / 多语言运行时 / GPU（产品决策，非工程债）
+- 浏览器执行面 / GPU（产品决策，非工程债）；多语言运行时：**node 已纳入单一 full 镜像**（经 `bash` 跑 JS 技能），浏览器自动化（Chromium/Playwright）仍归 MCP 不进镜像
 - agent 间通信、专门化 agent 类型注册表（单链委托可靠性共识）
 - 事务性工具 / 部分回滚（行业未解题）
 
