@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
+from uuid import UUID
 
 import httpx
 
@@ -43,6 +46,14 @@ logger = logging.getLogger("helix.control_plane.mcp_oauth_refresh")
 
 Clock = Callable[[], datetime]
 HttpClientFactory = Callable[[], httpx.AsyncClient]
+
+
+class OAuthRefreshLock(Protocol):
+    """Cross-replica per-(tenant, user) refresh lock (PgMcpOAuthRefreshLock)."""
+
+    def acquire(self, *, tenant_id: UUID, user_id: str) -> AbstractAsyncContextManager[None]:
+        """Hold the lock for one user's refresh; released on context exit."""
+
 
 # Refresh when the access token is within this window of expiry.
 _DEFAULT_SKEW_S = 60.0
@@ -69,6 +80,7 @@ class McpOAuthRefresher:
         http_factory: HttpClientFactory,
         clock: Clock = _utc_now,
         skew_s: float = _DEFAULT_SKEW_S,
+        refresh_lock: OAuthRefreshLock | None = None,
     ) -> None:
         self._oauth_store = oauth_store
         self._catalog_store = catalog_store
@@ -76,6 +88,9 @@ class McpOAuthRefresher:
         self._http_factory = http_factory
         self._clock = clock
         self._skew_s = skew_s
+        # Cross-replica lock (OA-6 hardening). None = single-replica / tests:
+        # the pool's in-process asyncio.Lock is the only serialisation.
+        self._refresh_lock = refresh_lock
 
     async def ensure_fresh(
         self, record: McpOAuthConnectionRecord
@@ -99,6 +114,32 @@ class McpOAuthRefresher:
         return await self._refresh(record, truly_expired=truly_expired)
 
     async def _refresh(
+        self, record: McpOAuthConnectionRecord, *, truly_expired: bool
+    ) -> McpOAuthConnectionRecord | None:
+        """Refresh under the cross-replica lock (OA-6 hardening).
+
+        Without a lock (single replica / tests) refresh directly. With one,
+        hold it for this user, then **reload** the connection — another replica
+        may have refreshed while we blocked, in which case we serve its token
+        instead of refreshing again (which would race the rotated refresh token
+        and falsely revoke the connection)."""
+        if self._refresh_lock is None:
+            return await self._do_refresh(record, truly_expired=truly_expired)
+        async with self._refresh_lock.acquire(tenant_id=record.tenant_id, user_id=record.user_id):
+            fresh = await self._oauth_store.get(
+                connection_id=record.id, tenant_id=record.tenant_id, user_id=record.user_id
+            )
+            if fresh is None or fresh.status != "connected" or not fresh.access_token_ref:
+                return None
+            now = self._clock()
+            if fresh.token_expires_at is None or fresh.token_expires_at > now + timedelta(
+                seconds=self._skew_s
+            ):
+                logger.info("mcp_oauth_refresh.already_fresh connection_id=%s", fresh.id)
+                return fresh  # refreshed by another replica while we blocked
+            return await self._do_refresh(fresh, truly_expired=fresh.token_expires_at <= now)
+
+    async def _do_refresh(
         self, record: McpOAuthConnectionRecord, *, truly_expired: bool
     ) -> McpOAuthConnectionRecord | None:
         # oauth_client_id lives on the (NULL-tenant) catalog entry.

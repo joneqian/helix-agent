@@ -5,6 +5,7 @@ HTTP is served by an ``httpx.MockTransport`` (no network); stores are in-memory.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -319,3 +320,105 @@ async def test_not_connected_unusable() -> None:
     )  # still "pending"
     out = await _refresher(oauth, cat, sec, _token_handler()).ensure_fresh(rec)
     assert out is None
+
+
+# --- cross-replica refresh lock (OA-6 hardening) ---------------------------
+
+
+class _FakeRefreshLock:
+    """Records acquisitions; optionally runs a hook on acquire (to simulate a
+    peer replica refreshing the connection while we hold/await the lock)."""
+
+    def __init__(self, on_acquire=None) -> None:  # type: ignore[no-untyped-def]
+        self.acquired: list[tuple[UUID, str]] = []
+        self._on_acquire = on_acquire
+
+    @asynccontextmanager
+    async def acquire(self, *, tenant_id: UUID, user_id: str):  # type: ignore[no-untyped-def]
+        self.acquired.append((tenant_id, user_id))
+        if self._on_acquire is not None:
+            await self._on_acquire()
+        yield
+
+
+@pytest.mark.asyncio
+async def test_refresh_takes_lock_then_refreshes() -> None:
+    cat, oauth, sec = (
+        InMemoryMcpConnectorCatalogStore(),
+        InMemoryMcpOAuthConnectionStore(),
+        InMemorySecretStore(),
+    )
+    tid, uid = uuid4(), "kc-user"
+    cat_id = await _seed_catalog(cat)
+    rec = await _seed_connection(
+        oauth,
+        sec,
+        tenant_id=tid,
+        user_id=uid,
+        catalog_id=cat_id,
+        expires_at=_NOW + timedelta(seconds=10),  # within skew → refresh
+    )
+    lock = _FakeRefreshLock()
+    refresher = McpOAuthRefresher(
+        oauth_store=oauth,
+        catalog_store=cat,
+        secret_store=sec,
+        http_factory=_http_factory(_token_handler()),
+        clock=lambda: _NOW,
+        refresh_lock=lock,
+    )
+    out = await refresher.ensure_fresh(rec)
+    assert out is not None and out.status == "connected"
+    # Lock acquired once for this user; the new access token was stored.
+    assert lock.acquired == [(tid, uid)]
+    assert await sec.get(out.access_token_ref.removeprefix("secret://")) == "AT2"
+
+
+@pytest.mark.asyncio
+async def test_refresh_skips_when_peer_already_refreshed() -> None:
+    """Under the lock the refresher reloads the connection; if a peer replica
+    already refreshed (token now fresh), it serves that token WITHOUT a second
+    refresh — the rotated-refresh-token race that would falsely revoke."""
+    cat, oauth, sec = (
+        InMemoryMcpConnectorCatalogStore(),
+        InMemoryMcpOAuthConnectionStore(),
+        InMemorySecretStore(),
+    )
+    tid, uid = uuid4(), "kc-user"
+    cat_id = await _seed_catalog(cat)
+    rec = await _seed_connection(
+        oauth,
+        sec,
+        tenant_id=tid,
+        user_id=uid,
+        catalog_id=cat_id,
+        expires_at=_NOW + timedelta(seconds=10),  # near-expiry on entry
+    )
+
+    async def _peer_refresh() -> None:
+        # Simulate the other replica refreshing while we waited for the lock.
+        await oauth.update(
+            connection_id=rec.id,
+            tenant_id=tid,
+            user_id=uid,
+            patch=McpOAuthConnectionPatch(token_expires_at=_NOW + timedelta(hours=2)),
+        )
+
+    def _no_token(request: httpx.Request) -> httpx.Response:
+        assert request.url.path != "/token", "token endpoint must NOT be called"
+        return _token_handler()(request)
+
+    lock = _FakeRefreshLock(on_acquire=_peer_refresh)
+    refresher = McpOAuthRefresher(
+        oauth_store=oauth,
+        catalog_store=cat,
+        secret_store=sec,
+        http_factory=_http_factory(_no_token),
+        clock=lambda: _NOW,
+        refresh_lock=lock,
+    )
+    out = await refresher.ensure_fresh(rec)
+    assert out is not None and out.status == "connected"
+    assert lock.acquired == [(tid, uid)]
+    # Token untouched — no second refresh.
+    assert await sec.get(out.access_token_ref.removeprefix("secret://")) == "AT1"

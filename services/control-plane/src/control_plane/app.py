@@ -127,6 +127,7 @@ from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
 from control_plane.manifest import ManifestLoader
 from control_plane.mcp_oauth import default_http_client
 from control_plane.mcp_oauth_refresh import McpOAuthRefresher
+from control_plane.mcp_oauth_refresh_lock import PgMcpOAuthRefreshLock
 from control_plane.memory import MemoryDLQWorker
 from control_plane.memory_consolidator import (
     ConsolidatorAuxModel,
@@ -967,6 +968,14 @@ def create_app(
                     catalog_store=resolved_mcp_connector_catalog_store,
                     secret_store=resolved_secret_store,
                     http_factory=default_http_client,
+                    # OA-6 hardening — cross-replica lock so concurrent replicas
+                    # don't race the rotated refresh token. Raw (non-RLS) session;
+                    # None on in-memory dev (single process → asyncio.Lock suffices).
+                    refresh_lock=(
+                        PgMcpOAuthRefreshLock(create_async_session_factory(sql_stores.engine))
+                        if sql_stores is not None
+                        else None
+                    ),
                 )
                 user_mcp_oauth_pool_service = UserMcpOAuthPoolService(
                     oauth_store=resolved_mcp_oauth_connection_store,
