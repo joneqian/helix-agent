@@ -53,7 +53,6 @@ class OAuthRefreshLock(Protocol):
 
     def acquire(self, *, tenant_id: UUID, user_id: str) -> AbstractAsyncContextManager[None]:
         """Hold the lock for one user's refresh; released on context exit."""
-        ...
 
 
 # Refresh when the access token is within this window of expiry.
