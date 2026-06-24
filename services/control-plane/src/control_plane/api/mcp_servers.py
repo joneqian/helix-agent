@@ -33,6 +33,7 @@ from helix_agent.protocol import (
     McpServerProbeStatus,
     McpServerTransport,
     Principal,
+    TenantConfigPatch,
     TenantMcpServerPatch,
     TenantMcpServerRecord,
     TenantPlan,
@@ -320,6 +321,21 @@ async def _resolve_plan(tenant_config_service: object, tenant_id: UUID) -> Tenan
     return cfg.plan  # type: ignore[no-any-return]
 
 
+async def _tenant_allowlist(tenant_config_service: object, tenant_id: UUID) -> list[str]:
+    """The tenant's enabled platform-server names (``mcp_allowlist``).
+
+    Empty when the config service is unwired or the tenant has no config row —
+    the opt-in default ("租户选择使用": nothing enabled until selected, P2).
+    """
+    if tenant_config_service is None:
+        return []
+    try:
+        cfg = await tenant_config_service.get(tenant_id=tenant_id)  # type: ignore[attr-defined]
+    except TenantConfigNotConfiguredError:
+        return []
+    return list(cfg.mcp_allowlist)  # type: ignore[attr-defined]
+
+
 def _public(record: object) -> dict[str, object]:
     # Serialize the record WITHOUT exposing the token_secret_ref — a ref
     # (not a secret value) but dropped from the public payload to keep the
@@ -523,6 +539,7 @@ def build_mcp_servers_router() -> APIRouter:
     ) -> dict[str, object]:
         tenant_id = principal.tenant_id
         plan = await _resolve_plan(tenant_config_service, tenant_id)
+        allowlist = set(await _tenant_allowlist(tenant_config_service, tenant_id))
         # The catalog is NULL-tenant — a tenant-scoped session sees zero rows, so
         # every catalog read MUST run inside bypass_rls_session (W-8).
         async with bypass_rls_session():
@@ -541,10 +558,115 @@ def build_mcp_servers_router() -> APIRouter:
                 "required_tier": entry.required_tier.value,
                 "enabled": entry.enabled,
                 "entitled": tier_satisfies(plan, entry.required_tier),
+                # Opt-in tenant selection state (P2) — name in mcp_allowlist.
+                "tenant_enabled": entry.name in allowlist,
             }
             for entry in entries
         ]
         return {"success": True, "data": data, "error": None}
+
+    @router.post("/catalog/{catalog_id}/enable")
+    async def enable_platform_server(
+        catalog_id: UUID,
+        principal: Annotated[Principal, Depends(require("mcp_server", "write"))],
+        catalog_store: Annotated[McpConnectorCatalogStore, Depends(_get_catalog_store)],
+        tenant_config_service: Annotated[object, Depends(_get_tenant_config_service)],
+        pool_service: Annotated[object, Depends(_get_tenant_mcp_pool_service)],
+        agent_runtime: Annotated[object, Depends(_get_agent_runtime)],
+    ) -> dict[str, object]:
+        """Tenant opts into a platform shared server (adds it to mcp_allowlist).
+
+        Opt-in selection (P2 "租户选择使用"): the server becomes usable to this
+        tenant's agents only after this call. Tier-gated; only enabled catalog
+        entries can be selected. Idempotent.
+        """
+        tenant_id = principal.tenant_id
+        if tenant_config_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "TENANT_CONFIG_UNAVAILABLE", "message": "config service unwired"},
+            )
+        async with bypass_rls_session():
+            entry = await catalog_store.get_by_id(catalog_id)
+        if entry is None or not entry.enabled:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "MCP_CATALOG_NOT_FOUND", "message": "not found"},
+            )
+        plan = await _resolve_plan(tenant_config_service, tenant_id)
+        if not tier_satisfies(plan, entry.required_tier):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "MCP_CATALOG_TIER_REQUIRED",
+                    "message": f"requires the {entry.required_tier.value} plan",
+                },
+            )
+        try:
+            cfg = await tenant_config_service.get(  # type: ignore[attr-defined]
+                tenant_id=tenant_id, actor_id=principal.subject_id
+            )
+        except TenantConfigNotConfiguredError as exc:
+            # The allowlist lives on tenant_config, whose first write needs a
+            # display_name — onboard the tenant before enabling shared servers.
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "TENANT_NOT_CONFIGURED",
+                    "message": "configure the tenant before enabling MCP servers",
+                },
+            ) from exc
+        allowlist = list(cfg.mcp_allowlist)
+        if entry.name not in allowlist:
+            await tenant_config_service.upsert(  # type: ignore[attr-defined]
+                tenant_id=tenant_id,
+                patch=TenantConfigPatch(mcp_allowlist=[*allowlist, entry.name]),
+                actor_id=principal.subject_id,
+            )
+            await _invalidate_tenant_mcp(pool_service, agent_runtime, tenant_id)
+        return {
+            "success": True,
+            "data": {"name": entry.name, "tenant_enabled": True},
+            "error": None,
+        }
+
+    @router.delete("/catalog/{catalog_id}/enable", status_code=200)
+    async def disable_platform_server(
+        catalog_id: UUID,
+        principal: Annotated[Principal, Depends(require("mcp_server", "write"))],
+        catalog_store: Annotated[McpConnectorCatalogStore, Depends(_get_catalog_store)],
+        tenant_config_service: Annotated[object, Depends(_get_tenant_config_service)],
+        pool_service: Annotated[object, Depends(_get_tenant_mcp_pool_service)],
+        agent_runtime: Annotated[object, Depends(_get_agent_runtime)],
+    ) -> dict[str, object]:
+        """Tenant opts out of a platform shared server (removes it from
+        mcp_allowlist). Idempotent — a name already absent is a no-op."""
+        tenant_id = principal.tenant_id
+        if tenant_config_service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "TENANT_CONFIG_UNAVAILABLE", "message": "config service unwired"},
+            )
+        async with bypass_rls_session():
+            entry = await catalog_store.get_by_id(catalog_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "MCP_CATALOG_NOT_FOUND", "message": "not found"},
+            )
+        allowlist = await _tenant_allowlist(tenant_config_service, tenant_id)
+        if entry.name in allowlist:
+            await tenant_config_service.upsert(  # type: ignore[attr-defined]
+                tenant_id=tenant_id,
+                patch=TenantConfigPatch(mcp_allowlist=[n for n in allowlist if n != entry.name]),
+                actor_id=principal.subject_id,
+            )
+            await _invalidate_tenant_mcp(pool_service, agent_runtime, tenant_id)
+        return {
+            "success": True,
+            "data": {"name": entry.name, "tenant_enabled": False},
+            "error": None,
+        }
 
     @router.post("/catalog/{catalog_id}/instances", status_code=201)
     async def instantiate_catalog_entry(

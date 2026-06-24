@@ -132,9 +132,10 @@ class ToolEnv:
     #: Stream MCP platform-servers (P1b) — the platform-curated SHARED MCP
     #: servers (``none``/``bearer`` catalog rows, a ``bearer`` row carrying the
     #: platform's own token), built process-globally by the control plane from
-    #: ``mcp_connector_catalog``. Like ``mcp_pool`` (the operator file pool) it
-    #: is a platform pool gated per-tenant by ``mcp_allowlist``; ``None`` → no
-    #: shared catalog servers configured.
+    #: ``mcp_connector_catalog``. Unlike ``mcp_pool`` (operator file pool, empty
+    #: allowlist = all), this pool is **opt-in**: a tenant uses a shared server
+    #: only after enabling it (name in ``mcp_allowlist``), so an empty allowlist
+    #: = none (Stream MCP P2). ``None`` → no shared catalog servers configured.
     platform_mcp_pool: MCPServerPool | None = None
     #: Sandbox Supervisor client backing the ``exec_python`` builtin (F.4).
     supervisor_client: SupervisorClient | None = None
@@ -622,17 +623,19 @@ async def _register_mcp(registry: ToolRegistry, entry: MCPToolSpec, env: ToolEnv
             # mcp:<server>.<tool>.
             registered_servers.add(server_name)
 
-    # Platform shared catalog pool (P1b) — the platform-curated SHARED servers,
-    # gated by the same per-tenant allowlist as the operator file pool. A name
-    # already reserved by the file pool wins (skip the duplicate). Reserves the
-    # server NAME unconditionally so a tenant can't shadow it via allow_tools.
+    # Platform shared catalog pool (P1b) — the platform-curated SHARED servers.
+    # Opt-in (Stream MCP P2 "租户选择使用"): a tenant uses a shared server only
+    # after explicitly enabling it (name in ``mcp_allowlist``). Unlike the
+    # operator file pool (empty allowlist = all), an empty allowlist here means
+    # NONE. A name already reserved by the file pool wins (skip the duplicate).
+    # Reserves the server NAME unconditionally so a tenant can't shadow it.
     if env.platform_mcp_pool is not None:
-        server_allow = set(env.mcp_allowlist) or None
+        enabled_servers = set(env.mcp_allowlist)
         for server_name in env.platform_mcp_pool.names():
             if server_name in registered_servers:
                 logger.info("platform_mcp.server_shadowed_by_file_pool")
                 continue
-            if server_allow is not None and server_name not in server_allow:
+            if server_name not in enabled_servers:
                 continue
             if server_select is not None and server_name not in server_select:
                 continue
