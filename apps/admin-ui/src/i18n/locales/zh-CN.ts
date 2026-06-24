@@ -797,6 +797,11 @@ const zhCN: TranslationKeys = {
     err_duplicate: "已存在同名 server。",
     err_not_found: "该连接器已不存在。",
     oauth_badge: "OAuth",
+    enable: "启用",
+    enabled: "已启用",
+    enable_aria: "为本租户启用 {{name}}",
+    authorize: "授权",
+    shared_hint: "共享身份 —— 所有启用的用户共用一份凭证。",
   },
   mcp_oauth: {
     page_title: "我的 MCP 连接",

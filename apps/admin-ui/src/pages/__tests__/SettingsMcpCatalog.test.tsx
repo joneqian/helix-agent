@@ -16,7 +16,6 @@ import "../../i18n";
 import { SettingsMcpCatalog } from "../SettingsMcpCatalog";
 import { CatalogBrowser } from "../../components/mcp_catalog/CatalogBrowser";
 import { CatalogEntryDrawer } from "../../components/mcp_catalog/CatalogEntryDrawer";
-import { InstantiateCatalogForm } from "../../components/mcp_catalog/InstantiateCatalogForm";
 import { AuthSchemaBuilder } from "../../components/mcp_catalog/AuthSchemaBuilder";
 import { validateAuthSchemaSecrets } from "../../components/mcp_catalog/validation";
 import { AuthProvider } from "../../auth/AuthContext";
@@ -216,24 +215,29 @@ describe("CatalogEntryDrawer edit mode", () => {
 
 describe("CatalogBrowser entitlement lock", () => {
   function makeEntry(over: Partial<TenantCatalogEntry>): TenantCatalogEntry {
-    return { ...ENTRY, entitled: true, ...over };
+    return { ...ENTRY, entitled: true, tenant_enabled: false, ...over };
   }
 
-  it("entitled entry exposes an enabled select CTA", () => {
+  const noop = {
+    onToggleEnable: async () => {},
+    onAuthorize: () => {},
+  };
+
+  it("entitled entry exposes an enable toggle", () => {
     render(
       <App>
         <CatalogBrowser
           entries={[makeEntry({ id: "e1", name: "ok", entitled: true })]}
           loading={false}
           error={null}
-          onSelect={() => {}}
+          {...noop}
         />
       </App>,
     );
-    expect(screen.getByTestId("cb-select-ok")).toBeEnabled();
+    expect(screen.getByTestId("cb-toggle-ok")).toBeEnabled();
   });
 
-  it("non-entitled entry disables the CTA (lock badge)", () => {
+  it("non-entitled entry shows a lock badge instead of a toggle", () => {
     render(
       <App>
         <CatalogBrowser
@@ -247,12 +251,51 @@ describe("CatalogBrowser entitlement lock", () => {
           ]}
           loading={false}
           error={null}
-          onSelect={() => {}}
+          {...noop}
         />
       </App>,
     );
     expect(screen.getByTestId("cb-locked-locked")).toBeDisabled();
-    expect(screen.queryByTestId("cb-select-locked")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("cb-toggle-locked")).not.toBeInTheDocument();
+  });
+
+  it("oauth2 entry surfaces Authorize only once enabled", () => {
+    const { rerender } = render(
+      <App>
+        <CatalogBrowser
+          entries={[
+            makeEntry({
+              id: "e3",
+              name: "lin",
+              auth_type: "oauth2",
+              tenant_enabled: false,
+            }),
+          ]}
+          loading={false}
+          error={null}
+          {...noop}
+        />
+      </App>,
+    );
+    expect(screen.queryByTestId("cb-authorize-lin")).not.toBeInTheDocument();
+    rerender(
+      <App>
+        <CatalogBrowser
+          entries={[
+            makeEntry({
+              id: "e3",
+              name: "lin",
+              auth_type: "oauth2",
+              tenant_enabled: true,
+            }),
+          ]}
+          loading={false}
+          error={null}
+          {...noop}
+        />
+      </App>,
+    );
+    expect(screen.getByTestId("cb-authorize-lin")).toBeInTheDocument();
   });
 });
 
@@ -299,130 +342,6 @@ describe("AuthSchemaBuilder", () => {
     });
     expect(onChange).toHaveBeenCalled();
     expect(current[0].key).toBe("workspace");
-  });
-});
-
-describe("InstantiateCatalogForm", () => {
-  const entry: TenantCatalogEntry = {
-    ...ENTRY,
-    entitled: true,
-    auth_schema: {
-      fields: [
-        { key: "workspace", label: "Workspace", kind: "param", required: true },
-        { key: "token", label: "API Token", kind: "secret", required: true },
-      ],
-    },
-  };
-
-  it("renders an input per auth_schema field (param=text, secret=password)", () => {
-    render(
-      <App>
-        <InstantiateCatalogForm
-          entry={entry}
-          onCreated={() => {}}
-          onBack={() => {}}
-        />
-      </App>,
-    );
-    expect(screen.getByTestId("icf-field-workspace")).toBeInTheDocument();
-    const secret = screen.getByTestId("icf-field-token");
-    expect(secret).toHaveAttribute("type", "password");
-  });
-
-  it("submitting calls instantiate with split params/secrets", async () => {
-    let captured: { url?: string; body?: unknown } = {};
-    apiClient.defaults.adapter = (config) => {
-      captured = { url: config.url, body: config.data };
-      return Promise.resolve({
-        data: {
-          success: true,
-          data: { ...ENTRY, name: "github", url: "https://x" },
-          error: null,
-        },
-        status: 201,
-        statusText: "Created",
-        headers: {},
-        config,
-        request: {},
-      });
-    };
-    const onCreated = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <App>
-        <InstantiateCatalogForm
-          entry={entry}
-          onCreated={onCreated}
-          onBack={() => {}}
-        />
-      </App>,
-    );
-    await user.type(screen.getByTestId("icf-field-workspace"), "acme");
-    await user.type(screen.getByTestId("icf-field-token"), "secret-xyz");
-    await user.click(screen.getByTestId("icf-create"));
-    await waitFor(() => expect(onCreated).toHaveBeenCalled());
-    expect(captured.url).toContain("/mcp-servers/catalog/cat-1/instances");
-    const body = JSON.parse(captured.body as string) as {
-      params: Record<string, string>;
-      secrets: Record<string, string>;
-    };
-    expect(body.params.workspace).toBe("acme");
-    expect(body.secrets.token).toBe("secret-xyz");
-  });
-
-  it("omits an unfilled optional param instead of sending an empty string", async () => {
-    const optionalEntry: TenantCatalogEntry = {
-      ...ENTRY,
-      entitled: true,
-      auth_schema: {
-        fields: [
-          {
-            key: "workspace",
-            label: "Workspace",
-            kind: "param",
-            required: false,
-          },
-          { key: "token", label: "API Token", kind: "secret", required: true },
-        ],
-      },
-    };
-    let captured: { body?: unknown } = {};
-    apiClient.defaults.adapter = (config) => {
-      captured = { body: config.data };
-      return Promise.resolve({
-        data: {
-          success: true,
-          data: { ...ENTRY, name: "github", url: "https://x" },
-          error: null,
-        },
-        status: 201,
-        statusText: "Created",
-        headers: {},
-        config,
-        request: {},
-      });
-    };
-    const onCreated = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <App>
-        <InstantiateCatalogForm
-          entry={optionalEntry}
-          onCreated={onCreated}
-          onBack={() => {}}
-        />
-      </App>,
-    );
-    // Leave the optional "workspace" param blank; only fill the secret.
-    await user.type(screen.getByTestId("icf-field-token"), "secret-xyz");
-    await user.click(screen.getByTestId("icf-create"));
-    await waitFor(() => expect(onCreated).toHaveBeenCalled());
-    const body = JSON.parse(captured.body as string) as {
-      params: Record<string, string>;
-      secrets: Record<string, string>;
-    };
-    expect(body.params).not.toHaveProperty("workspace");
-    expect(body.secrets.token).toBe("secret-xyz");
   });
 });
 

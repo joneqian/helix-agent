@@ -1,39 +1,42 @@
 /**
  * Add MCP server drawer — Stream W (tenant admin).
  *
- * The primary "Add MCP server" affordance. Opens the catalog browser first;
- * selecting an entitled connector swaps to the auth_schema-driven instantiate
- * form. A secondary "Advanced — add a custom server" link demotes the legacy
- * custom-URL registration (the existing ``CreateMcpServerDrawer`` in create
- * mode).
+ * The primary "Add MCP server" affordance. Opens the catalog browser — the
+ * tenant-facing MCP marketplace — where each platform server carries an
+ * enable/disable toggle (opt-in selection, P4). ``oauth2`` connectors add a
+ * per-user "Authorize" step (``OAuthConnectForm``). A secondary "Advanced — add
+ * a custom server" link demotes the legacy custom-URL registration (the
+ * existing ``CreateMcpServerDrawer`` in create mode).
  *
  * Mirrors ``CreateMcpServerDrawer`` chrome (Drawer 560 px, footer-less body
  * with per-step controls, reset-on-close).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Button, Divider, Drawer, Typography } from "antd";
+import { App, Button, Divider, Drawer, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 
 import {
+  disablePlatformServer,
+  enablePlatformServer,
   listTenantCatalog,
   type TenantCatalogEntry,
 } from "../../api/mcp-catalog";
+import { ApiError } from "../../api/client";
 import { CatalogBrowser } from "./CatalogBrowser";
-import { InstantiateCatalogForm } from "./InstantiateCatalogForm";
 import { OAuthConnectForm } from "./OAuthConnectForm";
 import { CreateMcpServerDrawer } from "../CreateMcpServerDrawer";
 
 export interface AddMcpServerDrawerProps {
   open: boolean;
   onClose: () => void;
-  /** Fires after a successful create (catalog or custom) so the parent can
-   *  refresh + close. */
+  /** Fires after a successful custom-server create so the parent can refresh +
+   *  close. (Enable/disable toggles persist in place and keep the drawer open.) */
   onSaved: () => void;
 }
 
 type Step =
   | { kind: "browse" }
-  | { kind: "instantiate"; entry: TenantCatalogEntry };
+  | { kind: "authorize"; entry: TenantCatalogEntry };
 
 export function AddMcpServerDrawer({
   open,
@@ -41,6 +44,7 @@ export function AddMcpServerDrawer({
   onSaved,
 }: AddMcpServerDrawerProps) {
   const { t } = useTranslation();
+  const { message } = App.useApp();
 
   const [step, setStep] = useState<Step>({ kind: "browse" });
   const [entries, setEntries] = useState<TenantCatalogEntry[]>([]);
@@ -78,6 +82,34 @@ export function AddMcpServerDrawer({
     onClose();
   }, [reset, onClose]);
 
+  const handleToggleEnable = useCallback(
+    async (entry: TenantCatalogEntry, next: boolean) => {
+      try {
+        if (next) {
+          await enablePlatformServer(entry.id);
+        } else {
+          await disablePlatformServer(entry.id);
+        }
+        setEntries((prev) =>
+          prev.map((e) =>
+            e.id === entry.id ? { ...e, tenant_enabled: next } : e,
+          ),
+        );
+      } catch (err) {
+        const msg =
+          err instanceof ApiError
+            ? `${err.code}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : "unknown error";
+        message.error(msg);
+        // Re-throw so the toggle reverts to the persisted state.
+        throw err instanceof Error ? err : new Error(msg);
+      }
+    },
+    [message],
+  );
+
   return (
     <>
       <Drawer
@@ -86,9 +118,7 @@ export function AddMcpServerDrawer({
         title={
           step.kind === "browse"
             ? t("mcp_catalog.browser_title")
-            : t("mcp_catalog.instantiate_title", {
-                name: step.entry.display_name,
-              })
+            : t("mcp_oauth.connect_title", { name: step.entry.display_name })
         }
         width={560}
         destroyOnHidden
@@ -100,7 +130,8 @@ export function AddMcpServerDrawer({
               entries={entries}
               loading={loading}
               error={error}
-              onSelect={(entry) => setStep({ kind: "instantiate", entry })}
+              onToggleEnable={handleToggleEnable}
+              onAuthorize={(entry) => setStep({ kind: "authorize", entry })}
             />
             <Divider />
             <div data-testid="amsd-advanced">
@@ -117,19 +148,10 @@ export function AddMcpServerDrawer({
               </div>
             </div>
           </>
-        ) : step.entry.auth_type === "oauth2" ? (
+        ) : (
           <OAuthConnectForm
             entry={step.entry}
             onBack={() => setStep({ kind: "browse" })}
-          />
-        ) : (
-          <InstantiateCatalogForm
-            entry={step.entry}
-            onBack={() => setStep({ kind: "browse" })}
-            onCreated={() => {
-              onSaved();
-              handleClose();
-            }}
           />
         )}
       </Drawer>
