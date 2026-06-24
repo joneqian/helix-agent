@@ -769,6 +769,11 @@ export interface TranslationKeys {
     err_duplicate: string;
     err_not_found: string;
     oauth_badge: string;
+    enable: string;
+    enabled: string;
+    enable_aria: string;
+    authorize: string;
+    shared_hint: string;
   };
   mcp_oauth: {
     page_title: string;
@@ -2496,6 +2501,11 @@ const en: TranslationKeys = {
     err_duplicate: "A server with this name already exists.",
     err_not_found: "This connector no longer exists.",
     oauth_badge: "OAuth",
+    enable: "Enable",
+    enabled: "Enabled",
+    enable_aria: "Enable {{name}} for this tenant",
+    authorize: "Authorize",
+    shared_hint: "Shared identity — all enabled users share one credential.",
   },
   mcp_oauth: {
     page_title: "My MCP Connections",

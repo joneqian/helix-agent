@@ -14,8 +14,9 @@
  * unwrapped payload is typed below.  ``getJson`` / ``postJson`` / ``patchJson``
  * call ``unwrap()`` internally — callers receive the data directly.
  */
-import { getJson, patchJson, postJson, apiClient } from "./client";
-import type { McpAuthType, McpServer, McpTransport } from "./mcp-servers";
+import { getJson, patchJson, postJson, apiClient, unwrap } from "./client";
+import type { ApiEnvelope } from "./client";
+import type { McpAuthType, McpTransport } from "./mcp-servers";
 
 // ── Domain types ─────────────────────────────────────────────────────────
 
@@ -60,9 +61,20 @@ export interface McpCatalogEntry {
 }
 
 /** A catalog entry as seen by a tenant admin — augmented with whether the
- *  tenant's plan tier meets ``required_tier``. */
+ *  tenant's plan tier meets ``required_tier`` and whether the tenant has opted
+ *  into this platform server (``mcp_allowlist``). */
 export interface TenantCatalogEntry extends McpCatalogEntry {
   entitled: boolean;
+  /** Opt-in selection state — the server's name is in the tenant's
+   *  ``mcp_allowlist`` (P4). A/B alike must be enabled before use; oauth2 then
+   *  additionally needs a per-user authorization. */
+  tenant_enabled: boolean;
+}
+
+/** Result of a tenant enable/disable toggle on a platform server. */
+export interface PlatformServerToggle {
+  name: string;
+  tenant_enabled: boolean;
 }
 
 /** Upsert (create) body for ``POST /v1/platform/mcp-catalog``. */
@@ -97,16 +109,6 @@ export interface CatalogPatchBody {
   bearer_token?: string;
   required_tier?: McpRequiredTier;
   enabled?: boolean;
-}
-
-/** Body for instantiating a catalog entry into a tenant MCP server. */
-export interface InstantiateBody {
-  /** Optional instance-name override; the backend derives one from the
-   *  entry name when omitted. */
-  name?: string;
-  params: Record<string, string>;
-  secrets: Record<string, string>;
-  timeout_s?: number;
 }
 
 // ── Platform catalog (system_admin) ────────────────────────────────────────
@@ -157,14 +159,24 @@ export async function listTenantCatalog(): Promise<TenantCatalogEntry[]> {
   return getJson<TenantCatalogEntry[]>("/v1/mcp-servers/catalog");
 }
 
-/** ``POST /v1/mcp-servers/catalog/{id}/instances`` — instantiate a catalog
- *  entry into a concrete tenant MCP server. */
-export async function instantiateCatalogEntry(
+/** ``POST /v1/mcp-servers/catalog/{id}/enable`` — tenant opts into a platform
+ *  shared server (adds it to ``mcp_allowlist``). Idempotent; tier-gated. */
+export async function enablePlatformServer(
   id: string,
-  body: InstantiateBody,
-): Promise<McpServer> {
-  return postJson<McpServer>(
-    `/v1/mcp-servers/catalog/${encodeURIComponent(id)}/instances`,
-    body,
+): Promise<PlatformServerToggle> {
+  return postJson<PlatformServerToggle>(
+    `/v1/mcp-servers/catalog/${encodeURIComponent(id)}/enable`,
+    {},
   );
+}
+
+/** ``DELETE /v1/mcp-servers/catalog/{id}/enable`` — tenant opts out (removes it
+ *  from ``mcp_allowlist``). Idempotent. */
+export async function disablePlatformServer(
+  id: string,
+): Promise<PlatformServerToggle> {
+  const response = await apiClient.delete<ApiEnvelope<PlatformServerToggle>>(
+    `/v1/mcp-servers/catalog/${encodeURIComponent(id)}/enable`,
+  );
+  return unwrap(response.data);
 }

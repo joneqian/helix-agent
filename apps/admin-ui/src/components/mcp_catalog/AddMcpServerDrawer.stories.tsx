@@ -34,6 +34,7 @@ const ENTRIES: TenantCatalogEntry[] = [
     updated_at: "2026-05-01T10:00:00Z",
     updated_by: "u1",
     entitled: true,
+    tenant_enabled: false,
   },
   {
     id: "cat-2",
@@ -57,6 +58,7 @@ const ENTRIES: TenantCatalogEntry[] = [
     updated_at: "2026-05-10T08:00:00Z",
     updated_by: "u1",
     entitled: false,
+    tenant_enabled: false,
   },
 ];
 

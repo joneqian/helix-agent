@@ -2,13 +2,13 @@
  * MCP Catalog e2e — Stream W.
  *
  * Tenant happy path: open the "Add MCP server" drawer → browse the catalog →
- * pick an entitled connector → fill the auth_schema fields → create.
+ * toggle a platform server on (opt-in selection, P4 platform-server model).
  *
  * Network is fully mocked. CRITICAL: spec-level routes use ``route.fallback()``
  * (NOT ``route.continue()``) so unmatched requests fall through to the
  * fixture's global stub instead of hitting an absent backend (ECONNREFUSED).
  * Every endpoint the page touches is mocked: tenant catalog list, the
- * existing mcp-servers list, instantiate, and available.
+ * existing mcp-servers list, the enable toggle, and available.
  */
 import { test, expect, expectNoA11yViolations, SAMPLE_JWT } from "./fixtures";
 
@@ -34,6 +34,7 @@ const CATALOG = {
       updated_at: "2026-05-01T10:00:00Z",
       updated_by: "u1",
       entitled: true,
+      tenant_enabled: false,
     },
     {
       id: "cat-2",
@@ -57,6 +58,7 @@ const CATALOG = {
       updated_at: "2026-05-10T08:00:00Z",
       updated_by: "u1",
       entitled: false,
+      tenant_enabled: false,
     },
   ],
   error: null,
@@ -64,19 +66,9 @@ const CATALOG = {
 
 const EMPTY_SERVERS = { success: true, data: [], error: null };
 
-const INSTANCE_CREATED = {
+const ENABLE_OK = {
   success: true,
-  data: {
-    id: "srv-1",
-    name: "github",
-    transport: "sse",
-    url: "https://mcp.github.com/sse",
-    auth_type: "bearer",
-    timeout_s: 30,
-    enabled: true,
-    created_at: "2026-06-01T10:00:00Z",
-    updated_at: "2026-06-01T10:00:00Z",
-  },
+  data: { name: "github", tenant_enabled: true },
   error: null,
 };
 
@@ -101,10 +93,10 @@ test.beforeEach(async ({ page }) => {
     }
     await route.fallback();
   });
-  // Instantiate — POST /v1/mcp-servers/catalog/{id}/instances.
-  await page.route("**/v1/mcp-servers/catalog/*/instances", async (route) => {
+  // Enable toggle — POST /v1/mcp-servers/catalog/{id}/enable.
+  await page.route("**/v1/mcp-servers/catalog/*/enable", async (route) => {
     if (route.request().method() === "POST") {
-      await route.fulfill({ status: 201, json: INSTANCE_CREATED });
+      await route.fulfill({ status: 200, json: ENABLE_OK });
       return;
     }
     await route.fallback();
@@ -123,7 +115,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("browse catalog → pick entitled connector → fill fields → create", async ({ page }) => {
+test("browse catalog → toggle an entitled platform server on", async ({ page }) => {
   await login(page);
   await page.goto("/settings/mcp-servers");
 
@@ -133,22 +125,20 @@ test("browse catalog → pick entitled connector → fill fields → create", as
   await page.getByTestId("ms-add").click();
   await expect(page.getByTestId("cb-root")).toBeVisible();
 
-  // The locked (enterprise) connector's CTA is disabled.
+  // The locked (enterprise) connector shows a disabled lock badge, no toggle.
   await expect(page.getByTestId("cb-locked-linear")).toBeDisabled();
+  await expect(page.getByTestId("cb-toggle-linear")).toHaveCount(0);
 
-  // Pick the entitled connector.
-  await page.getByTestId("cb-select-github").click();
-  await expect(page.getByTestId("icf-form")).toBeVisible();
-
-  // Fill the secret field and create.
-  await page.getByTestId("icf-field-token").fill("ghp_test_token");
-
+  // Toggle the entitled connector on → POST .../cat-1/enable.
   const [req] = await Promise.all([
-    page.waitForRequest((r) => r.url().includes("/v1/mcp-servers/catalog/cat-1/instances")),
-    page.getByTestId("icf-create").click(),
+    page.waitForRequest(
+      (r) =>
+        r.url().includes("/v1/mcp-servers/catalog/cat-1/enable") &&
+        r.method() === "POST",
+    ),
+    page.getByTestId("cb-toggle-github").click(),
   ]);
-  const body = req.postDataJSON();
-  expect(body.secrets.token).toBe("ghp_test_token");
+  expect(req.method()).toBe("POST");
 });
 
 test("settings/mcp-servers add-from-catalog passes axe", async ({ page }) => {

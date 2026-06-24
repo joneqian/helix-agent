@@ -138,8 +138,8 @@ MCP server
   - **`GET /catalog`**:每项加 `tenant_enabled`(name ∈ 租户 allowlist)供前端开关态(`enabled` 字段已被目录项自身的平台启用标志占用)。
   - **oauth `initiate` 闸**:`entry.name ∈ 租户 allowlist` 否则 403 `MCP_CATALOG_NOT_ENABLED`(A/B 统一租户启用,B 再叠 per-user 授权)。
   - **`instantiate_catalog_entry` 退场推迟到 P4**:#789 **未动** instantiate(仍为旧 auth_schema 填字段流);删除与前端 `InstantiateCatalogForm` 退场(P4)同步,避免中间态破坏。
-- **P3 前端 — 平台配 server 表单**:`CatalogEntryDrawer` tab 重写 + 去 AuthSchemaBuilder + 修重复按钮。
-- **P4 前端 — 租户选择使用**:`CatalogBrowser` A 开关 + B 授权;退场 `InstantiateCatalogForm`。
+- ✅ **P3 前端 — 平台配 server 表单**(#791):`CatalogEntryDrawer` tab 重写 + 去 AuthSchemaBuilder + 修重复按钮。
+- ✅ **P4 前端 — 租户选择使用**:`CatalogBrowser` 卡片 A/B 统一启用开关(`onToggleEnable` → enable/disable 端点,本地态即时更新),B 启用后再露「授权」按钮(走 `OAuthConnectForm`);`AddMcpServerDrawer` 去 instantiate 步骤(`Step = browse | authorize`);删 `InstantiateCatalogForm` 前端 + `instantiate_catalog_entry` 后端端点 + `InstantiateRequest`/`_DISALLOWED_PARAM_CHARS`;`TenantCatalogEntry` 加 `tenant_enabled`;`api/mcp-catalog.ts` 加 `enablePlatformServer`/`disablePlatformServer`。测试:vitest CatalogBrowser 三例(开关/锁/oauth 启用后授权)+ e2e 改 toggle / oauth authorize;`test_mcp_catalog_instantiation.py` 收敛为 list+custom 两例(instantiate 用例退场)。
 - **P5 收尾**:i18n/stories/e2e、文档(本设计 + runbook)、`auth_schema`/`AuthSchemaBuilder` 退场清理。
 
 每期独立 PR + CI 绿 + live 验(A 真起共享 server 调通 / B 已 live 验过)。

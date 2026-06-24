@@ -1,7 +1,7 @@
 /**
  * OAuth connect panel — Stream MCP-OAUTH (tenant member).
  *
- * Shown instead of {@link InstantiateCatalogForm} when the selected catalog
+ * Shown from the catalog browser's Authorize action when the selected platform
  * connector is ``oauth2``. The user authorizes with their **own** account: the
  * "Authorize" button calls ``initiateMcpOAuth`` and navigates the browser to the
  * provider's authorize URL. After the provider redirects back to the admin-ui

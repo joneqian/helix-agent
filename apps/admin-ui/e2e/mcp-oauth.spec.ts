@@ -55,6 +55,7 @@ const CATALOG = {
       updated_at: "2026-05-01T10:00:00Z",
       updated_by: "u1",
       entitled: true,
+      tenant_enabled: true,
     },
   ],
   error: null,
@@ -151,7 +152,8 @@ test("(d) oauth2 connector shows OAuth badge + Authorize affordance", async ({
   await page.getByTestId("ms-add").click();
   // The catalog browser shows the oauth2 connector tagged "OAuth".
   await expect(page.getByTestId("cb-oauth-linear")).toBeVisible();
-  // Selecting it opens the authorize panel (not the secret-fields form).
-  await page.getByTestId("cb-select-linear").click();
+  // Enabled for the tenant → the per-user Authorize button opens the authorize
+  // panel (not a secret-fields form).
+  await page.getByTestId("cb-authorize-linear").click();
   await expect(page.getByTestId("ocf-authorize")).toBeVisible();
 });
