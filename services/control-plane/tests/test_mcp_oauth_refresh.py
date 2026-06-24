@@ -351,7 +351,11 @@ async def test_refresh_takes_lock_then_refreshes() -> None:
     tid, uid = uuid4(), "kc-user"
     cat_id = await _seed_catalog(cat)
     rec = await _seed_connection(
-        oauth, sec, tenant_id=tid, user_id=uid, catalog_id=cat_id,
+        oauth,
+        sec,
+        tenant_id=tid,
+        user_id=uid,
+        catalog_id=cat_id,
         expires_at=_NOW + timedelta(seconds=10),  # within skew → refresh
     )
     lock = _FakeRefreshLock()
@@ -383,14 +387,20 @@ async def test_refresh_skips_when_peer_already_refreshed() -> None:
     tid, uid = uuid4(), "kc-user"
     cat_id = await _seed_catalog(cat)
     rec = await _seed_connection(
-        oauth, sec, tenant_id=tid, user_id=uid, catalog_id=cat_id,
+        oauth,
+        sec,
+        tenant_id=tid,
+        user_id=uid,
+        catalog_id=cat_id,
         expires_at=_NOW + timedelta(seconds=10),  # near-expiry on entry
     )
 
     async def _peer_refresh() -> None:
         # Simulate the other replica refreshing while we waited for the lock.
         await oauth.update(
-            connection_id=rec.id, tenant_id=tid, user_id=uid,
+            connection_id=rec.id,
+            tenant_id=tid,
+            user_id=uid,
             patch=McpOAuthConnectionPatch(token_expires_at=_NOW + timedelta(hours=2)),
         )
 

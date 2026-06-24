@@ -55,6 +55,7 @@ class OAuthRefreshLock(Protocol):
         """Hold the lock for one user's refresh; released on context exit."""
         ...
 
+
 # Refresh when the access token is within this window of expiry.
 _DEFAULT_SKEW_S = 60.0
 # If the token endpoint omits ``expires_in`` on refresh, assume this TTL so we
@@ -125,18 +126,15 @@ class McpOAuthRefresher:
         and falsely revoke the connection)."""
         if self._refresh_lock is None:
             return await self._do_refresh(record, truly_expired=truly_expired)
-        async with self._refresh_lock.acquire(
-            tenant_id=record.tenant_id, user_id=record.user_id
-        ):
+        async with self._refresh_lock.acquire(tenant_id=record.tenant_id, user_id=record.user_id):
             fresh = await self._oauth_store.get(
                 connection_id=record.id, tenant_id=record.tenant_id, user_id=record.user_id
             )
             if fresh is None or fresh.status != "connected" or not fresh.access_token_ref:
                 return None
             now = self._clock()
-            if (
-                fresh.token_expires_at is None
-                or fresh.token_expires_at > now + timedelta(seconds=self._skew_s)
+            if fresh.token_expires_at is None or fresh.token_expires_at > now + timedelta(
+                seconds=self._skew_s
             ):
                 logger.info("mcp_oauth_refresh.already_fresh connection_id=%s", fresh.id)
                 return fresh  # refreshed by another replica while we blocked
