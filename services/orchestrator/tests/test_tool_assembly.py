@@ -503,7 +503,8 @@ async def test_platform_db_pool_tools_registered() -> None:
         RecordingMCPClient(tools=(MCPToolDef(name="forecast", description="", input_schema={}),)),
     )
     registry = await build_tool_registry(
-        [MCPToolSpec()], tool_env=ToolEnv(platform_mcp_pool=catalog)
+        [MCPToolSpec()],
+        tool_env=ToolEnv(platform_mcp_pool=catalog, mcp_allowlist=("weather",)),
     )
     assert registry.get("mcp:weather.forecast") is not None
 
@@ -530,7 +531,9 @@ async def test_platform_db_pool_gated_by_allowlist() -> None:
 
 
 @pytest.mark.asyncio
-async def test_platform_db_pool_empty_allowlist_sees_all() -> None:
+async def test_platform_db_pool_empty_allowlist_sees_none() -> None:
+    # Opt-in (P2): with no server enabled (empty allowlist), the shared catalog
+    # pool contributes nothing — unlike the operator file pool.
     catalog = MCPServerPool()
     await catalog.add(
         "weather",
@@ -539,7 +542,7 @@ async def test_platform_db_pool_empty_allowlist_sees_all() -> None:
     registry = await build_tool_registry(
         [MCPToolSpec()], tool_env=ToolEnv(platform_mcp_pool=catalog)
     )
-    assert registry.get("mcp:weather.forecast") is not None
+    assert registry.get("mcp:weather.forecast") is None
 
 
 @pytest.mark.asyncio
@@ -570,7 +573,8 @@ async def test_platform_db_pool_only_no_file_pool_ok() -> None:
         RecordingMCPClient(tools=(MCPToolDef(name="forecast", description="", input_schema={}),)),
     )
     registry = await build_tool_registry(
-        [MCPToolSpec()], tool_env=ToolEnv(platform_mcp_pool=catalog)
+        [MCPToolSpec()],
+        tool_env=ToolEnv(platform_mcp_pool=catalog, mcp_allowlist=("weather",)),
     )
     assert registry.get("mcp:weather.forecast") is not None
 

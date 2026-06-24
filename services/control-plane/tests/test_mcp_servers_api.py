@@ -18,7 +18,9 @@ from httpx import ASGITransport, AsyncClient
 from control_plane.app import create_app
 from control_plane.mcp_probe import McpProbeError
 from control_plane.settings import Settings
+from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.lifecycle import Lifecycle
+from helix_agent.protocol import McpConnectorCatalogUpsert, TenantConfigPatch
 from orchestrator.tools.mcp import MCPToolDef
 from tests.auth_fixtures import (
     TEST_AUDIENCE,
@@ -736,3 +738,79 @@ async def test_post_invalid_header_name_rejected(monkeypatch: pytest.MonkeyPatch
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["code"] == "MCP_SERVER_HEADERS_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# Tenant enablement of platform shared servers (P2 — opt-in "租户选择使用")
+# ---------------------------------------------------------------------------
+
+
+async def _seed_platform_none(app: object, *, name: str = "weather") -> UUID:
+    async with bypass_rls_session():
+        rec = await app.state.mcp_connector_catalog_store.create(  # type: ignore[attr-defined]
+            upsert=McpConnectorCatalogUpsert(
+                name=name,
+                display_name=name.title(),
+                transport="streamable_http",
+                url_template=f"https://mcp.example.com/{name}",
+                auth_type="none",
+            ),
+            actor_id="seed",
+        )
+    return rec.id
+
+
+async def _configure_tenant(app: object, tenant_id: UUID) -> None:
+    await app.state.tenant_config_service.upsert(  # type: ignore[attr-defined]
+        tenant_id=tenant_id,
+        patch=TenantConfigPatch(display_name="Acme"),
+        actor_id="seed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_enable_then_disable_platform_server() -> None:
+    app, headers, tenant_id = await _make_app_with_admin()
+    await _configure_tenant(app, tenant_id)
+    cat_id = await _seed_platform_none(app)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        en = await client.post(f"/v1/mcp-servers/catalog/{cat_id}/enable", headers=headers)
+        assert en.status_code == 200, en.text
+        assert en.json()["data"]["tenant_enabled"] is True
+        # The catalog list reflects the opt-in state.
+        lst = await client.get("/v1/mcp-servers/catalog", headers=headers)
+        row = next(r for r in lst.json()["data"] if r["name"] == "weather")
+        assert row["tenant_enabled"] is True
+        # Idempotent re-enable.
+        again = await client.post(f"/v1/mcp-servers/catalog/{cat_id}/enable", headers=headers)
+        assert again.status_code == 200
+        # Disable removes it.
+        dis = await client.delete(f"/v1/mcp-servers/catalog/{cat_id}/enable", headers=headers)
+        assert dis.status_code == 200
+        assert dis.json()["data"]["tenant_enabled"] is False
+        lst2 = await client.get("/v1/mcp-servers/catalog", headers=headers)
+        row2 = next(r for r in lst2.json()["data"] if r["name"] == "weather")
+        assert row2["tenant_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_enable_unconfigured_tenant_409() -> None:
+    app, headers, _tenant_id = await _make_app_with_admin()
+    cat_id = await _seed_platform_none(app)  # tenant has no config row
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        resp = await client.post(f"/v1/mcp-servers/catalog/{cat_id}/enable", headers=headers)
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "TENANT_NOT_CONFIGURED"
+
+
+@pytest.mark.asyncio
+async def test_enable_unknown_catalog_404() -> None:
+    app, headers, tenant_id = await _make_app_with_admin()
+    await _configure_tenant(app, tenant_id)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        resp = await client.post(f"/v1/mcp-servers/catalog/{uuid4()}/enable", headers=headers)
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "MCP_CATALOG_NOT_FOUND"

@@ -130,6 +130,22 @@ async def _resolve_plan(request: Request, tenant_id: UUID) -> TenantPlan:
     return cfg.plan  # type: ignore[no-any-return]
 
 
+async def _tenant_enabled(request: Request, tenant_id: UUID, name: str) -> bool:
+    """Whether the tenant has opted into this platform connector (mcp_allowlist).
+
+    Opt-in gate (P2): a tenant admin must enable a platform oauth server before
+    its users may authorize. Empty / unconfigured allowlist = nothing enabled.
+    """
+    svc = getattr(request.app.state, "tenant_config_service", None)
+    if svc is None:
+        return False
+    try:
+        cfg = await svc.get(tenant_id=tenant_id)
+    except TenantConfigNotConfiguredError:
+        return False
+    return name in cfg.mcp_allowlist
+
+
 def _secret_name(tenant_id: UUID, connection_id: UUID, kind: str) -> str:
     # connection_id (a UUID) keeps the path injection-safe — user_id is opaque.
     return f"helix-agent/tenant/{tenant_id}/mcp-oauth/{connection_id}/{kind}"
@@ -200,6 +216,16 @@ def build_mcp_oauth_router() -> APIRouter:
                 detail={
                     "code": "MCP_CATALOG_TIER_REQUIRED",
                     "message": f"connector requires the {entry.required_tier.value} tier",
+                },
+            )
+        # Tenant-level opt-in gate (P2): a tenant admin must enable the connector
+        # for the tenant before its users may authorize ("租户选择使用").
+        if not await _tenant_enabled(request, tenant_id, entry.name):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "MCP_CATALOG_NOT_ENABLED",
+                    "message": "connector not enabled for this tenant",
                 },
             )
 

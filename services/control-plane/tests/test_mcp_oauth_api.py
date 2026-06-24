@@ -15,7 +15,11 @@ from control_plane.mcp_oauth import OAuthServerMetadata, TokenResponse
 from control_plane.settings import Settings
 from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.lifecycle import Lifecycle
-from helix_agent.protocol import McpConnectorAuthSchema, McpConnectorCatalogUpsert
+from helix_agent.protocol import (
+    McpConnectorAuthSchema,
+    McpConnectorCatalogUpsert,
+    TenantConfigPatch,
+)
 from tests.auth_fixtures import (
     TEST_AUDIENCE,
     TEST_ISSUER,
@@ -65,7 +69,18 @@ async def _make_app(
     return app, {"Authorization": f"Bearer {token}"}, tenant_id, user_id
 
 
-async def _seed_oauth2_entry(app: object, *, name: str = "linear") -> UUID:
+async def _enable_for_tenant(app: object, tenant_id: UUID, name: str) -> None:
+    """Opt the tenant into a platform connector (P2 gate) so users may authorize."""
+    await app.state.tenant_config_service.upsert(  # type: ignore[attr-defined]
+        tenant_id=tenant_id,
+        patch=TenantConfigPatch(display_name="Test Tenant", mcp_allowlist=[name]),
+        actor_id="seed",
+    )
+
+
+async def _seed_oauth2_entry(
+    app: object, *, name: str = "linear", enable_for: UUID | None = None
+) -> UUID:
     upsert = McpConnectorCatalogUpsert(
         name=name,
         display_name="Linear",
@@ -80,6 +95,8 @@ async def _seed_oauth2_entry(app: object, *, name: str = "linear") -> UUID:
         rec = await app.state.mcp_connector_catalog_store.create(  # type: ignore[attr-defined]
             upsert=upsert, actor_id="seed"
         )
+    if enable_for is not None:
+        await _enable_for_tenant(app, enable_for, name)
     return rec.id
 
 
@@ -110,7 +127,7 @@ async def _fake_exchange(**_kwargs: object) -> TokenResponse:
 async def test_initiate_returns_authorize_url(monkeypatch: pytest.MonkeyPatch) -> None:
     app, headers, tenant_id, user_id = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         resp = await client.post(
@@ -133,7 +150,7 @@ async def test_full_oauth_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
     app, headers, tenant_id, user_id = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.exchange_code", _fake_exchange)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         init = await client.post(
@@ -164,9 +181,9 @@ async def test_full_oauth_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_callback_bad_state_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    app, headers, _, _ = await _make_app()
+    app, headers, tenant_id, _ = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         await client.post(f"/v1/mcp-servers/catalog/{cat_id}/oauth/initiate", headers=headers)
@@ -192,8 +209,8 @@ async def test_initiate_non_oauth2_entry_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_initiate_not_configured_returns_503() -> None:
-    app, headers, _, _ = await _make_app(redirect_uri=None)
-    cat_id = await _seed_oauth2_entry(app)
+    app, headers, tenant_id, _ = await _make_app(redirect_uri=None)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         resp = await client.post(
@@ -217,7 +234,7 @@ async def test_list_connections_excludes_secrets(monkeypatch: pytest.MonkeyPatch
     app, headers, tenant_id, user_id = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.exchange_code", _fake_exchange)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         await _connect(client, cat_id, headers)
@@ -247,7 +264,7 @@ async def test_disconnect_revokes_and_removes(monkeypatch: pytest.MonkeyPatch) -
     app, headers, tenant_id, user_id = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.exchange_code", _fake_exchange)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         cid = await _connect(client, cat_id, headers)
@@ -294,7 +311,7 @@ async def test_operator_can_initiate_own_oauth(monkeypatch: pytest.MonkeyPatch) 
     ``mcp_oauth`` RBAC resource (operator gets read/write/delete on own)."""
     app, _admin_headers, tenant_id, _ = await _make_app()
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     # An operator-role JWT (the regular logged-in employee), NOT admin.
     op_token = make_test_jwt(tenant_id=tenant_id, subject=str(uuid4()), roles=("operator",))
     op_headers = {"Authorization": f"Bearer {op_token}"}
@@ -319,7 +336,7 @@ async def test_initiate_with_client_redirect_stores_and_uses_it(
     client_redirect = "https://client.app/oauth/cb"
     app, headers, tenant_id, user_id = await _make_app(allowlist=[client_redirect])
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         resp = await client.post(
@@ -342,9 +359,9 @@ async def test_initiate_rejects_non_allowlisted_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A client redirect not on the allowlist → 422 (open-redirect guard)."""
-    app, headers, _, _ = await _make_app(allowlist=["https://client.app/cb"])
+    app, headers, tenant_id, _ = await _make_app(allowlist=["https://client.app/cb"])
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         resp = await client.post(
@@ -359,9 +376,9 @@ async def test_initiate_rejects_non_allowlisted_redirect(
 @pytest.mark.asyncio
 async def test_initiate_loopback_redirect_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """RFC 8252 native client: a loopback redirect is accepted (any port)."""
-    app, headers, _, _ = await _make_app(allowlist=[])
+    app, headers, tenant_id, _ = await _make_app(allowlist=[])
     monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
-    cat_id = await _seed_oauth2_entry(app)
+    cat_id = await _seed_oauth2_entry(app, enable_for=tenant_id)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
         resp = await client.post(
@@ -370,3 +387,19 @@ async def test_initiate_loopback_redirect_allowed(monkeypatch: pytest.MonkeyPatc
             json={"redirect_uri": "http://127.0.0.1:53122/cb"},
         )
     assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_initiate_rejects_when_tenant_not_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in gate (P2): without the tenant enabling the connector, a user
+    cannot authorize it — 403 MCP_CATALOG_NOT_ENABLED."""
+    app, headers, _tenant_id, _ = await _make_app()
+    monkeypatch.setattr("control_plane.api.mcp_oauth_api.discover_oauth_metadata", _fake_discover)
+    cat_id = await _seed_oauth2_entry(app)  # NOT enabled for the tenant
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://cp.test") as client:
+        resp = await client.post(
+            f"/v1/mcp-servers/catalog/{cat_id}/oauth/initiate", headers=headers
+        )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "MCP_CATALOG_NOT_ENABLED"
