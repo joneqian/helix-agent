@@ -1,19 +1,22 @@
 # Runbook — Seeding OAuth MCP connectors (Stream MCP-OAUTH OA-5)
 
-How to make a hosted, OAuth-only MCP connector (Linear, Notion, Sentry,
-Atlassian, …) available to tenants. The catalog ships a **template** with
-placeholder client IDs; you register an OAuth app per connector, drop its
-client ID into an environment variable, and the platform seeds the connector on
-the next start.
+The connector catalog ships an **empty** seed template
+(`configs/mcp-catalog-seed.json` is `[]`). The primary way to add an OAuth MCP
+connector is the **admin-ui catalog UI** (system_admin). This runbook covers the
+**optional** env-seed path: declaring connectors in the seed file so they are
+created automatically on startup once their client ID env var is set — useful for
+reproducible deploys or pre-provisioning a connector before its OAuth app exists.
 
 ## How it works
 
-- `configs/mcp-catalog-seed.json` declares each oauth2 connector. Its
+- `configs/mcp-catalog-seed.json` is a JSON array of connector entries. It ships
+  empty; append entries to pre-provision connectors. Each oauth2 entry's
   `oauth_client_id` is a `${MCP_OAUTH_<NAME>_CLIENT_ID}` placeholder.
-- On startup, when `mcp_catalog_seed_file` points at that file, each entry whose
+- On startup, when `mcp_catalog_seed_file` points at the file, each entry whose
   placeholders **all resolve** from the environment is created in the catalog
   (idempotently — `create-if-absent`). An entry with an **unset** placeholder is
-  skipped, so the platform boots fine before you've registered the app.
+  skipped, so the platform boots fine before you've registered the app. An empty
+  file (the default) seeds nothing.
 - A connector becomes usable to a user via the normal flow: the user calls
   `POST /v1/mcp-servers/catalog/{id}/oauth/initiate`, authorizes in the browser,
   and the callback stores their per-user token (OA-2/OA-3). Tokens refresh
@@ -27,44 +30,27 @@ the next start.
    navigation with no auth header); that page then calls
    `GET /v1/mcp-oauth/callback?state&code` with the logged-in user's bearer token.
    Until set, the initiate endpoint returns `503`.
-2. **Point at the seed file.** Set `mcp_catalog_seed_file=configs/mcp-catalog-seed.json`
-   (or your own copy). Unset (default) seeds nothing.
+2. **Point at the seed file** (only if using the env-seed path). Set
+   `mcp_catalog_seed_file=configs/mcp-catalog-seed.json` (or your own copy).
+   Unset (default) seeds nothing.
 
-## Per-connector steps (example: Linear)
+## Adding a connector via the seed file
 
-1. **Register an OAuth app** in the connector's developer console. Use the
+1. **Append an entry** to the seed file — a `McpConnectorCatalogUpsert` structure
+   with a fresh `${MCP_OAUTH_<NAME>_CLIENT_ID}` placeholder, the vendor's hosted
+   MCP `url_template` and `transport` (`sse` / `streamable_http`), and a
+   `required_tier` (`free` / `pro` / `enterprise`) gating which plans may use it.
+2. **Register an OAuth app** in the connector's developer console. Use the
    `mcp_oauth_redirect_uri` value above as the app's redirect/callback URL
    (add it to the app's allowlist). The MCP authorization spec requires
    OAuth 2.1 + PKCE (S256) — pick that flow; no client secret is stored by helix.
-2. **Verify the MCP endpoint.** Confirm the connector's hosted MCP `url_template`
-   and `transport` (`sse` or `streamable_http`) against the vendor's MCP docs,
-   and adjust the template entry if they differ from the shipped defaults.
 3. **Set the client ID env var.** For `name: "linear"` that is
-   `MCP_OAUTH_LINEAR_CLIENT_ID=<client id from step 1>`. (The OAuth *client ID*
-   is a public identifier, not a secret — a plain env var is fine.)
+   `MCP_OAUTH_LINEAR_CLIENT_ID=<client id from step 2>`. Env var names follow
+   `MCP_OAUTH_<NAME>_CLIENT_ID`, upper-cased from the entry's `name`. (The OAuth
+   *client ID* is a public identifier, not a secret — a plain env var is fine.)
 4. **Restart** the control plane. On boot it creates the connector. Confirm via
    `GET /v1/platform/mcp-catalog` (system_admin) — the entry should be present.
-
-Env var names follow `MCP_OAUTH_<NAME>_CLIENT_ID`, upper-cased from each entry's
-`name`. The shipped template covers (W6):
-
-| Connector | Tier | env var |
-|---|---|---|
-| `github` | free | `MCP_OAUTH_GITHUB_CLIENT_ID` |
-| `linear` | pro | `MCP_OAUTH_LINEAR_CLIENT_ID` |
-| `notion` | pro | `MCP_OAUTH_NOTION_CLIENT_ID` |
-| `sentry` | pro | `MCP_OAUTH_SENTRY_CLIENT_ID` |
-| `atlassian` | pro | `MCP_OAUTH_ATLASSIAN_CLIENT_ID` |
-
-`github` ships at the **free** tier so every tenant has a usable connector
-out-of-the-box; adjust any tier via the catalog admin UI. Each connector is only
-created once its client-ID env var is set (others stay skipped until then).
-
-## Adding a new connector
-
-Append an entry to the seed file with a fresh `${MCP_OAUTH_<NAME>_CLIENT_ID}`
-placeholder, then follow the per-connector steps. `required_tier` gates which
-plans can use it (`free` / `pro` / `enterprise`).
+   Entries whose client-ID env var is unset stay skipped until you set it.
 
 ## Limits
 
