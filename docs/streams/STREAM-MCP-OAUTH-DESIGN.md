@@ -187,9 +187,10 @@ CodeQL 脱敏(token / state 不进日志);每 PR 零技术债 + 同步 ITERATION
 
 **方案**:带占位符的 seed 模板 JSON + 启动期 env-seed loader(补上 W-6 规划的能力)。
 
-- **模板**(`configs/mcp-catalog-seed.json`):首批 oauth2 连接器(Linear/Notion/
-  Sentry/Atlassian)的完整 `McpConnectorCatalogUpsert` 结构,`oauth_client_id` 用
-  `${MCP_OAUTH_<NAME>_CLIENT_ID}` 占位。URL/transport 是模板默认,运维按各家文档核对。
+- **模板**(`configs/mcp-catalog-seed.json`):**默认空数组 `[]`** —— 不预置任何
+  连接器,平台管理员经 admin-ui 目录手工配。需要开箱预置时,往该文件追加
+  `McpConnectorCatalogUpsert` 结构条目,`oauth_client_id` 用
+  `${MCP_OAUTH_<NAME>_CLIENT_ID}` 占位,URL/transport 按各家文档填。
 - **loader**(`catalog_seed.py`,纯逻辑可单测):`load_catalog_seed(raw, env)` 解析
   JSON → 对字符串字段做 `${VAR}` 替换(env 取值)→ 构造校验后的 upsert 列表。
   - 某条目有**未解析占位符**(env 缺)→ **跳过该条**(收集名字),平台照常启动。
