@@ -52,15 +52,29 @@ export interface OAuthCallbackResult {
   status: McpOAuthStatus;
 }
 
+/** admin-ui's own OAuth callback page — the redirect target it supplies to
+ *  `initiate` (multi-client OAuth). Must be allowlisted on the backend. */
+export const MCP_OAUTH_CALLBACK_PATH = "/settings/mcp-oauth/callback";
+
+function adminUiRedirectUri(): string {
+  return `${window.location.origin}${MCP_OAUTH_CALLBACK_PATH}`;
+}
+
 /**
  * ``POST /v1/mcp-servers/catalog/{id}/oauth/initiate`` — start the OAuth flow.
  * Returns the provider authorize URL the browser should navigate to.
+ *
+ * Passes admin-ui's own `redirect_uri` (multi-client OAuth) so the provider
+ * returns here, regardless of the deployment's global default. Older backends
+ * ignore the body and fall back to the global value.
  */
 export async function initiateMcpOAuth(
   catalogId: string,
+  redirectUri: string = adminUiRedirectUri(),
 ): Promise<InitiateOAuthResult> {
   const res = await apiClient.post<InitiateOAuthResult>(
     `/v1/mcp-servers/catalog/${encodeURIComponent(catalogId)}/oauth/initiate`,
+    { redirect_uri: redirectUri },
   );
   return res.data;
 }
