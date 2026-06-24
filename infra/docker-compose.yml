@@ -89,8 +89,11 @@ x-control-plane-base: &control-plane-base
     # independent (non-loopback) clients; loopback redirects are allowed by
     # default. The MCP_OAUTH_*_CLIENT_ID vars (no HELIX_AGENT_ prefix) resolve
     # the seed file's ${...} placeholders — set per connector in infra/.env.
+    # The allowlist is a JSON array (pydantic decodes list[str] env as JSON, as
+    # with OIDC_AUDIENCE); the ``[]`` default is the empty array — an empty
+    # string would fail JSON decode and crash startup.
     HELIX_AGENT_MCP_OAUTH_REDIRECT_URI: ${HELIX_AGENT_MCP_OAUTH_REDIRECT_URI:-}
-    HELIX_AGENT_MCP_OAUTH_REDIRECT_ALLOWLIST: ${HELIX_AGENT_MCP_OAUTH_REDIRECT_ALLOWLIST:-}
+    HELIX_AGENT_MCP_OAUTH_REDIRECT_ALLOWLIST: ${HELIX_AGENT_MCP_OAUTH_REDIRECT_ALLOWLIST:-[]}
     HELIX_AGENT_MCP_CATALOG_SEED_FILE: ${HELIX_AGENT_MCP_CATALOG_SEED_FILE:-}
     MCP_OAUTH_GITHUB_CLIENT_ID: ${MCP_OAUTH_GITHUB_CLIENT_ID:-}
   volumes:
