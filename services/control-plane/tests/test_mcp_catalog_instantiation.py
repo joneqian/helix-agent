@@ -57,6 +57,7 @@ async def _fake_probe_fail(**kwargs: object) -> list[MCPToolDef]:
 class _StubConfig:
     plan: TenantPlan
     allow_custom_mcp_servers: bool
+    mcp_allowlist: tuple[str, ...] = ()
 
 
 class _StubTenantConfigService:
