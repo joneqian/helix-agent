@@ -20,12 +20,14 @@ def _item(
     embedding: tuple[float, ...],
     kind: str = "fact",
     content: str = "c",
+    agent_name: str | None = None,
 ) -> MemoryItem:
     return MemoryItem(
         id=uuid4(),
         tenant_id=tenant,  # type: ignore[arg-type]
         user_id=user,  # type: ignore[arg-type]
         kind=kind,  # type: ignore[arg-type]
+        agent_name=agent_name,
         content=content,
         embedding=embedding,
     )
@@ -478,3 +480,72 @@ async def test_decay_applies_on_hybrid_path() -> None:
         limit=2,
     )
     assert hits[0].content == "likes light roast coffee"
+
+
+@pytest.mark.asyncio
+async def test_episodic_isolated_per_agent_facts_shared() -> None:
+    # Stream Agent-Templates (M1-5c) — recall scoped to one agent sees shared
+    # facts (agent_name None) + that agent's episodic, NOT another agent's.
+    store = InMemoryMemoryStore()
+    tenant, user = uuid4(), uuid4()
+    await store.write(
+        [
+            _item(
+                tenant=tenant, user=user, embedding=(1.0, 0.0), kind="fact", content="shared-fact"
+            ),
+            _item(
+                tenant=tenant,
+                user=user,
+                embedding=(1.0, 0.0),
+                kind="episodic",
+                content="support-ep",
+                agent_name="support",
+            ),
+            _item(
+                tenant=tenant,
+                user=user,
+                embedding=(1.0, 0.0),
+                kind="episodic",
+                content="sales-ep",
+                agent_name="sales",
+            ),
+        ]
+    )
+    support = await store.retrieve(
+        tenant_id=tenant, user_id=user, query_embedding=(1.0, 0.0), agent_name="support", limit=10
+    )
+    got = {h.content for h in support}
+    assert "shared-fact" in got  # facts always shared
+    assert "support-ep" in got  # this agent's episodic
+    assert "sales-ep" not in got  # other agent's episodic excluded
+
+
+@pytest.mark.asyncio
+async def test_no_agent_scope_returns_all() -> None:
+    # Admin / legacy path: agent_name None applies no scoping (sees everything).
+    store = InMemoryMemoryStore()
+    tenant, user = uuid4(), uuid4()
+    await store.write(
+        [
+            _item(
+                tenant=tenant,
+                user=user,
+                embedding=(1.0, 0.0),
+                kind="episodic",
+                content="a-ep",
+                agent_name="a",
+            ),
+            _item(
+                tenant=tenant,
+                user=user,
+                embedding=(1.0, 0.0),
+                kind="episodic",
+                content="b-ep",
+                agent_name="b",
+            ),
+        ]
+    )
+    rows = await store.retrieve(
+        tenant_id=tenant, user_id=user, query_embedding=(1.0, 0.0), limit=10
+    )
+    assert {h.content for h in rows} == {"a-ep", "b-ep"}

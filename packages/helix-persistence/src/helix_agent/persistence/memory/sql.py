@@ -60,6 +60,7 @@ def _row_to_item(row: MemoryItemRow) -> MemoryItem:
         tenant_id=row.tenant_id,
         user_id=row.user_id,
         kind=row.kind,  # type: ignore[arg-type]
+        agent_name=row.agent_name,
         content=row.content,
         content_hash=row.content_hash,
         embedding=tuple(float(value) for value in row.embedding),
@@ -123,6 +124,9 @@ class SqlMemoryStore(MemoryStore):
                 "tenant_id": item.tenant_id,
                 "user_id": item.user_id,
                 "kind": item.kind,
+                # Stream Agent-Templates (M1-5c) — episodic items carry their
+                # owning agent; fact items leave it NULL (shared).
+                "agent_name": item.agent_name,
                 "content": item.content,
                 "content_hash": item.content_hash or hash_content(item.content),
                 "embedding": list(item.embedding),
@@ -157,6 +161,7 @@ class SqlMemoryStore(MemoryStore):
         query_embedding: Sequence[float],
         query_text: str | None = None,
         kind: Literal["fact", "episodic"] | None = None,
+        agent_name: str | None = None,
         limit: int = 5,
     ) -> list[MemoryItem]:
         # Capability Uplift Sprint #6 (Mini-ADR U-5) — hybrid path.
@@ -167,6 +172,7 @@ class SqlMemoryStore(MemoryStore):
                 query_embedding=query_embedding,
                 query_text=query_text,
                 kind=kind,
+                agent_name=agent_name,
                 limit=limit,
             )
         return await self._vector_retrieve(
@@ -174,6 +180,7 @@ class SqlMemoryStore(MemoryStore):
             user_id=user_id,
             query_embedding=query_embedding,
             kind=kind,
+            agent_name=agent_name,
             limit=limit,
         )
 
@@ -184,6 +191,7 @@ class SqlMemoryStore(MemoryStore):
         user_id: UUID,
         query_embedding: Sequence[float],
         kind: Literal["fact", "episodic"] | None,
+        agent_name: str | None = None,
         limit: int,
     ) -> list[MemoryItem]:
         stmt = select(MemoryItemRow).where(
@@ -194,6 +202,12 @@ class SqlMemoryStore(MemoryStore):
         )
         if kind is not None:
             stmt = stmt.where(MemoryItemRow.kind == kind)
+        # Stream Agent-Templates (M1-5c) — per-agent episodic scope: shared facts
+        # (agent_name NULL) + this agent's episodic rows; other agents excluded.
+        if agent_name is not None:
+            stmt = stmt.where(
+                or_(MemoryItemRow.agent_name.is_(None), MemoryItemRow.agent_name == agent_name)
+            )
         # pgvector cosine distance (``<=>``); HNSW index backs the sort.
         stmt = stmt.order_by(MemoryItemRow.embedding.cosine_distance(list(query_embedding))).limit(
             limit
@@ -222,6 +236,7 @@ class SqlMemoryStore(MemoryStore):
         query_embedding: Sequence[float],
         query_text: str,
         kind: Literal["fact", "episodic"] | None,
+        agent_name: str | None = None,
         limit: int,
     ) -> list[MemoryItem]:
         tokenized = tokenize_for_search(query_text)
@@ -231,6 +246,7 @@ class SqlMemoryStore(MemoryStore):
                 user_id=user_id,
                 query_embedding=query_embedding,
                 kind=kind,
+                agent_name=agent_name,
                 limit=limit,
             )
         # Two parallel selects under the same RLS-scoped session; fuse
@@ -245,6 +261,11 @@ class SqlMemoryStore(MemoryStore):
         ]
         if kind is not None:
             base_where.append(MemoryItemRow.kind == kind)
+        # Stream Agent-Templates (M1-5c) — per-agent episodic scope (see _vector).
+        if agent_name is not None:
+            base_where.append(
+                or_(MemoryItemRow.agent_name.is_(None), MemoryItemRow.agent_name == agent_name)
+            )
 
         vector_stmt = (
             select(MemoryItemRow)

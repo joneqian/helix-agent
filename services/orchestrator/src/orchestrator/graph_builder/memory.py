@@ -257,6 +257,7 @@ def make_memory_recall_node(
     top_k: int,
     tenant_config_store: TenantConfigStore | None = None,
     reranker: Reranker | None = None,
+    agent_name: str | None = None,
 ) -> MemoryNode:
     """Build the ``memory_recall`` node bound to the store + embedder.
 
@@ -297,6 +298,9 @@ def make_memory_recall_node(
                 user_id=user_id,
                 query_embedding=vectors[0],
                 query_text=task if mode == "hybrid" else None,
+                # Stream Agent-Templates (M1-5c) — scope episodic recall to this
+                # agent; shared facts (agent_name NULL) are always included.
+                agent_name=agent_name,
                 limit=recall_limit,
             )
             if reranker is not None and memories:
@@ -542,6 +546,7 @@ async def flush_messages_to_memory(
     dlq: MemoryWritebackDLQ | None = None,
     log_label: str = "memory.writeback",
     reconcile: bool = False,
+    agent_name: str | None = None,
 ) -> int:
     """Extract durable memories from ``messages``, embed, and persist them.
 
@@ -588,6 +593,9 @@ async def flush_messages_to_memory(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 kind=kind,
+                # Stream Agent-Templates (M1-5c) — tag episodic with the owning
+                # agent (per-agent isolation); facts stay shared (agent_name None).
+                agent_name=agent_name if kind == "episodic" else None,
                 content=content,
                 embedding=vector,
                 source_thread_id=str(thread_id) if thread_id is not None else None,
@@ -664,6 +672,7 @@ def make_pre_compaction_flush(
     embedder: Embedder,
     llm_caller: LLMCaller,
     dlq: MemoryWritebackDLQ | None = None,
+    agent_name: str | None = None,
 ) -> PreCompactionFlush:
     """Build the Stream CM-3 pre-compaction flush callback.
 
@@ -696,6 +705,7 @@ def make_pre_compaction_flush(
             token=token,
             dlq=dlq,
             log_label="memory.precompaction_flush",
+            agent_name=agent_name,
         )
 
     return flush
@@ -708,6 +718,7 @@ def make_memory_writeback_node(
     llm_caller: LLMCaller,
     dlq: MemoryWritebackDLQ | None = None,
     reconcile: bool = False,
+    agent_name: str | None = None,
 ) -> MemoryNode:
     """Build the ``memory_writeback`` node bound to the store + embedder.
 
@@ -747,6 +758,7 @@ def make_memory_writeback_node(
             dlq=dlq,
             log_label="memory.writeback",
             reconcile=reconcile,
+            agent_name=agent_name,
         )
         return {}
 

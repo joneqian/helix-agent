@@ -118,6 +118,7 @@ class InMemoryMemoryStore(MemoryStore):
         query_embedding: Sequence[float],
         query_text: str | None = None,
         kind: Literal["fact", "episodic"] | None = None,
+        agent_name: str | None = None,
         limit: int = 5,
     ) -> list[MemoryItem]:
         candidates = [
@@ -132,6 +133,9 @@ class InMemoryMemoryStore(MemoryStore):
             and row.status != "archived"
             and (row.status == "consolidated" or row.consolidated_into is None)
             and (kind is None or row.kind == kind)
+            # Stream Agent-Templates (M1-5c) — per-agent episodic scope: shared
+            # facts (agent_name None) + this agent's episodic rows.
+            and (agent_name is None or row.agent_name is None or row.agent_name == agent_name)
         ]
         # Vector recall — closest cosine distance first.
         vector_hits = sorted(

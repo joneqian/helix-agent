@@ -37,6 +37,9 @@ class MemoryItemRow(Base):
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
+    # Stream Agent-Templates (M1-5c) — owning agent for episodic memory (per-agent
+    # isolation); NULL for shared fact rows. Migration 0098.
+    agent_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     # Stream K.K7 — SHA-256 hex of ``lower(trim(content))``. Filled by

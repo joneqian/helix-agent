@@ -1483,12 +1483,16 @@ def _build_memory_nodes(
             "manifest declares memory.long_term but build_agent received no "
             "MemoryStore / Embedder (memory_env)"
         )
+    # Stream Agent-Templates (M1-5c) — bind the owning agent so episodic memory
+    # isolates per-agent (facts stay shared). Stable across versions.
+    agent_name = spec.metadata.name
     recall = make_memory_recall_node(
         memory_store=env.store,
         embedder=env.embedder,
         top_k=long_term.retrieve_top_k,
         tenant_config_store=env.tenant_config_store,
         reranker=env.reranker,  # Stream CM-4 — None → no rerank (pre-CM-4 behaviour)
+        agent_name=agent_name,
     )
     writeback = (
         make_memory_writeback_node(
@@ -1497,6 +1501,7 @@ def _build_memory_nodes(
             llm_caller=llm_caller,
             dlq=env.dlq,  # K.K7 — None keeps the previous log-and-drop behaviour
             reconcile=long_term.reconcile_writes,  # CM-7 — Mem0-style run-end ops
+            agent_name=agent_name,
         )
         if long_term.write_back
         else None
@@ -1507,6 +1512,7 @@ def _build_memory_nodes(
             embedder=env.embedder,
             llm_caller=llm_caller,
             dlq=env.dlq,
+            agent_name=agent_name,
         )
         if long_term.write_back and spec.spec.policies.context_compression.flush_before_compaction
         else None
