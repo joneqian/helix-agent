@@ -58,6 +58,7 @@ export interface TranslationKeys {
     mcp_servers: string;
     mcp_oauth: string;
     mcp_catalog: string;
+    agent_templates: string;
     platform_skills: string;
     usage: string;
     chargeback: string;
@@ -1261,6 +1262,54 @@ export interface TranslationKeys {
     subscribed_ok: string;
     unsubscribed_ok: string;
   };
+  agent_templates: {
+    page_title: string;
+    subtitle: string;
+    add: string;
+    deleted: string;
+    delete_confirm: string;
+    not_admin_title: string;
+    not_admin_body: string;
+    failed_to_load: string;
+    empty_title: string;
+    empty_hint: string;
+    col_name: string;
+    col_category: string;
+    col_tier: string;
+    col_status: string;
+    col_enabled: string;
+    col_actions: string;
+    tier_free: string;
+    tier_pro: string;
+    tier_enterprise: string;
+    status_draft: string;
+    status_published: string;
+    create_title: string;
+    create_btn: string;
+    invalid_manifest: string;
+    save_failed: string;
+    saved_ok: string;
+    yes: string;
+    no: string;
+    back: string;
+    field_display_name: string;
+    display_name_required: string;
+    field_description: string;
+    field_category: string;
+    field_icon: string;
+    field_tier: string;
+    field_status: string;
+    field_enabled: string;
+    field_manifest: string;
+    cat_support: string;
+    cat_sales: string;
+    cat_research: string;
+    cat_coding: string;
+    cat_data: string;
+    cat_productivity: string;
+    cat_general: string;
+    cat_other: string;
+  };
   platform_skills: {
     page_title: string;
     subtitle: string;
@@ -1729,6 +1778,7 @@ const en: TranslationKeys = {
     mcp_servers: "MCP Servers",
     mcp_oauth: "My MCP Connections",
     mcp_catalog: "MCP Catalog",
+    agent_templates: "Agent Templates",
     platform_skills: "Platform Skills",
     usage: "Usage",
     chargeback: "Chargeback",
@@ -3066,6 +3116,54 @@ const en: TranslationKeys = {
     enabled: "Enabled",
     subscribed_ok: "Enabled “{{name}}”",
     unsubscribed_ok: "Disabled “{{name}}”",
+  },
+  agent_templates: {
+    page_title: "Agent Templates",
+    subtitle: "Platform-curated base agents that tenants fork into their own.",
+    add: "New template",
+    deleted: "Template deleted",
+    delete_confirm: 'Delete “{{name}}”?',
+    not_admin_title: "System admin only",
+    not_admin_body: "Only a platform system admin can manage Agent templates.",
+    failed_to_load: "Failed to load templates",
+    empty_title: "No templates yet",
+    empty_hint: "Create a base Agent template tenants can fork.",
+    col_name: "Template",
+    col_category: "Category",
+    col_tier: "Tier",
+    col_status: "Status",
+    col_enabled: "Enabled",
+    col_actions: "Actions",
+    tier_free: "Free",
+    tier_pro: "Pro",
+    tier_enterprise: "Enterprise",
+    status_draft: "Draft",
+    status_published: "Published",
+    create_title: "New Agent template",
+    create_btn: "Create",
+    invalid_manifest: "The manifest is not valid YAML / JSON.",
+    save_failed: "Save failed",
+    saved_ok: "Saved",
+    yes: "Yes",
+    no: "No",
+    back: "Back",
+    field_display_name: "Display name",
+    display_name_required: "Display name is required",
+    field_description: "Description",
+    field_category: "Category",
+    field_icon: "Icon (emoji)",
+    field_tier: "Required tier",
+    field_status: "Status",
+    field_enabled: "Enabled",
+    field_manifest: "Manifest",
+    cat_support: "Support",
+    cat_sales: "Sales",
+    cat_research: "Research",
+    cat_coding: "Coding",
+    cat_data: "Data",
+    cat_productivity: "Productivity",
+    cat_general: "General",
+    cat_other: "Other",
   },
   platform_skills: {
     page_title: "Platform Skills",
