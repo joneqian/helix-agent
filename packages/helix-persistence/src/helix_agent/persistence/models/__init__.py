@@ -30,6 +30,9 @@ from helix_agent.persistence.models.mcp_oauth_connection import McpOAuthConnecti
 from helix_agent.persistence.models.memory_item import MemoryItemRow
 from helix_agent.persistence.models.memory_writeback_dlq import MemoryWritebackDLQRow
 from helix_agent.persistence.models.model_rate_card import ModelRateCardRow
+from helix_agent.persistence.models.platform_agent_template import (
+    PlatformAgentTemplateRow,
+)
 from helix_agent.persistence.models.platform_billing_config import (
     PlatformBillingConfigRow,
 )
@@ -103,6 +106,7 @@ __all__ = [
     "MemoryItemRow",
     "MemoryWritebackDLQRow",
     "ModelRateCardRow",
+    "PlatformAgentTemplateRow",
     "PlatformBillingConfigRow",
     "PlatformEmbeddingConfigRow",
     "PlatformJudgeConfigRow",

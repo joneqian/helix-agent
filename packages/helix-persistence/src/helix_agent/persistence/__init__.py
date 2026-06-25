@@ -141,6 +141,21 @@ from helix_agent.persistence.models import TenantMemberRow as TenantMemberRow
 from helix_agent.persistence.models import TenantUserRow as TenantUserRow
 from helix_agent.persistence.models import ThreadMetaRow as ThreadMetaRow
 from helix_agent.persistence.models import UserWorkspaceRow as UserWorkspaceRow
+from helix_agent.persistence.platform_agent_template import (
+    InMemoryPlatformAgentTemplateStore as InMemoryPlatformAgentTemplateStore,
+)
+from helix_agent.persistence.platform_agent_template import (
+    PlatformAgentTemplateAlreadyExistsError as PlatformAgentTemplateAlreadyExistsError,
+)
+from helix_agent.persistence.platform_agent_template import (
+    PlatformAgentTemplateNotFoundError as PlatformAgentTemplateNotFoundError,
+)
+from helix_agent.persistence.platform_agent_template import (
+    PlatformAgentTemplateStore as PlatformAgentTemplateStore,
+)
+from helix_agent.persistence.platform_agent_template import (
+    SqlPlatformAgentTemplateStore as SqlPlatformAgentTemplateStore,
+)
 from helix_agent.persistence.platform_secrets import (
     InMemoryPlatformSecretStore as InMemoryPlatformSecretStore,
 )
@@ -332,6 +347,7 @@ __all__ = [
     "InMemoryMcpOAuthConnectionStore",
     "InMemoryMemoryStore",
     "InMemoryModelRateCardStore",
+    "InMemoryPlatformAgentTemplateStore",
     "InMemoryPlatformSecretStore",
     "InMemoryTenantBillingLedgerStore",
     "InMemoryTenantConfigStore",
@@ -366,6 +382,9 @@ __all__ = [
     "ModelRateCardNotFoundError",
     "ModelRateCardRow",
     "ModelRateCardStore",
+    "PlatformAgentTemplateAlreadyExistsError",
+    "PlatformAgentTemplateNotFoundError",
+    "PlatformAgentTemplateStore",
     "PlatformSecretStore",
     "SqlApprovalStore",
     "SqlArtifactStore",
@@ -378,6 +397,7 @@ __all__ = [
     "SqlMcpConnectorCatalogStore",
     "SqlMcpOAuthConnectionStore",
     "SqlMemoryStore",
+    "SqlPlatformAgentTemplateStore",
     "SqlPlatformSecretStore",
     "SqlTenantConfigStore",
     "SqlTenantMcpServerStore",
