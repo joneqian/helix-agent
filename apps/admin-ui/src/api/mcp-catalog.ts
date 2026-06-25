@@ -21,6 +21,29 @@ import type { McpAuthType, McpTransport } from "./mcp-servers";
 
 export type McpRequiredTier = "free" | "pro" | "enterprise";
 
+/** Preset connector categories — stored as the stable slug, displayed via the
+ *  i18n ``labelKey``. Shared by the platform config drawer (Select options) and
+ *  the catalog list (category column). */
+export const MCP_CATEGORIES: { value: string; labelKey: string }[] = [
+  { value: "search", labelKey: "mcp_catalog.cat_search" },
+  { value: "database", labelKey: "mcp_catalog.cat_database" },
+  { value: "payment", labelKey: "mcp_catalog.cat_payment" },
+  { value: "location", labelKey: "mcp_catalog.cat_location" },
+  { value: "social", labelKey: "mcp_catalog.cat_social" },
+  { value: "design", labelKey: "mcp_catalog.cat_design" },
+  { value: "document", labelKey: "mcp_catalog.cat_document" },
+  { value: "browser-automation", labelKey: "mcp_catalog.cat_browser" },
+  { value: "scraping", labelKey: "mcp_catalog.cat_scraping" },
+  { value: "dev-tools", labelKey: "mcp_catalog.cat_dev_tools" },
+  { value: "other", labelKey: "mcp_catalog.cat_other" },
+];
+
+/** The i18n key for a category slug, or ``null`` for an unknown (legacy
+ *  free-text) value the caller should render verbatim. */
+export function mcpCategoryLabelKey(slug: string): string | null {
+  return MCP_CATEGORIES.find((c) => c.value === slug)?.labelKey ?? null;
+}
+
 export interface McpCatalogEntry {
   id: string;
   name: string;
@@ -145,6 +168,32 @@ export async function updatePlatformCatalogEntry(
  *  when at least one tenant has instantiated the entry. */
 export async function deletePlatformCatalogEntry(id: string): Promise<void> {
   await apiClient.delete(`/v1/platform/mcp-catalog/${encodeURIComponent(id)}`);
+}
+
+/** A single tool a probed server exposes. */
+export interface McpCatalogTool {
+  name: string;
+  description: string;
+}
+
+/** Result of live-probing a configured platform server.
+ *  ``ok`` = tools listed / ``unreachable`` = probe failed (``error`` carries the
+ *  code) / ``not_probeable`` = oauth2 (per-user token the platform never holds). */
+export interface McpCatalogToolsResult {
+  status: "ok" | "unreachable" | "not_probeable";
+  tool_count: number;
+  tools: McpCatalogTool[];
+  error: string | null;
+}
+
+/** ``POST /v1/platform/mcp-catalog/{id}/tools`` — live-probe + list tools. */
+export async function listCatalogTools(
+  id: string,
+): Promise<McpCatalogToolsResult> {
+  return postJson<McpCatalogToolsResult>(
+    `/v1/platform/mcp-catalog/${encodeURIComponent(id)}/tools`,
+    {},
+  );
 }
 
 // ── Tenant catalog (tenant admin) ──────────────────────────────────────────

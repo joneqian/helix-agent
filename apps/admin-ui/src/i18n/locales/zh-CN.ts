@@ -798,6 +798,11 @@ const zhCN: TranslationKeys = {
     enable_aria: "为本租户启用 {{name}}",
     authorize: "授权",
     shared_hint: "共享身份 —— 所有启用的用户共用一份凭证。",
+    tools_title: "工具",
+    test_connection: "测试连接",
+    tools_none: "已连接，但该 server 未暴露任何工具。",
+    tools_unreachable: "无法连接到该 server。",
+    tools_oauth_note: "OAuth 连接器按用户各自授权，无法在此列出工具。",
   },
   mcp_oauth: {
     page_title: "我的 MCP 连接",

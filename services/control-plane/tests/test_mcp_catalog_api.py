@@ -19,17 +19,30 @@ from httpx import ASGITransport, AsyncClient
 
 from control_plane.app import create_app
 from control_plane.audit import build_default_audit_logger
+from control_plane.mcp_probe import McpProbeError
 from control_plane.settings import Settings
 from helix_agent.common.lifecycle import Lifecycle
 from helix_agent.persistence import McpConnectorCatalogInUseError
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
 from helix_agent.protocol import AuditQuery, Role
+from orchestrator.tools.mcp import MCPToolDef
 from tests.auth_fixtures import (
     TEST_AUDIENCE,
     TEST_ISSUER,
     build_test_jwt_verifier,
     make_test_jwt,
 )
+
+
+async def _fake_probe_ok(**_kwargs: object) -> list[MCPToolDef]:
+    return [MCPToolDef(name="list_issues", description="List issues", input_schema={})]
+
+
+@pytest.fixture(autouse=True)
+def _patch_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Create/patch now connect-probe the server (W form-polish). Stub the probe
+    so CRUD tests don't reach the network; tools-endpoint tests override it."""
+    monkeypatch.setattr("control_plane.api.mcp_catalog.probe_remote_mcp", _fake_probe_ok)
 
 
 def _build_settings() -> Settings:
@@ -204,6 +217,82 @@ async def test_timeouts_round_trip_and_default_null(ctx: _Ctx) -> None:
     assert plain.status_code == 201, plain.text
     assert plain.json()["data"]["timeout_s"] is None
     assert plain.json()["data"]["sse_read_timeout_s"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_unreachable_server_422(
+    ctx: _Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _probe_fail(**_kwargs: object) -> list[MCPToolDef]:
+        raise McpProbeError("MCP_SERVER_PROBE_FAILED", "connection refused")
+
+    monkeypatch.setattr("control_plane.api.mcp_catalog.probe_remote_mcp", _probe_fail)
+    resp = await ctx.client.post(
+        "/v1/platform/mcp-catalog",
+        json={
+            "name": "down",
+            "display_name": "Down",
+            "transport": "sse",
+            "url_template": "https://mcp.example.com/down",
+            "auth_type": "none",
+        },
+        headers=ctx.admin_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"]["code"] == "MCP_SERVER_PROBE_FAILED"
+    # Not persisted: a follow-up list must not contain it.
+    lst = await ctx.client.get("/v1/platform/mcp-catalog", headers=ctx.admin_headers)
+    assert "down" not in {r["name"] for r in lst.json()["data"]}
+
+
+@pytest.mark.asyncio
+async def test_tools_endpoint_ok_unreachable_and_oauth(
+    ctx: _Ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ok — probe lists tools.
+    created = await ctx.client.post(
+        "/v1/platform/mcp-catalog",
+        json={
+            "name": "weather",
+            "display_name": "Weather",
+            "transport": "sse",
+            "url_template": "https://mcp.example.com/weather",
+            "auth_type": "none",
+        },
+        headers=ctx.admin_headers,
+    )
+    cid = created.json()["data"]["id"]
+    ok = await ctx.client.post(f"/v1/platform/mcp-catalog/{cid}/tools", headers=ctx.admin_headers)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["data"]["status"] == "ok"
+    assert ok.json()["data"]["tools"][0]["name"] == "list_issues"
+
+    # unreachable — probe raises → status unreachable (still 200, with error code).
+    async def _probe_fail(**_kwargs: object) -> list[MCPToolDef]:
+        raise McpProbeError("MCP_SERVER_PROBE_FAILED", "refused")
+
+    monkeypatch.setattr("control_plane.api.mcp_catalog.probe_remote_mcp", _probe_fail)
+    bad = await ctx.client.post(f"/v1/platform/mcp-catalog/{cid}/tools", headers=ctx.admin_headers)
+    assert bad.status_code == 200
+    assert bad.json()["data"]["status"] == "unreachable"
+    assert bad.json()["data"]["error"] == "MCP_SERVER_PROBE_FAILED"
+
+    # oauth2 — not probeable platform-side (per-user token).
+    oauth = await ctx.client.post(
+        "/v1/platform/mcp-catalog",
+        json={
+            "name": "linear",
+            "display_name": "Linear",
+            "transport": "sse",
+            "url_template": "https://mcp.example.com/linear",
+            "auth_type": "oauth2",
+            "oauth_client_id": "cid",
+        },
+        headers=ctx.admin_headers,
+    )
+    oid = oauth.json()["data"]["id"]
+    na = await ctx.client.post(f"/v1/platform/mcp-catalog/{oid}/tools", headers=ctx.admin_headers)
+    assert na.json()["data"]["status"] == "not_probeable"
 
 
 @pytest.mark.asyncio

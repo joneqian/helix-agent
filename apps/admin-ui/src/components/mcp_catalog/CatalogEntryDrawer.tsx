@@ -27,19 +27,26 @@ import {
   InputNumber,
   Select,
   Space,
+  Spin,
   Switch,
   Tabs,
+  Tag,
+  Tooltip,
+  Typography,
   Upload,
 } from "antd";
-import { ImagePlus, Trash2 } from "lucide-react";
+import { ImagePlus, Plug, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
   createPlatformCatalogEntry,
+  listCatalogTools,
+  MCP_CATEGORIES,
   updatePlatformCatalogEntry,
   type CatalogPatchBody,
   type CatalogUpsertBody,
   type McpCatalogEntry,
+  type McpCatalogTool,
   type McpRequiredTier,
 } from "../../api/mcp-catalog";
 import type { McpAuthType, McpTransport } from "../../api/mcp-servers";
@@ -87,21 +94,6 @@ const TIER_OPTIONS: { value: McpRequiredTier; labelKey: string }[] = [
   { value: "enterprise", labelKey: "mcp_catalog.tier_enterprise" },
 ];
 
-// Preset connector categories (stored as the stable slug, displayed via i18n).
-const CATEGORY_OPTIONS: { value: string; labelKey: string }[] = [
-  { value: "search", labelKey: "mcp_catalog.cat_search" },
-  { value: "database", labelKey: "mcp_catalog.cat_database" },
-  { value: "payment", labelKey: "mcp_catalog.cat_payment" },
-  { value: "location", labelKey: "mcp_catalog.cat_location" },
-  { value: "social", labelKey: "mcp_catalog.cat_social" },
-  { value: "design", labelKey: "mcp_catalog.cat_design" },
-  { value: "document", labelKey: "mcp_catalog.cat_document" },
-  { value: "browser-automation", labelKey: "mcp_catalog.cat_browser" },
-  { value: "scraping", labelKey: "mcp_catalog.cat_scraping" },
-  { value: "dev-tools", labelKey: "mcp_catalog.cat_dev_tools" },
-  { value: "other", labelKey: "mcp_catalog.cat_other" },
-];
-
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const ICON_MAX_BYTES = 32 * 1024;
 
@@ -123,6 +115,32 @@ export function CatalogEntryDrawer({
   const effectiveAuth: McpAuthType = isEditing
     ? editing.auth_type
     : (authType ?? "none");
+
+  // Live connectivity / tool listing for an existing server (edit mode).
+  type ToolsState =
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "ok"; tools: McpCatalogTool[] }
+    | { kind: "unreachable"; error: string | null }
+    | { kind: "not_probeable" };
+  const [toolsState, setToolsState] = useState<ToolsState>({ kind: "idle" });
+
+  const probeTools = useCallback(async () => {
+    if (!editing) return;
+    setToolsState({ kind: "loading" });
+    try {
+      const result = await listCatalogTools(editing.id);
+      if (result.status === "ok") {
+        setToolsState({ kind: "ok", tools: result.tools });
+      } else if (result.status === "not_probeable") {
+        setToolsState({ kind: "not_probeable" });
+      } else {
+        setToolsState({ kind: "unreachable", error: result.error });
+      }
+    } catch {
+      setToolsState({ kind: "unreachable", error: null });
+    }
+  }, [editing]);
 
   const reset = useCallback(() => {
     form.resetFields();
@@ -159,6 +177,15 @@ export function CatalogEntryDrawer({
       });
     }
   }, [open, editing, form, reset]);
+
+  // Probe the existing server when the edit drawer opens (surface its tools).
+  useEffect(() => {
+    if (open && editing) {
+      void probeTools();
+    } else {
+      setToolsState({ kind: "idle" });
+    }
+  }, [open, editing, probeTools]);
 
   const handleCancel = useCallback(() => {
     reset();
@@ -305,7 +332,7 @@ export function CatalogEntryDrawer({
           aria-label={t("mcp_catalog.field_category")}
           allowClear
           placeholder={t("mcp_catalog.category_placeholder")}
-          options={CATEGORY_OPTIONS.map((o) => ({
+          options={MCP_CATEGORIES.map((o) => ({
             value: o.value,
             label: t(o.labelKey),
           }))}
@@ -464,8 +491,57 @@ export function CatalogEntryDrawer({
     </>
   );
 
+  const toolsPanel = (
+    <Form.Item label={t("mcp_catalog.tools_title")}>
+      <Space direction="vertical" style={{ width: "100%" }} size={8}>
+        <Button
+          size="small"
+          icon={<Plug size={13} strokeWidth={1.6} />}
+          onClick={() => void probeTools()}
+          loading={toolsState.kind === "loading"}
+          data-testid="cce-test-conn"
+        >
+          {t("mcp_catalog.test_connection")}
+        </Button>
+        {toolsState.kind === "loading" && <Spin size="small" />}
+        {toolsState.kind === "ok" &&
+          (toolsState.tools.length > 0 ? (
+            <Space size={[4, 8]} wrap data-testid="cce-tools">
+              {toolsState.tools.map((tool) => (
+                <Tooltip key={tool.name} title={tool.description || undefined}>
+                  <Tag style={{ cursor: "default" }}>{tool.name}</Tag>
+                </Tooltip>
+              ))}
+            </Space>
+          ) : (
+            <Typography.Text type="secondary" data-testid="cce-tools-none">
+              {t("mcp_catalog.tools_none")}
+            </Typography.Text>
+          ))}
+        {toolsState.kind === "unreachable" && (
+          <Alert
+            type="error"
+            showIcon
+            data-testid="cce-tools-unreachable"
+            message={t("mcp_catalog.tools_unreachable")}
+            description={toolsState.error ?? undefined}
+          />
+        )}
+        {toolsState.kind === "not_probeable" && (
+          <Alert
+            type="info"
+            showIcon
+            data-testid="cce-tools-oauth"
+            message={t("mcp_catalog.tools_oauth_note")}
+          />
+        )}
+      </Space>
+    </Form.Item>
+  );
+
   const advancedTab = (
     <>
+      {isEditing && toolsPanel}
       <Form.Item
         name="timeout_s"
         label={t("mcp_catalog.field_timeout")}

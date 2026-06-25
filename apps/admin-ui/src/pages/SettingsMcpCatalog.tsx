@@ -30,6 +30,7 @@ import { PageHeader } from "../components/PageHeader";
 import {
   deletePlatformCatalogEntry,
   listPlatformCatalog,
+  mcpCategoryLabelKey,
   updatePlatformCatalogEntry,
   type McpCatalogEntry,
   type McpRequiredTier,
@@ -151,8 +152,11 @@ export function SettingsMcpCatalog() {
         dataIndex: "category",
         key: "category",
         width: 140,
-        render: (category: string) =>
-          category ? <Tag>{category}</Tag> : <Text type="secondary">—</Text>,
+        render: (category: string) => {
+          if (!category) return <Text type="secondary">—</Text>;
+          const key = mcpCategoryLabelKey(category);
+          return <Tag>{key ? t(key) : category}</Tag>;
+        },
       },
       {
         title: t("mcp_catalog.col_transport"),

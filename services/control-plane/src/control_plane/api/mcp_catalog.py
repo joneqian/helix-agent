@@ -16,6 +16,7 @@ handler:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
@@ -23,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 from control_plane.api._authz import require
 from control_plane.audit import emit
+from control_plane.mcp_probe import McpProbeError, probe_remote_mcp
 from control_plane.tenant_scope import bypass_rls_session
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence import (
@@ -39,7 +41,10 @@ from helix_agent.protocol import (
     Principal,
 )
 from helix_agent.runtime.audit.logger import AuditLogger
-from helix_agent.runtime.secret_store import SecretStore
+from helix_agent.runtime.secret_store import SecretStore, parse_secret_ref
+from orchestrator.tools.mcp import MCPToolDef
+
+_DEFAULT_PROBE_TIMEOUT_S = 30.0
 
 
 def _get_catalog_store(request: Request) -> McpConnectorCatalogStore:
@@ -81,6 +86,30 @@ def _bearer_secret_name(name: str) -> str:
     return f"helix-agent/platform/mcp/{name}/token"
 
 
+async def _probe_catalog_server(
+    *,
+    name: str,
+    transport: str,
+    url: str,
+    bearer_token: str | None,
+    timeout_s: float | None,
+    sse_read_timeout_s: float | None,
+) -> Sequence[MCPToolDef]:
+    """Connect-probe a platform server (connect + list_tools). Raises McpProbeError.
+
+    Only ``none``/``bearer`` servers are probeable platform-side; ``oauth2`` uses
+    per-user tokens the platform never holds, so callers skip it.
+    """
+    return await probe_remote_mcp(
+        name=name,
+        transport=transport,
+        url=url,
+        bearer_token=bearer_token,
+        timeout_s=timeout_s if timeout_s is not None else _DEFAULT_PROBE_TIMEOUT_S,
+        sse_read_timeout_s=sse_read_timeout_s,
+    )
+
+
 def _public(record: McpConnectorCatalogRecord) -> dict[str, object]:
     """Response projection — never leak the ``secret://`` ref; expose only a flag."""
     data = record.model_dump(mode="json")
@@ -115,6 +144,28 @@ def build_mcp_catalog_router() -> APIRouter:
     ) -> dict[str, object]:
         _require_system_admin(principal)
         upsert = payload
+        # Validate connectivity BEFORE persisting (parity with custom-server
+        # registration): a none/bearer server must connect + list tools. oauth2
+        # is per-user (no platform token) → not probeable platform-side, skipped.
+        if payload.auth_type in ("none", "bearer"):
+            raw_token = (
+                payload.bearer_token.get_secret_value()
+                if payload.bearer_token is not None
+                else None
+            )
+            try:
+                await _probe_catalog_server(
+                    name=payload.name,
+                    transport=payload.transport,
+                    url=payload.url_template,
+                    bearer_token=raw_token,
+                    timeout_s=payload.timeout_s,
+                    sse_read_timeout_s=payload.sse_read_timeout_s,
+                )
+            except McpProbeError as exc:
+                raise HTTPException(
+                    status_code=422, detail={"code": exc.code, "message": exc.message}
+                ) from exc
         if payload.bearer_token is not None:
             # Platform shared bearer (A): write the token to the SecretStore and
             # persist only the ref; the plaintext never reaches the DB / logs.
@@ -180,6 +231,70 @@ def build_mcp_catalog_router() -> APIRouter:
             )
         return {"success": True, "data": _public(record), "error": None}
 
+    @router.post("/{catalog_id}/tools")
+    async def list_catalog_tools(
+        catalog_id: Annotated[UUID, Path()],
+        principal: Annotated[Principal, Depends(require("mcp_catalog", "read"))],
+        store: Annotated[McpConnectorCatalogStore, Depends(_get_catalog_store)],
+        secret_store: Annotated[SecretStore, Depends(_get_secret_store)],
+    ) -> dict[str, object]:
+        """Live-probe a configured platform server and list its tools.
+
+        ``status`` is ``ok`` (tools listed) / ``unreachable`` (probe failed, with
+        an ``error`` code) / ``not_probeable`` (oauth2 — per-user token the
+        platform never holds). Always 200 (except 404/403) so the edit drawer can
+        render the outcome inline rather than treating it as a request failure.
+        """
+        _require_system_admin(principal)
+        async with bypass_rls_session():
+            record = await store.get_by_id(catalog_id)
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "CATALOG_NOT_FOUND", "message": "not found"},
+            )
+        if record.auth_type == "oauth2":
+            return {
+                "success": True,
+                "data": {"status": "not_probeable", "tool_count": 0, "tools": [], "error": None},
+                "error": None,
+            }
+        token = (
+            await secret_store.get(parse_secret_ref(record.bearer_token_ref))
+            if record.bearer_token_ref is not None
+            else None
+        )
+        try:
+            tools = await _probe_catalog_server(
+                name=record.name,
+                transport=record.transport,
+                url=record.url_template,
+                bearer_token=token,
+                timeout_s=record.timeout_s,
+                sse_read_timeout_s=record.sse_read_timeout_s,
+            )
+        except McpProbeError as exc:
+            return {
+                "success": True,
+                "data": {
+                    "status": "unreachable",
+                    "tool_count": 0,
+                    "tools": [],
+                    "error": exc.code,
+                },
+                "error": None,
+            }
+        return {
+            "success": True,
+            "data": {
+                "status": "ok",
+                "tool_count": len(tools),
+                "tools": [{"name": t.name, "description": t.description} for t in tools],
+                "error": None,
+            },
+            "error": None,
+        }
+
     @router.patch("/{catalog_id}")
     async def update_catalog_entry(
         catalog_id: Annotated[UUID, Path()],
@@ -193,9 +308,10 @@ def build_mcp_catalog_router() -> APIRouter:
     ) -> dict[str, object]:
         _require_system_admin(principal)
         patch = payload
-        if payload.bearer_token is not None:
-            # Re-paste the platform shared token: resolve the entry's stable name
-            # for the secret path, write the new value, persist only the ref.
+        # Load the existing row when the URL or token changes — needed to re-probe
+        # and (for a re-pasted token) to resolve the secret path.
+        existing = None
+        if payload.bearer_token is not None or payload.url_template is not None:
             async with bypass_rls_session():
                 existing = await store.get_by_id(catalog_id)
             if existing is None:
@@ -203,6 +319,38 @@ def build_mcp_catalog_router() -> APIRouter:
                     status_code=404,
                     detail={"code": "CATALOG_NOT_FOUND", "message": "not found"},
                 )
+        # Re-validate connectivity when the URL or token changes (none/bearer).
+        if (
+            existing is not None
+            and existing.auth_type in ("none", "bearer")
+            and (payload.url_template is not None or payload.bearer_token is not None)
+        ):
+            probe_url = payload.url_template or existing.url_template
+            if payload.bearer_token is not None:
+                probe_token: str | None = payload.bearer_token.get_secret_value()
+            elif existing.bearer_token_ref is not None:
+                probe_token = await secret_store.get(parse_secret_ref(existing.bearer_token_ref))
+            else:
+                probe_token = None
+            try:
+                await _probe_catalog_server(
+                    name=existing.name,
+                    transport=existing.transport,
+                    url=probe_url,
+                    bearer_token=probe_token,
+                    timeout_s=payload.timeout_s
+                    if payload.timeout_s is not None
+                    else existing.timeout_s,
+                    sse_read_timeout_s=payload.sse_read_timeout_s
+                    if payload.sse_read_timeout_s is not None
+                    else existing.sse_read_timeout_s,
+                )
+            except McpProbeError as exc:
+                raise HTTPException(
+                    status_code=422, detail={"code": exc.code, "message": exc.message}
+                ) from exc
+        if payload.bearer_token is not None and existing is not None:
+            # Re-paste the platform shared token: write the new value, persist ref.
             sname = _bearer_secret_name(existing.name)
             await secret_store.put(sname, payload.bearer_token.get_secret_value())
             patch = payload.model_copy(
