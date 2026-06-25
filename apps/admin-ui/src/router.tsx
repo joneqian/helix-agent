@@ -27,6 +27,7 @@ import { SettingsMcpCatalog } from "./pages/SettingsMcpCatalog";
 import { McpCatalogDetail } from "./pages/McpCatalogDetail";
 import { SettingsAgentTemplates } from "./pages/SettingsAgentTemplates";
 import { AgentTemplateDetail } from "./pages/AgentTemplateDetail";
+import { AgentTemplateMarketplace } from "./pages/AgentTemplateMarketplace";
 import { SettingsMcpOAuth } from "./pages/SettingsMcpOAuth";
 import { McpOAuthCallback } from "./pages/McpOAuthCallback";
 import { SettingsPlatformSkills } from "./pages/SettingsPlatformSkills";
@@ -60,6 +61,7 @@ export function AppRouter() {
       <Route path="/skills" element={<SkillsList />} />
       <Route path="/skills/:skillId" element={<SkillDetail />} />
       <Route path="/skill-marketplace" element={<SkillMarketplace />} />
+      <Route path="/agent-template-marketplace" element={<AgentTemplateMarketplace />} />
       <Route path="/triggers" element={<TriggersList />} />
       <Route path="/webhooks" element={<WebhooksList />} />
       <Route path="/settings/api-keys" element={<SettingsApiKeys />} />

@@ -87,6 +87,12 @@ export const WORKSPACE_ITEMS: readonly NavEntry[] = [
     group: "workspace",
   },
   {
+    key: "agent-template-marketplace",
+    labelKey: "nav.agent_template_marketplace",
+    path: "/agent-template-marketplace",
+    group: "workspace",
+  },
+  {
     key: "triggers",
     labelKey: "nav.triggers",
     path: "/triggers",

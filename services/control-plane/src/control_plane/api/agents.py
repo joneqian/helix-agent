@@ -523,6 +523,51 @@ def build_agents_router() -> APIRouter:
             content={"success": True, "data": AgentDetail(record=record).model_dump(mode="json")},
         )
 
+    @router.get("/templates")
+    async def list_templates(
+        request: Request,
+        principal: Annotated[Principal, Depends(require("manifest", "read"))],
+        category: str | None = None,
+    ) -> JSONResponse:
+        """List the platform Agent templates a tenant may fork (M1-6).
+
+        Tenant-facing marketplace browse: returns published + enabled templates,
+        deduped to the newest published version per ``name``, each annotated with
+        ``can_fork`` (whether the tenant's plan satisfies the template's tier).
+        Lighter than the system-admin catalog — no base manifest in the payload.
+        """
+        tenant_id = request.state.tenant_id
+        template_store = request.app.state.platform_agent_template_store
+        tcs = getattr(request.app.state, "tenant_config_service", None)
+        plan = await _resolve_plan(tcs, tenant_id)
+
+        # NULL-tenant catalog rows → bypass_rls. ``list`` is ordered by name then
+        # newest version first, so the first row seen per name is its latest.
+        async with bypass_rls_session():
+            rows = await template_store.list(
+                category=category, status=PlatformAgentTemplateStatus.PUBLISHED
+            )
+
+        seen: set[str] = set()
+        items: list[dict[str, object]] = []
+        for row in rows:
+            if not row.enabled or row.name in seen:
+                continue
+            seen.add(row.name)
+            items.append(
+                {
+                    "name": row.name,
+                    "version": row.version,
+                    "display_name": row.display_name,
+                    "description": row.description,
+                    "category": row.category,
+                    "icon": row.icon,
+                    "required_tier": row.required_tier.value,
+                    "can_fork": tier_satisfies(plan, row.required_tier),
+                }
+            )
+        return JSONResponse(content={"success": True, "data": items})
+
     @router.post("/fork", status_code=201)
     async def fork_template(
         payload: ForkTemplateRequest,
