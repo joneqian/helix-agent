@@ -124,6 +124,12 @@ from helix_agent.protocol.model_catalog import (
 )
 from helix_agent.protocol.multimodal import ImageRef, parse_image_ref
 from helix_agent.protocol.plan import Plan, PlanStep
+from helix_agent.protocol.platform_agent_template import (
+    PlatformAgentTemplatePatch,
+    PlatformAgentTemplateRecord,
+    PlatformAgentTemplateStatus,
+    PlatformAgentTemplateUpsert,
+)
 from helix_agent.protocol.platform_secret import (
     PlatformProviderSecretRecord,
     PlatformSecretUpsert,
@@ -344,6 +350,10 @@ __all__ = [
     "ObservabilitySpec",
     "Plan",
     "PlanStep",
+    "PlatformAgentTemplatePatch",
+    "PlatformAgentTemplateRecord",
+    "PlatformAgentTemplateStatus",
+    "PlatformAgentTemplateUpsert",
     "PlatformProviderSecretRecord",
     "PlatformSecretUpsert",
     "PlatformToolSecretRecord",
