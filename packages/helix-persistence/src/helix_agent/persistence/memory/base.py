@@ -58,10 +58,17 @@ class MemoryStore(abc.ABC):
         query_embedding: Sequence[float],
         query_text: str | None = None,
         kind: Literal["fact", "episodic"] | None = None,
+        agent_name: str | None = None,
         limit: int = 5,
     ) -> list[MemoryItem]:
         """Return the user's ``limit`` memories nearest ``query_embedding``,
         closest first. Soft-deleted rows are excluded (Stream K.K6).
+
+        Stream Agent-Templates (M1-5c): when ``agent_name`` is given, episodic
+        memories are scoped to that agent — the result includes shared ``fact``
+        rows (``agent_name IS NULL``) plus ``episodic`` rows owned by this agent,
+        so one agent's events never leak into another's recall. ``None`` (the
+        admin / legacy path) applies no agent scoping.
 
         Capability Uplift Sprint #6 (Mini-ADR U-5): when ``query_text``
         is ``None`` the retrieval is pure-vector (cosine distance against

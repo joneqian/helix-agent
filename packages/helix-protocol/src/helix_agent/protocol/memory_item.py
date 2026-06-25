@@ -36,6 +36,14 @@ class MemoryItem(BaseModel):
     kind: Literal["fact", "episodic"] = Field(
         description="fact = stable preference / truth; episodic = summary of an interaction"
     )
+    # Stream Agent-Templates (M1-5c) — the agent this memory belongs to. Set only
+    # for ``episodic`` items (per-agent isolation: a support agent's events do not
+    # leak into a sales agent's recall); ``None`` for ``fact`` items, which are
+    # agent-agnostic user profile shared across all of a user's agents.
+    agent_name: str | None = Field(
+        default=None,
+        description="owning agent for episodic memory; None = shared fact (agent-agnostic)",
+    )
     content: str
     embedding: tuple[float, ...] = Field(
         repr=False, description="semantic embedding vector of ``content``"
