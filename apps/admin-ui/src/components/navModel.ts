@@ -185,6 +185,12 @@ export const PLATFORM_ITEMS: readonly NavEntry[] = [
     group: "platform",
   },
   {
+    key: "settings-agent-templates",
+    labelKey: "nav.agent_templates",
+    path: "/settings/agent-templates",
+    group: "platform",
+  },
+  {
     key: "settings-platform-skills",
     labelKey: "nav.platform_skills",
     path: "/settings/platform-skills",
