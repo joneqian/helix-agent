@@ -112,6 +112,9 @@ describe("SettingsMcpCatalog page", () => {
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByTestId("cat-toggle-github")).toBeInTheDocument();
     expect(screen.getByTestId("cat-edit-github")).toBeInTheDocument();
+    // Category column shows the i18n label, not the raw slug (ENTRY=dev-tools).
+    expect(screen.getByText("Developer Tools")).toBeInTheDocument();
+    expect(screen.queryByText("dev-tools")).not.toBeInTheDocument();
   });
 
   it("opening New connector reveals the tabbed form", async () => {
@@ -137,7 +140,18 @@ describe("SettingsMcpCatalog page", () => {
 });
 
 describe("CatalogEntryDrawer edit mode", () => {
+  // The edit drawer probes the server on open (POST .../tools) — route it so the
+  // panel resolves without a real network call.
+  const TOOLS_OK = {
+    success: true,
+    data: { status: "ok", tool_count: 0, tools: [], error: null },
+    error: null,
+  };
+
   it("disables the immutable name/transport/auth_type selects when editing", async () => {
+    installAdapter([
+      { match: (u) => u.endsWith("/tools"), respond: () => TOOLS_OK },
+    ]);
     render(
       <App>
         <CatalogEntryDrawer
@@ -163,9 +177,16 @@ describe("CatalogEntryDrawer edit mode", () => {
   it("PATCH body omits immutable auth_type / auth_schema / name; keeps token blank", async () => {
     let captured: { method?: string; body?: unknown } = {};
     apiClient.defaults.adapter = (config) => {
-      captured = { method: config.method, body: config.data };
+      const url = config.url ?? "";
+      // Capture only the PATCH — the on-open /tools probe must not clobber it.
+      if (config.method === "patch") {
+        captured = { method: config.method, body: config.data };
+      }
+      const data = url.endsWith("/tools")
+        ? TOOLS_OK
+        : { success: true, data: { ...ENTRY }, error: null };
       return Promise.resolve({
-        data: { success: true, data: { ...ENTRY }, error: null },
+        data,
         status: 200,
         statusText: "OK",
         headers: {},
@@ -220,6 +241,38 @@ describe("CatalogEntryDrawer edit mode", () => {
     expect(screen.getByTestId("cce-icon-upload")).toBeInTheDocument();
     expect(screen.getByTestId("cce-timeout")).toBeInTheDocument();
     expect(screen.getByTestId("cce-sse-timeout")).toBeInTheDocument();
+  });
+
+  it("probes on open and shows the server's tools", async () => {
+    installAdapter([
+      {
+        match: (u) => u.endsWith("/tools"),
+        respond: () => ({
+          success: true,
+          data: {
+            status: "ok",
+            tool_count: 1,
+            tools: [{ name: "list_issues", description: "List issues" }],
+            error: null,
+          },
+          error: null,
+        }),
+      },
+    ]);
+    render(
+      <App>
+        <CatalogEntryDrawer
+          open
+          onClose={() => {}}
+          onSaved={() => {}}
+          editing={ENTRY}
+        />
+      </App>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("cce-tools")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("list_issues")).toBeInTheDocument();
   });
 });
 

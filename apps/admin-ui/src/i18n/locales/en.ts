@@ -769,6 +769,11 @@ export interface TranslationKeys {
     enable_aria: string;
     authorize: string;
     shared_hint: string;
+    tools_title: string;
+    test_connection: string;
+    tools_none: string;
+    tools_unreachable: string;
+    tools_oauth_note: string;
   };
   mcp_oauth: {
     page_title: string;
@@ -2494,6 +2499,12 @@ const en: TranslationKeys = {
     enable_aria: "Enable {{name}} for this tenant",
     authorize: "Authorize",
     shared_hint: "Shared identity — all enabled users share one credential.",
+    tools_title: "Tools",
+    test_connection: "Test connection",
+    tools_none: "Connected, but the server exposes no tools.",
+    tools_unreachable: "Could not connect to the server.",
+    tools_oauth_note:
+      "OAuth connectors authorize per user, so tools can't be listed from here.",
   },
   mcp_oauth: {
     page_title: "My MCP Connections",
