@@ -125,3 +125,45 @@ export function patchTemplateMeta(
 export async function deleteAgentTemplate(name: string, version: string): Promise<void> {
   await apiClient.delete(ref(name, version));
 }
+
+// ---------------------------------------------------------------------------
+// Tenant-facing marketplace (M1-6b) — backed by ``/v1/agents/*``, NOT the
+// platform catalog above. Any tenant member may browse + fork; the system_admin
+// catalog endpoints stay gated. Browse payload omits the base manifest.
+// ---------------------------------------------------------------------------
+
+/** A marketplace card — one published template a tenant may fork. */
+export interface TemplateMarketEntry {
+  name: string;
+  version: string;
+  display_name: string;
+  description: string;
+  category: string;
+  icon: string | null;
+  required_tier: TemplateTier;
+  /** Whether the tenant's plan satisfies ``required_tier``. */
+  can_fork: boolean;
+}
+
+/** The fork result mirrors ``GET /v1/agents/{name}`` — ``data.record`` is the
+ *  new tenant agent_spec. Typed loosely; the caller only needs the name. */
+export interface ForkResult {
+  record: { name: string; version: string };
+}
+
+/** List published platform templates the tenant may fork. */
+export function listTemplateMarket(params?: {
+  category?: string;
+}): Promise<TemplateMarketEntry[]> {
+  return getJson<TemplateMarketEntry[]>("/v1/agents/templates", { params });
+}
+
+/** Fork a published template into a tenant-owned agent (``agent_code`` = name).
+ *  ``templateVersion`` defaults to ``"latest"`` (resolved + pinned server-side). */
+export function forkTemplate(body: {
+  template_name: string;
+  name: string;
+  template_version?: string;
+}): Promise<ForkResult> {
+  return postJson<ForkResult>("/v1/agents/fork", body);
+}

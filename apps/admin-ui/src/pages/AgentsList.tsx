@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Empty, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { TableColumnsType } from "antd";
-import { Bot, Globe2, Plus, RefreshCw } from "lucide-react";
+import { Bot, Globe2, Plus, RefreshCw, Store } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -153,6 +153,26 @@ export function AgentsList() {
             >
               <RefreshCw size={14} strokeWidth={1.5} />
               {loading ? t("common.loading") : t("common.refresh")}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/agent-template-marketplace")}
+              data-testid="agents-from-template"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                border: "1px solid var(--hx-border-default)",
+                borderRadius: 6,
+                background: "var(--hx-surface-raised)",
+                color: "var(--hx-text-primary)",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              <Store size={14} strokeWidth={1.5} />
+              {t("agents_page.from_template")}
             </button>
             <button
               type="button"

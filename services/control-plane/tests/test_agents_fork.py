@@ -197,3 +197,29 @@ async def test_fork_duplicate_name_409(ctx: _Ctx) -> None:
     second = await ctx.client.post("/v1/agents/fork", json=body, headers=ctx.headers)
     assert second.status_code == 409
     assert second.json()["error"]["code"] == "MANIFEST_DUPLICATE"
+
+
+@pytest.mark.asyncio
+async def test_list_templates_dedups_to_latest_published(ctx: _Ctx) -> None:
+    await ctx.seed_template(_upsert(version="1.0.0"))
+    await ctx.seed_template(_upsert(version="2.0.0"))
+    # A draft-only template must not surface in the marketplace browse.
+    await ctx.seed_template(_upsert(name="beta-bot", status=PlatformAgentTemplateStatus.DRAFT))
+    resp = await ctx.client.get("/v1/agents/templates", headers=ctx.headers)
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["data"]
+    # One card per name (latest published version), drafts excluded.
+    assert [it["name"] for it in items] == ["support-bot"]
+    card = items[0]
+    assert card["version"] == "2.0.0"
+    assert card["display_name"] == "Support Bot"
+    assert card["can_fork"] is True  # FREE template, FREE tenant
+    assert "spec" not in card  # browse payload omits the base manifest
+
+
+@pytest.mark.asyncio
+async def test_list_templates_marks_unaffordable_tier(ctx: _Ctx) -> None:
+    await ctx.seed_template(_upsert(required_tier=TenantPlan.ENTERPRISE))
+    resp = await ctx.client.get("/v1/agents/templates", headers=ctx.headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"][0]["can_fork"] is False

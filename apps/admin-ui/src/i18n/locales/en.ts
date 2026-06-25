@@ -44,6 +44,7 @@ export interface TranslationKeys {
     knowledge: string;
     skills: string;
     skill_marketplace: string;
+    agent_template_marketplace: string;
     triggers: string;
     webhooks: string;
     tenants: string;
@@ -1262,6 +1263,24 @@ export interface TranslationKeys {
     subscribed_ok: string;
     unsubscribed_ok: string;
   };
+  agent_template_marketplace: {
+    page_title: string;
+    subtitle: string;
+    failed_to_load: string;
+    empty: string;
+    tier_free: string;
+    tier_pro: string;
+    tier_enterprise: string;
+    requires_tier: string;
+    locked_ribbon: string;
+    fork: string;
+    fork_title: string;
+    fork_name_label: string;
+    fork_name_hint: string;
+    fork_name_required: string;
+    fork_name_invalid: string;
+    forked_ok: string;
+  };
   agent_templates: {
     page_title: string;
     subtitle: string;
@@ -1509,6 +1528,7 @@ export interface TranslationKeys {
     column_tenant: string;
     column_created: string;
     create: string;
+    from_template: string;
   };
   create_agent: {
     title: string;
@@ -1764,6 +1784,7 @@ const en: TranslationKeys = {
     knowledge: "Knowledge",
     skills: "Skills",
     skill_marketplace: "Skill Marketplace",
+    agent_template_marketplace: "Template Marketplace",
     triggers: "Triggers",
     webhooks: "Webhooks",
     tenants: "Tenants",
@@ -3117,6 +3138,27 @@ const en: TranslationKeys = {
     subscribed_ok: "Enabled “{{name}}”",
     unsubscribed_ok: "Disabled “{{name}}”",
   },
+  agent_template_marketplace: {
+    page_title: "Template Marketplace",
+    subtitle:
+      "Browse the platform-curated Agent templates and fork one into your own agent.",
+    failed_to_load: "Failed to load the template marketplace",
+    empty: "No platform templates are available yet.",
+    tier_free: "Free",
+    tier_pro: "Pro",
+    tier_enterprise: "Enterprise",
+    requires_tier: "Requires {{tier}}",
+    locked_ribbon: "Locked",
+    fork: "Fork",
+    fork_title: "Fork “{{name}}”",
+    fork_name_label: "New agent name",
+    fork_name_hint:
+      "Used as the agent_code external apps call. Lowercase letters, digits, and hyphens.",
+    fork_name_required: "An agent name is required",
+    fork_name_invalid:
+      "Use lowercase letters, digits, and hyphens (must start with a letter or digit)",
+    forked_ok: "Forked into “{{name}}”",
+  },
   agent_templates: {
     page_title: "Agent Templates",
     subtitle: "Platform-curated base agents that tenants fork into their own.",
@@ -3378,6 +3420,7 @@ const en: TranslationKeys = {
     column_tenant: "Tenant",
     column_created: "Created",
     create: "Create",
+    from_template: "From template",
   },
   create_agent: {
     title: "Create Agent",
