@@ -42,6 +42,10 @@ class TokenUsageRecord:
     # Stream Y-3 — additive nullable provider so Y4 can price by
     # ``(provider, model)``. ``None`` for legacy rows.
     provider: str | None = None
+    # Stream Agent-Templates (M1-5a) — the end-user this LLM call ran for
+    # (``tenant_user.id``), for per-user cost attribution. ``None`` for runs with
+    # no user context (system / preview builds).
+    user_id: UUID | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_tokens: int = 0
@@ -156,6 +160,7 @@ class DbTokenUsageStore(TokenUsageStore):
                 agent_version=record.agent_version,
                 model=record.model,
                 provider=record.provider,
+                user_id=record.user_id,
                 trace_id=record.trace_id,
                 input_tokens=record.input_tokens,
                 output_tokens=record.output_tokens,
@@ -237,6 +242,7 @@ def _row_to_record(row: TokenUsageRow) -> TokenUsageRecord:
         agent_version=row.agent_version,
         model=row.model,
         provider=row.provider,
+        user_id=row.user_id,
         trace_id=row.trace_id,
         input_tokens=row.input_tokens,
         output_tokens=row.output_tokens,

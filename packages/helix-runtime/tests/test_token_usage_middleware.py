@@ -93,6 +93,47 @@ async def test_persists_and_increments_for_basic_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_records_user_id_for_per_user_cost() -> None:
+    # Stream Agent-Templates (M1-5a) — the end-user threaded via payload is
+    # persisted for per-user cost attribution.
+    store = InMemoryTokenUsageStore()
+    mw = TokenUsageMiddleware(store=store, agent_name="m5a", agent_version="1.0.0", model="m")
+    tenant_id, user_id = uuid4(), uuid4()
+    ctx = MiddlewareContext(
+        payload={
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "response": AIMessage(
+                content="ok",
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            ),
+        }
+    )
+    await mw(ctx, _noop)
+    rows = list(await store.list_for_tenant(tenant_id=tenant_id))
+    assert rows[0].user_id == user_id
+
+
+@pytest.mark.asyncio
+async def test_user_id_absent_records_none() -> None:
+    store = InMemoryTokenUsageStore()
+    mw = TokenUsageMiddleware(store=store, agent_name="m5a-none", agent_version="1.0.0", model="m")
+    tenant_id = uuid4()
+    ctx = MiddlewareContext(
+        payload={
+            "tenant_id": tenant_id,
+            "response": AIMessage(
+                content="ok",
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            ),
+        }
+    )
+    await mw(ctx, _noop)
+    rows = list(await store.list_for_tenant(tenant_id=tenant_id))
+    assert rows[0].user_id is None
+
+
+@pytest.mark.asyncio
 async def test_extracts_cache_counters_from_input_token_details() -> None:
     store = InMemoryTokenUsageStore()
     mw = TokenUsageMiddleware(

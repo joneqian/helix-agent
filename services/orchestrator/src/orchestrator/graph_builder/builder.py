@@ -559,6 +559,9 @@ def build_react_graph(
                 )
         configurable = config.get("configurable") or {}
         tenant_id = _parse_uuid(configurable.get("tenant_id"))
+        # Stream Agent-Templates (M1-5a) — the end-user this run is for, threaded
+        # to the token-usage middleware for per-user cost attribution.
+        user_id = _parse_uuid(configurable.get("user_id"))
 
         cache_hit_response: AIMessage | None = None
         if before_llm_chain is not None:
@@ -676,6 +679,7 @@ def build_react_graph(
                     "messages": after_messages,
                     "response": response,
                     "tenant_id": tenant_id,
+                    "user_id": user_id,
                     "prompt_messages": messages,
                     "cache_hit": cache_hit_response is not None,
                 }
