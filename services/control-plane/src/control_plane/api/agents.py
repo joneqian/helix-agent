@@ -20,7 +20,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from control_plane.api._authz import ensure_resource_access
 from control_plane.audit import emit
@@ -32,9 +32,11 @@ from control_plane.manifest import (
     ManifestTemplateError,
     ManifestValidationError,
 )
+from control_plane.tenancy import TenantConfigNotConfiguredError
 from control_plane.tenant_scope import (
     CrossTenant,
     applied_scope,
+    bypass_rls_session,
     cross_tenant_query_enabled,
     ensure_tenant_scope,
 )
@@ -48,7 +50,10 @@ from helix_agent.protocol import (
     AgentSpecStatus,
     AuditAction,
     AuditResult,
+    PlatformAgentTemplateStatus,
     Provider,
+    TenantPlan,
+    tier_satisfies,
 )
 from helix_agent.runtime.audit.logger import AuditLogger
 
@@ -179,6 +184,32 @@ def _spec_sha256(spec_json: Mapping[str, Any]) -> str:
 
     canonical = json.dumps(spec_json, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class ForkTemplateRequest(BaseModel):
+    """Body for ``POST /v1/agents/fork`` — Stream Agent-Templates (M1-4).
+
+    Forks a published platform template into a tenant-owned agent. ``name`` is the
+    new agent's identifier (its ``agent_code``), unique within the tenant.
+    ``template_version`` may be the literal ``"latest"`` (resolved to the newest
+    published version and **pinned** in the fork's ``extends``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    template_name: str = Field(min_length=1)
+    template_version: str = Field(default="latest", min_length=1)
+    name: str = Field(min_length=1, max_length=128)
+
+
+async def _resolve_plan(tenant_config_service: object, tenant_id: UUID) -> TenantPlan:
+    """Tenant plan tier for template entitlement (FREE when unwired / unseeded)."""
+    if tenant_config_service is None:
+        return TenantPlan.FREE
+    try:
+        cfg = await tenant_config_service.get(tenant_id=tenant_id)  # type: ignore[attr-defined]
+    except TenantConfigNotConfiguredError:
+        return TenantPlan.FREE
+    return cfg.plan  # type: ignore[no-any-return]
 
 
 async def _load_manifest(
@@ -363,6 +394,116 @@ def build_agents_router() -> APIRouter:
             resource_id=f"{record.name}/{record.version}",
             trace_id=trace_id,
             details={"spec_sha256": sha, "revision": 1},
+        )
+        return JSONResponse(
+            status_code=201,
+            content={"success": True, "data": AgentDetail(record=record).model_dump(mode="json")},
+        )
+
+    @router.post("/fork", status_code=201)
+    async def fork_template(
+        payload: ForkTemplateRequest,
+        request: Request,
+        repo: Annotated[AgentSpecStore, Depends(_get_repo)],
+        audit: Annotated[AuditLogger, Depends(_get_audit)],
+    ) -> JSONResponse:
+        """Fork a published platform template into a tenant-owned agent (M1-4).
+
+        Materializes a copy of the template base manifest, pins ``extends`` to the
+        resolved template version (so the tier① security floor re-applies at build),
+        renames it to the tenant's ``agent_code``, and persists it as an ordinary
+        tenant ``agent_spec`` — editable thereafter via the normal agent CRUD.
+        """
+        tenant_id = request.state.tenant_id
+        actor_id = request.state.actor_id
+        trace_id = current_trace_id_hex()
+        template_store = request.app.state.platform_agent_template_store
+        tcs = getattr(request.app.state, "tenant_config_service", None)
+
+        # 1. Load the platform base template (NULL-tenant rows → bypass_rls).
+        async with bypass_rls_session():
+            if payload.template_version == "latest":
+                base = await template_store.get_latest(
+                    name=payload.template_name,
+                    status=PlatformAgentTemplateStatus.PUBLISHED,
+                )
+            else:
+                base = await template_store.get(
+                    name=payload.template_name, version=payload.template_version
+                )
+        if (
+            base is None
+            or base.status is not PlatformAgentTemplateStatus.PUBLISHED
+            or not base.enabled
+        ):
+            return _envelope_error(
+                "TEMPLATE_NOT_AVAILABLE",
+                "template not found, not published, or disabled",
+                404,
+            )
+
+        # 2. Entitlement — the tenant's plan must satisfy the template's tier.
+        plan = await _resolve_plan(tcs, tenant_id)
+        if not tier_satisfies(plan, base.required_tier):
+            return _envelope_error(
+                "TEMPLATE_TIER_FORBIDDEN",
+                f"forking this template requires the {base.required_tier.value} plan",
+                403,
+            )
+
+        # 3. Materialize the fork: copy the base manifest, pin extends to the
+        #    resolved concrete version, rename to the tenant's agent_code.
+        pinned = f"{base.name}@{base.version}"
+        doc = base.spec.model_dump(by_alias=True, mode="json")
+        doc["metadata"]["name"] = payload.name
+        doc["metadata"]["tenant"] = str(tenant_id)
+        doc["spec"]["extends"] = pinned
+        try:
+            fork_spec = AgentSpec.model_validate(doc)
+        except ValidationError as exc:
+            return _envelope_error("FORK_INVALID", str(exc), 422)
+
+        # 4. ABAC + provider whitelist gate (parity with create_agent).
+        await ensure_resource_access(
+            request,
+            resource="manifest",
+            action="write",
+            attrs=_spec_attrs(fork_spec, owner_id=actor_id),
+        )
+        settings = request.app.state.settings
+        supported = set(settings.supported_providers)
+        referenced = _collect_manifest_providers(fork_spec)
+        invalid = sorted(referenced - supported) if supported else []
+        if invalid:
+            return _envelope_error(
+                "MANIFEST_PROVIDER_NOT_SUPPORTED",
+                f"template references providers not in the platform's "
+                f"supported_providers list: {invalid}",
+                403,
+            )
+
+        # 5. Persist as an ordinary tenant agent_spec.
+        sha = _spec_sha256(doc)
+        try:
+            record = await repo.create(
+                tenant_id=tenant_id, spec=fork_spec, spec_sha256=sha, created_by=actor_id
+            )
+        except DuplicateAgentSpecError:
+            return _envelope_error(
+                "MANIFEST_DUPLICATE",
+                "an agent with this name and version already exists",
+                409,
+            )
+
+        await emit(
+            audit,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=AuditAction.MANIFEST_WRITE,
+            resource_type="manifest",
+            resource_id=f"{record.name}/{record.version}",
+            trace_id=trace_id,
+            details={"forked_from": pinned, "revision": 1},
         )
         return JSONResponse(
             status_code=201,
