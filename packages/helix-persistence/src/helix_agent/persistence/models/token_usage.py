@@ -30,6 +30,9 @@ class TokenUsageRow(Base):
     # middleware (the ModelSpec carries the provider); legacy rows stay NULL
     # and Y4 reverse-looks-up the provider via MODEL_CATALOG.
     provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Stream Agent-Templates (M1-5a) — end-user (tenant_user.id) this call ran for,
+    # for per-user cost attribution. NULL for runs with no user context / legacy rows.
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
@@ -50,6 +53,13 @@ class TokenUsageRow(Base):
             "tenant_id",
             "agent_name",
             "model",
+            text("observed_at DESC"),
+        ),
+        # Per-user cost rollup (M1-5a).
+        Index(
+            "token_usage_tenant_user_time_idx",
+            "tenant_id",
+            "user_id",
             text("observed_at DESC"),
         ),
     )

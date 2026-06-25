@@ -189,6 +189,12 @@ class TokenUsageMiddleware:
                         exc_info=True,
                     )
 
+        # Stream Agent-Templates (M1-5a) — per-user cost attribution. The run
+        # worker threads the end-user (tenant_user.id) through configurable →
+        # payload; absent / non-UUID (system / preview builds) → NULL.
+        usage_user_id = ctx.payload.get("user_id")
+        if not isinstance(usage_user_id, UUID):
+            usage_user_id = None
         try:
             await self.store.insert(
                 TokenUsageRecord(
@@ -197,6 +203,7 @@ class TokenUsageMiddleware:
                     agent_version=self.agent_version,
                     model=self.model,
                     provider=self.provider,
+                    user_id=usage_user_id,
                     input_tokens=input_t,
                     output_tokens=output_t,
                     cache_creation_tokens=cache_creation_t,
