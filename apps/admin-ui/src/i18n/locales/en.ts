@@ -359,6 +359,22 @@ export interface TranslationKeys {
     section_dynamic_workers: string;
     section_dynamic_workers_help: string;
     dynamic_workers_hint: string;
+    section_knowledge: string;
+    section_knowledge_help: string;
+    knowledge_hint: string;
+    knowledge_placeholder: string;
+    section_skills: string;
+    section_skills_help: string;
+    skills_hint: string;
+    skills_placeholder: string;
+    section_subagents: string;
+    section_subagents_help: string;
+    subagents_hint: string;
+    subagent_name: string;
+    subagent_ref: string;
+    subagent_description: string;
+    subagent_remove: string;
+    subagent_add: string;
   };
   playground: {
     session_label: string;
@@ -2195,6 +2211,25 @@ const en: TranslationKeys = {
     section_dynamic_workers_help:
       "When on (the default), the agent may spawn short-lived helper workers at run time to split up a task. Turn off for a strictly single-worker agent.\nExample: on for a research agent, off for a simple FAQ bot",
     dynamic_workers_hint: "Allow the agent to create temporary workers at run time (on by default).",
+    section_knowledge: "Knowledge bases (RAG)",
+    section_knowledge_help:
+      "Tenant knowledge bases the agent can search to ground its answers (activates a knowledge_search tool). Pick existing bases or type a name.\nExample: hr-policies, eng-handbook",
+    knowledge_hint: "Knowledge bases this agent may search.",
+    knowledge_placeholder: "Select or type knowledge base names",
+    section_skills: "Skills",
+    section_skills_help:
+      "Reusable skill packages (instructions + scripts) the agent loads. Pick from your tenant + platform skills.\nExample: pptx-builder, sql-analyst",
+    skills_hint: "Skills attached to this agent.",
+    skills_placeholder: "Select or type skill names",
+    section_subagents: "Sub-agent delegation",
+    section_subagents_help:
+      "Named delegation targets — other deployed agents this one may hand a subtask to. The parent's LLM sees each as a tool.\nExample: tool 'researcher' → deep-researcher@1.0.0",
+    subagents_hint: "Deployed agents this agent may delegate subtasks to.",
+    subagent_name: "Tool name",
+    subagent_ref: "Target agent",
+    subagent_description: "When to delegate",
+    subagent_remove: "Remove",
+    subagent_add: "Add sub-agent",
   },
   playground: {
     session_label: "Session",

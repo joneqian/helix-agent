@@ -49,8 +49,23 @@ export interface AgentManifest {
     // Orchestrator-Worker — whether the agent may spawn ephemeral workers at
     // run time (spawn_worker). Block absent = enabled (the platform default).
     dynamic_workers?: { enabled?: boolean; [k: string]: unknown } | null;
+    // RAG — tenant knowledge bases this agent may search (activates the
+    // knowledge_search tool). Block absent = no knowledge access.
+    knowledge?: { knowledge_base_refs?: string[]; [k: string]: unknown } | null;
+    // Attached skills — skill refs (``name`` or ``name@N``) the agent loads.
+    skills?: string[];
+    // Static delegation — named sub-agents (agent_ref to a deployed agent)
+    // the parent may delegate to via a per-subagent tool.
+    subagents?: SubAgentFields[];
     [k: string]: unknown;
   };
+  [k: string]: unknown;
+}
+
+export interface SubAgentFields {
+  name?: string;
+  agent_ref?: string;
+  description?: string;
   [k: string]: unknown;
 }
 
@@ -236,4 +251,37 @@ export function setDynamicWorkersOn(m: unknown, on: boolean): AgentManifest {
     return patchSpec(m, { dynamic_workers: Object.keys(rest).length > 0 ? rest : undefined });
   }
   return patchSpec(m, { dynamic_workers: { ...(specOf(m).dynamic_workers ?? {}), enabled: false } });
+}
+
+// ---- knowledge (RAG knowledge_base_refs) ----
+// Tenant knowledge bases the agent may search. Empty = drop the block (no
+// knowledge access) so a non-RAG agent's manifest stays clean.
+export const readKnowledgeRefs = (m: unknown): string[] =>
+  specOf(m).knowledge?.knowledge_base_refs ?? [];
+
+export function setKnowledgeRefs(m: unknown, refs: string[]): AgentManifest {
+  const knowledge = specOf(m).knowledge ?? {};
+  if (refs.length === 0) {
+    const { knowledge_base_refs: _dropped, ...rest } = knowledge;
+    return patchSpec(m, { knowledge: Object.keys(rest).length > 0 ? rest : undefined });
+  }
+  return patchSpec(m, { knowledge: { ...knowledge, knowledge_base_refs: refs } });
+}
+
+// ---- skills (attached skill refs) ----
+// Skill names the agent loads. Empty = drop the key.
+export const readSkills = (m: unknown): string[] => specOf(m).skills ?? [];
+
+export function setSkills(m: unknown, skills: string[]): AgentManifest {
+  return patchSpec(m, { skills: skills.length > 0 ? skills : undefined });
+}
+
+// ---- subagents (static delegation) ----
+// Named delegation targets referencing deployed agents. Rows are stored
+// verbatim (an in-progress row may be partial — validation happens on save);
+// empty = drop the block.
+export const readSubagents = (m: unknown): SubAgentFields[] => specOf(m).subagents ?? [];
+
+export function setSubagents(m: unknown, rows: SubAgentFields[]): AgentManifest {
+  return patchSpec(m, { subagents: rows.length > 0 ? rows : undefined });
 }

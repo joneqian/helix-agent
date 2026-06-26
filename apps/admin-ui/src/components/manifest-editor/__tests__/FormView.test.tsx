@@ -47,6 +47,9 @@ describe("FormView", () => {
     expect(screen.getByTestId("af-tools")).toBeInTheDocument();
     expect(screen.getByTestId("af-approval")).toBeInTheDocument();
     expect(screen.getByTestId("af-dynamic-workers")).toBeInTheDocument();
+    expect(screen.getByTestId("af-knowledge")).toBeInTheDocument();
+    expect(screen.getByTestId("af-skills")).toBeInTheDocument();
+    expect(screen.getByTestId("af-subagents")).toBeInTheDocument();
   });
 
   it("checking an approval tool adds it to policies.approval_required_tools", async () => {

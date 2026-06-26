@@ -3,7 +3,10 @@ import {
   readApprovalTools,
   readDescription,
   readDynamicWorkersOn,
+  readKnowledgeRefs,
   readMemoryOn,
+  readSkills,
+  readSubagents,
   readModel,
   readName,
   readReflectionEvaluator,
@@ -21,7 +24,10 @@ import {
   setName,
   setApprovalTools,
   setDynamicWorkersOn,
+  setKnowledgeRefs,
   setReflectionEvaluator,
+  setSkills,
+  setSubagents,
   setSystemPrompt,
   setTool,
   setTopK,
@@ -277,6 +283,57 @@ describe("dynamic workers (spawn_worker opt-out)", () => {
   it("does not mutate the input manifest", () => {
     setDynamicWorkersOn(seed, false);
     expect((seed.spec as { dynamic_workers?: unknown }).dynamic_workers).toBeUndefined();
+  });
+});
+
+describe("knowledge (RAG knowledge_base_refs)", () => {
+  it("reads empty when no knowledge block", () => {
+    expect(readKnowledgeRefs(seed)).toEqual([]);
+  });
+
+  it("writes refs and reads them back", () => {
+    const m = setKnowledgeRefs(seed, ["hr", "eng"]);
+    expect(m.spec?.knowledge?.knowledge_base_refs).toEqual(["hr", "eng"]);
+    expect(readKnowledgeRefs(m)).toEqual(["hr", "eng"]);
+  });
+
+  it("clearing drops the knowledge block", () => {
+    const withRefs = setKnowledgeRefs(seed, ["hr"]);
+    const cleared = setKnowledgeRefs(withRefs, []);
+    expect(cleared.spec?.knowledge).toBeUndefined();
+  });
+});
+
+describe("skills (attached refs)", () => {
+  it("reads empty when no skills", () => {
+    expect(readSkills(seed)).toEqual([]);
+  });
+
+  it("writes + clears skills", () => {
+    const m = setSkills(seed, ["pptx", "docx"]);
+    expect(readSkills(m)).toEqual(["pptx", "docx"]);
+    expect(setSkills(m, []).spec?.skills).toBeUndefined();
+  });
+});
+
+describe("subagents (static delegation)", () => {
+  it("reads empty when no subagents", () => {
+    expect(readSubagents(seed)).toEqual([]);
+  });
+
+  it("writes rows verbatim and clears on empty", () => {
+    const rows = [{ name: "researcher", agent_ref: "deep-researcher@1.0.0", description: "research" }];
+    const m = setSubagents(seed, rows);
+    expect(m.spec?.subagents).toEqual(rows);
+    expect(readSubagents(m)).toEqual(rows);
+    expect(setSubagents(m, []).spec?.subagents).toBeUndefined();
+  });
+
+  it("does not mutate the input manifest", () => {
+    setKnowledgeRefs(seed, ["x"]);
+    setSubagents(seed, [{ name: "a", agent_ref: "b@1", description: "c" }]);
+    expect((seed.spec as { knowledge?: unknown }).knowledge).toBeUndefined();
+    expect((seed.spec as { subagents?: unknown }).subagents).toBeUndefined();
   });
 });
 
