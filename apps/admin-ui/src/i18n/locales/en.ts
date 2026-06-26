@@ -403,6 +403,7 @@ export interface TranslationKeys {
     attach_image: string;
     attach_document: string;
     uploaded_docs_note: string;
+    prompt_vars_label: string;
     attachments_label: string;
     remove_attachment: string;
     upload_failed: string;
@@ -2274,6 +2275,7 @@ const en: TranslationKeys = {
     attach_image: "Attach image",
     attach_document: "Attach document",
     uploaded_docs_note: "[Uploaded documents — read them with read_document]",
+    prompt_vars_label: "Prompt variables",
     attachments_label: "Attachments",
     remove_attachment: "Remove attachment",
     upload_failed: "Image upload failed",

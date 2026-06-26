@@ -433,6 +433,7 @@ const zhCN: TranslationKeys = {
     attach_image: "添加图片",
     attach_document: "添加文档",
     uploaded_docs_note: "[已上传文档 —— 用 read_document 读取]",
+    prompt_vars_label: "Prompt 变量",
     attachments_label: "附件",
     remove_attachment: "移除附件",
     upload_failed: "图片上传失败",
