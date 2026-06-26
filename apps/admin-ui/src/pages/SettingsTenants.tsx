@@ -42,7 +42,10 @@ export function SettingsTenants() {
     setLoading(true);
     listTenants().then(
       (data) => {
-        setRows(data);
+        // Hide the synthetic platform tenant — it's not a customer tenant; its
+        // shared resources are managed under the ``*`` (platform) scope, and
+        // "Manage"/"Deactivate" on it would be meaningless or dangerous.
+        setRows(data.filter((r) => !r.is_platform));
         setLoading(false);
       },
       (err: unknown) => {

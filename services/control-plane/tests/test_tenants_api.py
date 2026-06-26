@@ -135,8 +135,35 @@ async def test_list_tenants_system_admin_lists_all(
         "plan",
         "status",
         "created_at",
+        "is_platform",
     }
     assert all(t["status"] == "active" for t in body["data"])
+    # Neither seeded tenant is the synthetic platform tenant.
+    by_id = {t["tenant_id"]: t for t in body["data"]}
+    assert by_id[seeded_a]["is_platform"] is False
+    assert by_id[seeded_b]["is_platform"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_tenants_flags_platform_tenant(
+    admin_client: tuple[AsyncClient, UUID],
+) -> None:
+    """The row whose id == ``Settings.platform_tenant_id`` (well-known
+    ``1111…`` UUID) is flagged ``is_platform`` so the admin UI can hide it."""
+    client, sys_admin_id = admin_client
+    headers = _admin_headers(sys_admin_id)
+    platform_id = "11111111-1111-1111-1111-111111111111"
+    created = await client.post(
+        "/v1/tenants",
+        json={"tenant_id": platform_id, "display_name": "Platform"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+
+    resp = await client.get("/v1/tenants", headers=headers)
+    assert resp.status_code == 200, resp.text
+    by_id = {t["tenant_id"]: t for t in resp.json()["data"]}
+    assert by_id[platform_id]["is_platform"] is True
 
 
 @pytest.mark.asyncio

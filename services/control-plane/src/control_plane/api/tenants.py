@@ -207,6 +207,7 @@ def build_tenants_router() -> APIRouter:
     async def list_tenants(
         principal: Annotated[Principal, Depends(_principal)],
         repo: Annotated[TenantConfigStore, Depends(_get_repo)],
+        settings: Annotated[Settings, Depends(_get_settings)],
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, object]:
@@ -235,6 +236,12 @@ def build_tenants_router() -> APIRouter:
                     "plan": r.plan.value,
                     "status": r.status,
                     "created_at": r.created_at.isoformat(),
+                    # The synthetic platform tenant (owns platform-level shared
+                    # resources, reached via the ``*`` scope) is flagged so the
+                    # admin UI can hide it from the customer-tenant list +
+                    # switcher. The row stays in the API response so cross-tenant
+                    # consumers keep a complete view.
+                    "is_platform": r.tenant_id == settings.platform_tenant_id,
                 }
                 for r in records
             ],

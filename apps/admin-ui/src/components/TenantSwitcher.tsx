@@ -47,7 +47,9 @@ export function TenantSwitcher() {
     let alive = true;
     listTenants().then(
       (rows) => {
-        if (alive) setTenants(rows);
+        // Drop the synthetic platform tenant — it has no workspace and the
+        // platform level is the ``*`` scope, not a switchable peer row.
+        if (alive) setTenants(rows.filter((r) => !r.is_platform));
       },
       () => {
         /* non-fatal: switcher still offers home + all */
