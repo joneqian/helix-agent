@@ -228,7 +228,7 @@ async def test_upload_pdf_lands_in_workspace() -> None:
 
 @pytest.mark.asyncio
 async def test_upload_text_document() -> None:
-    client, thread_id, supervisor, _ = await _doc_client()
+    client, thread_id, _supervisor, _ = await _doc_client()
     async with client:
         resp = await client.post(
             f"/v1/sessions/{thread_id}/uploads",
