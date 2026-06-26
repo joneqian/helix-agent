@@ -9,6 +9,8 @@ import {
   readSystemPrompt,
   readTools,
   readTopK,
+  readVisionModel,
+  readVisionOn,
   setDescription,
   setMcpAllowTools,
   setMcpServers,
@@ -19,6 +21,7 @@ import {
   setSystemPrompt,
   setTool,
   setTopK,
+  setVisionModel,
 } from "../form_model";
 
 const seed = {
@@ -213,5 +216,47 @@ describe("reflection evaluator (routing when=reflection projection)", () => {
   it("does not mutate the input manifest", () => {
     setReflectionEvaluator(seed, { provider: "openai", name: "gpt-4o-mini" });
     expect((seed.spec as { routing?: unknown }).routing).toBeUndefined();
+  });
+});
+
+describe("vision fallback (Stream J.6 Path B — vision block)", () => {
+  it("reads undefined when no vision block", () => {
+    expect(readVisionModel(seed)).toBeUndefined();
+    expect(readVisionOn(seed)).toBe(false);
+  });
+
+  it("writes a vision.model and reads it back", () => {
+    const m = setVisionModel(seed, { provider: "qwen", name: "qwen-vl-max" });
+    expect(m.spec?.vision?.model).toEqual({ provider: "qwen", name: "qwen-vl-max" });
+    expect(readVisionModel(m)?.name).toBe("qwen-vl-max");
+    expect(readVisionOn(m)).toBe(true);
+  });
+
+  it("clearing removes the vision block", () => {
+    const withVl = setVisionModel(seed, { provider: "qwen", name: "qwen-vl-max" });
+    const cleared = setVisionModel(withVl, null);
+    expect(readVisionModel(cleared)).toBeUndefined();
+    expect(cleared.spec?.vision).toBeUndefined();
+  });
+
+  it("preserves hand-added fallbacks when changing the model", () => {
+    const base = {
+      ...seed,
+      spec: {
+        ...seed.spec,
+        vision: {
+          model: { provider: "qwen", name: "qwen-vl-max" },
+          fallbacks: [{ provider: "zhipu", name: "glm-4v" }],
+        },
+      },
+    };
+    const swapped = setVisionModel(base, { provider: "qwen", name: "qwen-vl-plus" });
+    expect(swapped.spec?.vision?.model?.name).toBe("qwen-vl-plus");
+    expect(swapped.spec?.vision?.fallbacks).toEqual([{ provider: "zhipu", name: "glm-4v" }]);
+  });
+
+  it("does not mutate the input manifest", () => {
+    setVisionModel(seed, { provider: "qwen", name: "qwen-vl-max" });
+    expect((seed.spec as { vision?: unknown }).vision).toBeUndefined();
   });
 });

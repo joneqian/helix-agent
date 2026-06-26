@@ -338,6 +338,10 @@ export interface TranslationKeys {
     section_reflection_evaluator: string;
     reflection_evaluator_hint: string;
     reflection_evaluator_clear: string;
+    section_vision: string;
+    vision_hint: string;
+    vision_clear: string;
+    section_vision_help: string;
     field_name_help: string;
     field_description_help: string;
     section_model_help: string;
@@ -2149,6 +2153,12 @@ const en: TranslationKeys = {
     reflection_evaluator_hint:
       "When reflection is enabled, which model judges whether the task is done. Leave empty to reuse the agent's own model. Prefer a different model — not necessarily stronger; an independent vantage counters the model's bias toward its own output and covers shared blind spots (same-model self-critique tends to declare 'done' early and miss its own errors). Pick a stronger model for deep-reasoning tasks.",
     reflection_evaluator_clear: "Clear (use the agent's own model)",
+    section_vision: "Image understanding (VL model)",
+    vision_hint:
+      "The main model can't read images. Add a vision (VL) model and the agent reads images via the ask_image tool — keeping the strong text model for reasoning.",
+    vision_clear: "Clear (no image understanding)",
+    section_vision_help:
+      "Shown because the main model is text-only. The VL model answers image questions on the side; the main model orchestrates. Leave empty = the agent can't read images.\nExample: qwen / qwen-vl-max",
     field_name_help:
       "The agent's unique id (agent_code) external apps call by. Lowercase letters, digits, hyphens.\nExample: support-bot",
     field_description_help:

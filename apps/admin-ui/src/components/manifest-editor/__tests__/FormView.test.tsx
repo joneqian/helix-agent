@@ -47,6 +47,21 @@ describe("FormView", () => {
     expect(screen.getByTestId("af-tools")).toBeInTheDocument();
   });
 
+  it("shows the vision (VL fallback) section when the main model is text-only", () => {
+    // SEED's model has no supports_vision → Path B section appears.
+    render(<FormView formData={SEED} onChange={vi.fn()} />);
+    expect(screen.getByTestId("af-vision")).toBeInTheDocument();
+  });
+
+  it("hides the vision section when the main model is vision-capable", () => {
+    const visionModel: AgentManifest = {
+      ...SEED,
+      spec: { ...SEED.spec, model: { provider: "openai", name: "gpt-4o", supports_vision: true } },
+    };
+    render(<FormView formData={visionModel} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("af-vision")).not.toBeInTheDocument();
+  });
+
   it("hides the evaluator clear button until an independent evaluator is set", () => {
     render(<FormView formData={SEED} onChange={vi.fn()} />);
     expect(screen.queryByTestId("af-reflection-evaluator-clear")).not.toBeInTheDocument();
