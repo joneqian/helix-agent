@@ -45,19 +45,19 @@ export function CapabilityPickers({ formData, onChange }: CapabilityPickersProps
   useEffect(() => {
     let alive = true;
     listBases().then(
-      (b) => alive && setBases(b.map((x) => x.name)),
+      (b) => alive && setBases((b ?? []).map((x) => x.name)),
       () => {},
     );
     listSkills().then(
       (s) => {
         if (!alive) return;
-        const names = [...s.items, ...s.platform_items].map((x) => x.name);
+        const names = [...(s?.items ?? []), ...(s?.platform_items ?? [])].map((x) => x.name);
         setSkillOptions([...new Set(names)]);
       },
       () => {},
     );
     listAgents().then(
-      (a) => alive && setAgents(a.items.map((x) => `${x.name}@${x.version}`)),
+      (a) => alive && setAgents((a?.items ?? []).map((x) => `${x.name}@${x.version}`)),
       () => {},
     );
     return () => {
