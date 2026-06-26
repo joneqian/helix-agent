@@ -409,6 +409,34 @@ const zhCN: TranslationKeys = {
     section_dynamic_workers_help:
       "开启(默认)时,Agent 可在运行中临时创建短生命周期的辅助 worker 来拆解任务。需要严格单 worker 时关闭。\n示例:研究型 Agent 开,简单问答 Bot 关",
     dynamic_workers_hint: "允许 Agent 在运行中自主创建临时 worker(默认开启)。",
+    section_advanced: "高级",
+    memory_write_back: "学习(写回新记忆)",
+    memory_write_back_help:
+      "开启时,run 结束抽取本次对话中的新事实并持久化,下次自动召回;关掉则只读已有记忆、不再新增。\n示例:开启",
+    memory_verify_reads: "读时验证",
+    memory_verify_reads_help:
+      "召回后多一次 LLM 批量判断,丢掉与当前请求无关/过期/矛盾的记忆再注入(最强抗投毒,默认开)。每次召回加一次 LLM 调用,出错时放行全部。\n示例:开启",
+    memory_write_min_importance: "重要性写过滤",
+    memory_write_min_importance_help:
+      "抽取出的记忆按重要性(0–1)打分,低于此阈值的丢弃,避免琐碎闲聊入库。0.3=丢明显琐碎;0=不过滤全写。\n示例:0.3",
+    memory_reconcile_writes: "写回去重/更新",
+    memory_reconcile_writes_help:
+      "写回时把新记忆与相似的已有记忆比对(新增/更新/删除/不变),避免改写式重复堆积、矛盾事实被覆盖。关掉=直接写。\n示例:开启",
+    memory_recall_mode: "召回注入位置",
+    memory_recall_mode_help:
+      "per_session:会话级稳定前缀注入,可命中 Anthropic 提示缓存(默认);per_turn:每轮末尾重渲(自改记忆需当轮可见时用)。\n示例:per_session",
+    memory_recall_per_session: "每会话(缓存友好)",
+    memory_recall_per_turn: "每轮",
+    section_run_deadline: "运行墙钟上限(秒)",
+    section_run_deadline_help:
+      "整个 run 的墙钟时间上限,含子 Agent 递归。超时即中止,防失控长跑/成本失控。0=不限制。\n示例:0(不限)或 1800(30 分钟)",
+    run_deadline_hint: "整个运行的最长墙钟时间,含子 Agent;0 = 不限制。",
+    approval_timeout: "审批超时(秒)",
+    approval_timeout_help:
+      "一个待审批请求最多挂多久,超时自动拒绝,否则会永久占用一个检查点槽位。默认 24h(86400)。\n示例:86400",
+    trajectory_recording: "轨迹记录",
+    trajectory_recording_help:
+      "开启时已完成的 run 序列化落 ObjectStore(供 eval 闸/微调)。对不能把对话内容外泄到非 WORM 存储的 Agent 关闭。默认开。\n示例:开启",
     section_knowledge: "知识库(RAG)",
     section_knowledge_help:
       "Agent 可检索的租户知识库,用来给回答提供依据(启用 knowledge_search 工具)。可选已有库或输入名称。\n示例:hr-policies、eng-handbook",

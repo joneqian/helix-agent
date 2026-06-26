@@ -382,6 +382,26 @@ export interface TranslationKeys {
     section_dynamic_workers: string;
     section_dynamic_workers_help: string;
     dynamic_workers_hint: string;
+    section_advanced: string;
+    memory_write_back: string;
+    memory_write_back_help: string;
+    memory_verify_reads: string;
+    memory_verify_reads_help: string;
+    memory_write_min_importance: string;
+    memory_write_min_importance_help: string;
+    memory_reconcile_writes: string;
+    memory_reconcile_writes_help: string;
+    memory_recall_mode: string;
+    memory_recall_mode_help: string;
+    memory_recall_per_session: string;
+    memory_recall_per_turn: string;
+    section_run_deadline: string;
+    section_run_deadline_help: string;
+    run_deadline_hint: string;
+    approval_timeout: string;
+    approval_timeout_help: string;
+    trajectory_recording: string;
+    trajectory_recording_help: string;
     section_knowledge: string;
     section_knowledge_help: string;
     knowledge_hint: string;
@@ -2276,6 +2296,35 @@ const en: TranslationKeys = {
       "When on (the default), the agent may spawn short-lived helper workers at run time to split up a task. Turn off for a strictly single-worker agent.\nExample: on for a research agent, off for a simple FAQ bot",
     dynamic_workers_hint:
       "Allow the agent to create temporary workers at run time (on by default).",
+    section_advanced: "Advanced",
+    memory_write_back: "Learn (write back new memories)",
+    memory_write_back_help:
+      "When on, new facts from the conversation are extracted and persisted at run end and recalled next time; off = read existing memories only, never add.\nExample: on",
+    memory_verify_reads: "Verify on read",
+    memory_verify_reads_help:
+      "After recall, one batched LLM call drops memories that are irrelevant / stale / contradictory to the current request before injecting them (strongest anti-poisoning guard, on by default). Adds one LLM call per recall; fail-open.\nExample: on",
+    memory_write_min_importance: "Importance write filter",
+    memory_write_min_importance_help:
+      "Extracted memories are scored for importance (0–1); those below this floor are dropped so trivial chatter never reaches the store. 0.3 = drop clearly trivial; 0 = no filter.\nExample: 0.3",
+    memory_reconcile_writes: "Reconcile writes (dedup/update)",
+    memory_reconcile_writes_help:
+      "At write-back, reconcile new memories against similar existing ones (add/update/delete/noop) so paraphrased duplicates stop piling up and contradicted facts get superseded. Off = write directly.\nExample: on",
+    memory_recall_mode: "Recall injection point",
+    memory_recall_mode_help:
+      "per_session: inject at a stable prefix slot once per session, enabling Anthropic prompt-cache anchoring (default); per_turn: re-render at each turn's tail (use when the agent self-edits memory mid-session).\nExample: per_session",
+    memory_recall_per_session: "Per session (cache-friendly)",
+    memory_recall_per_turn: "Per turn",
+    section_run_deadline: "Run wall-clock cap (seconds)",
+    section_run_deadline_help:
+      "Wall-clock cap on the whole run, including sub-agent recursion. Exceeding it aborts the run — guards against runaway long runs / cost. 0 = no cap.\nExample: 0 (no cap) or 1800 (30 min)",
+    run_deadline_hint:
+      "Max wall-clock time for the whole run, sub-agents included; 0 = no cap.",
+    approval_timeout: "Approval timeout (seconds)",
+    approval_timeout_help:
+      "How long a pending approval may sit before it is auto-rejected; otherwise it pins a checkpointer slot forever. Default 24h (86400).\nExample: 86400",
+    trajectory_recording: "Trajectory recording",
+    trajectory_recording_help:
+      "When on, completed runs are serialised to ObjectStore (for the eval gate / fine-tuning). Turn off for agents that must not leak conversation content to non-WORM storage. On by default.\nExample: on",
     section_knowledge: "Knowledge bases (RAG)",
     section_knowledge_help:
       "Tenant knowledge bases the agent can search to ground its answers (activates a knowledge_search tool). Pick existing bases or type a name.\nExample: hr-policies, eng-handbook",

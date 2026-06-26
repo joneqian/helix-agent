@@ -9,7 +9,16 @@
  * handed to ModelSelect.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Checkbox, Input, InputNumber, Switch, Typography } from "antd";
+import {
+  Button,
+  Checkbox,
+  Collapse,
+  Input,
+  InputNumber,
+  Select,
+  Switch,
+  Typography,
+} from "antd";
 import { useTranslation } from "react-i18next";
 
 import type { ModelCatalog } from "../../api/model_catalog";
@@ -30,13 +39,22 @@ import {
   readName,
   readPromptJinja,
   readPromptVariables,
+  readApprovalTimeout,
+  readReconcileWrites,
   readReflectionEvaluator,
   readReflectionEvaluatorOn,
+  readRecallMode,
+  readRunDeadline,
   readSystemPrompt,
   readTools,
   readTopK,
+  readTrajectoryRecording,
+  readVerifyReads,
   readVisionModel,
   readVisionOn,
+  readWriteBack,
+  readWriteMinImportance,
+  setApprovalTimeout,
   setApprovalTools,
   setDescription,
   setDynamicWorkersOn,
@@ -44,11 +62,18 @@ import {
   setMemoryOn,
   setModel,
   setName,
+  setReconcileWrites,
+  setRecallMode,
   setReflectionEvaluator,
+  setRunDeadline,
   setSystemPrompt,
   setTool,
   setTopK,
+  setTrajectoryRecording,
+  setVerifyReads,
   setVisionModel,
+  setWriteBack,
+  setWriteMinImportance,
 } from "./form_model";
 import { McpToolPicker, type McpPickerSource } from "./widgets/McpToolPicker";
 import { PromptTemplateEditor } from "./widgets/PromptTemplateEditor";
@@ -395,21 +420,155 @@ export function FormView({
           <Text type="secondary">{t("agent_form.memory_hint")}</Text>
         </label>
         {memoryOn && (
-          <div style={FIELD} data-testid="af-topk">
-            <label style={LABEL}>
-              {t("agent_form.memory_topk")}
-              <FieldHelp
-                text={t("agent_form.memory_topk_help")}
-                testId="af-topk"
+          <>
+            <div style={FIELD} data-testid="af-topk">
+              <label style={LABEL}>
+                {t("agent_form.memory_topk")}
+                <FieldHelp
+                  text={t("agent_form.memory_topk_help")}
+                  testId="af-topk"
+                />
+              </label>
+              <InputNumber
+                min={1}
+                value={readTopK(formData) ?? 5}
+                aria-label={t("agent_form.memory_topk")}
+                onChange={(v) => onChange(setTopK(formData, v ?? 5))}
               />
+            </div>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <Switch
+                checked={readWriteBack(formData)}
+                data-testid="af-memory-writeback"
+                aria-label={t("agent_form.memory_write_back")}
+                onChange={(on) => onChange(setWriteBack(formData, on))}
+              />
+              <Text type="secondary">
+                {t("agent_form.memory_write_back")}
+                <FieldHelp
+                  text={t("agent_form.memory_write_back_help")}
+                  testId="af-memory-writeback"
+                />
+              </Text>
             </label>
-            <InputNumber
-              min={1}
-              value={readTopK(formData) ?? 5}
-              aria-label={t("agent_form.memory_topk")}
-              onChange={(v) => onChange(setTopK(formData, v ?? 5))}
+            <Collapse
+              data-testid="af-memory-advanced"
+              defaultActiveKey={[]}
+              items={[
+                {
+                  key: "advanced",
+                  label: t("agent_form.section_advanced"),
+                  children: (
+                    <>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 12,
+                        }}
+                      >
+                        <Switch
+                          checked={readVerifyReads(formData)}
+                          data-testid="af-memory-verify-reads"
+                          aria-label={t("agent_form.memory_verify_reads")}
+                          onChange={(on) =>
+                            onChange(setVerifyReads(formData, on))
+                          }
+                        />
+                        <Text type="secondary">
+                          {t("agent_form.memory_verify_reads")}
+                          <FieldHelp
+                            text={t("agent_form.memory_verify_reads_help")}
+                            testId="af-memory-verify-reads"
+                          />
+                        </Text>
+                      </label>
+                      <div style={FIELD} data-testid="af-memory-min-importance">
+                        <label style={LABEL}>
+                          {t("agent_form.memory_write_min_importance")}
+                          <FieldHelp
+                            text={t(
+                              "agent_form.memory_write_min_importance_help",
+                            )}
+                            testId="af-memory-min-importance"
+                          />
+                        </label>
+                        <InputNumber
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={readWriteMinImportance(formData)}
+                          aria-label={t(
+                            "agent_form.memory_write_min_importance",
+                          )}
+                          onChange={(v) =>
+                            onChange(setWriteMinImportance(formData, v ?? 0))
+                          }
+                        />
+                      </div>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          marginBottom: 12,
+                        }}
+                      >
+                        <Switch
+                          checked={readReconcileWrites(formData)}
+                          data-testid="af-memory-reconcile"
+                          aria-label={t("agent_form.memory_reconcile_writes")}
+                          onChange={(on) =>
+                            onChange(setReconcileWrites(formData, on))
+                          }
+                        />
+                        <Text type="secondary">
+                          {t("agent_form.memory_reconcile_writes")}
+                          <FieldHelp
+                            text={t("agent_form.memory_reconcile_writes_help")}
+                            testId="af-memory-reconcile"
+                          />
+                        </Text>
+                      </label>
+                      <div style={FIELD} data-testid="af-memory-recall-mode">
+                        <label style={LABEL}>
+                          {t("agent_form.memory_recall_mode")}
+                          <FieldHelp
+                            text={t("agent_form.memory_recall_mode_help")}
+                            testId="af-memory-recall-mode"
+                          />
+                        </label>
+                        <Select
+                          style={{ width: "100%" }}
+                          value={readRecallMode(formData)}
+                          aria-label={t("agent_form.memory_recall_mode")}
+                          onChange={(v) => onChange(setRecallMode(formData, v))}
+                          options={[
+                            {
+                              value: "per_session",
+                              label: t("agent_form.memory_recall_per_session"),
+                            },
+                            {
+                              value: "per_turn",
+                              label: t("agent_form.memory_recall_per_turn"),
+                            },
+                          ]}
+                        />
+                      </div>
+                    </>
+                  ),
+                },
+              ]}
             />
-          </div>
+          </>
         )}
       </section>
     ),
@@ -460,6 +619,78 @@ export function FormView({
             <Text type="secondary">{t("agent_form.dynamic_workers_hint")}</Text>
           </label>
         </section>
+
+        <section data-testid="af-run-deadline" style={SECTION}>
+          <Heading>
+            {t("agent_form.section_run_deadline")}
+            <FieldHelp
+              text={t("agent_form.section_run_deadline_help")}
+              testId="af-run-deadline"
+            />
+          </Heading>
+          <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+            {t("agent_form.run_deadline_hint")}
+          </Text>
+          <InputNumber
+            min={0}
+            max={86400}
+            value={readRunDeadline(formData)}
+            aria-label={t("agent_form.section_run_deadline")}
+            onChange={(v) => onChange(setRunDeadline(formData, v ?? 0))}
+          />
+        </section>
+
+        <Collapse
+          data-testid="af-governance-advanced"
+          defaultActiveKey={[]}
+          items={[
+            {
+              key: "advanced",
+              label: t("agent_form.section_advanced"),
+              children: (
+                <>
+                  <div style={FIELD} data-testid="af-approval-timeout">
+                    <label style={LABEL}>
+                      {t("agent_form.approval_timeout")}
+                      <FieldHelp
+                        text={t("agent_form.approval_timeout_help")}
+                        testId="af-approval-timeout"
+                      />
+                    </label>
+                    <InputNumber
+                      min={60}
+                      max={604800}
+                      value={readApprovalTimeout(formData)}
+                      aria-label={t("agent_form.approval_timeout")}
+                      onChange={(v) =>
+                        onChange(setApprovalTimeout(formData, v ?? 86400))
+                      }
+                    />
+                  </div>
+                  <label
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <Switch
+                      checked={readTrajectoryRecording(formData)}
+                      data-testid="af-trajectory-recording"
+                      aria-label={t("agent_form.trajectory_recording")}
+                      onChange={(on) =>
+                        onChange(setTrajectoryRecording(formData, on))
+                      }
+                    />
+                    <Text type="secondary">
+                      {t("agent_form.trajectory_recording")}
+                      <FieldHelp
+                        text={t("agent_form.trajectory_recording_help")}
+                        testId="af-trajectory-recording"
+                      />
+                    </Text>
+                  </label>
+                </>
+              ),
+            },
+          ]}
+        />
       </>
     ),
   };
