@@ -16,6 +16,7 @@ import { loadModelCatalog } from "./catalog";
 import { ModelSelect } from "./widgets/ModelSelect";
 import {
   readDescription,
+  readMainSupportsVision,
   readMemoryOn,
   readModel,
   readName,
@@ -24,6 +25,8 @@ import {
   readSystemPrompt,
   readTools,
   readTopK,
+  readVisionModel,
+  readVisionOn,
   setDescription,
   setMcpAllowTools,
   setMcpServers,
@@ -34,6 +37,7 @@ import {
   setSystemPrompt,
   setTool,
   setTopK,
+  setVisionModel,
 } from "./form_model";
 import { McpToolPicker } from "./widgets/McpToolPicker";
 
@@ -200,6 +204,36 @@ export function FormView({ formData, onChange }: FormViewProps) {
           </Button>
         )}
       </section>
+
+      {/* Stream J.6 Path B — only when the main model can't see images itself:
+          a separate VL model handles image questions via the ask_image tool. */}
+      {readModel(formData).name !== undefined && !readMainSupportsVision(formData) && (
+        <section data-testid="af-vision" style={SECTION}>
+          <Heading>
+            {t("agent_form.section_vision")}
+            <FieldHelp text={t("agent_form.section_vision_help")} testId="af-vision" />
+          </Heading>
+          <Text type="secondary" style={{ display: "block", marginBottom: 12 }}>
+            {t("agent_form.vision_hint")}
+          </Text>
+          <ModelSelect
+            value={readVisionModel(formData) ?? {}}
+            catalog={catalog}
+            onChange={(mdl) => onChange(setVisionModel(formData, mdl))}
+          />
+          {readVisionOn(formData) && (
+            <Button
+              type="link"
+              size="small"
+              data-testid="af-vision-clear"
+              style={{ paddingLeft: 0 }}
+              onClick={() => onChange(setVisionModel(formData, null))}
+            >
+              {t("agent_form.vision_clear")}
+            </Button>
+          )}
+        </section>
+      )}
 
       <section data-testid="af-tools" style={SECTION}>
         <Heading>

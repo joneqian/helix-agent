@@ -347,6 +347,12 @@ const zhCN: TranslationKeys = {
     reflection_evaluator_hint:
       "反思（reflection）启用时，由谁来评判任务是否真正完成。留空 = 用 agent 自己的模型。建议选一个不同的模型——不必更强，关键是独立视角能破除模型偏爱自己输出、覆盖共同盲点（研究表明同模型自审会过早判定完成、漏掉自身错误）。深度推理任务可选更强模型。",
     reflection_evaluator_clear: "清除（改用 agent 自己的模型）",
+    section_vision: "图像理解(VL 模型)",
+    vision_hint:
+      "主模型不能读图。配一个视觉(VL)模型,Agent 就能通过 ask_image 工具读图 —— 推理仍走强文本主模型。",
+    vision_clear: "清除(不配图像理解)",
+    section_vision_help:
+      "因为主模型是纯文本才显示这块。VL 模型在旁边回答图像问题,主模型负责编排。留空=Agent 不能读图。\n示例:qwen / qwen-vl-max",
     field_name_help:
       "Agent 的唯一标识(agent_code),外部程序按它调用。仅小写字母、数字、连字符。\n示例:support-bot",
     field_description_help: "一句话说明这个 Agent 做什么,展示给使用者。\n示例:回答产品使用问题的客服助手",

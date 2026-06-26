@@ -40,6 +40,8 @@ export interface AgentManifest {
     memory?: { long_term?: LongTermFields | null; [k: string]: unknown } | null;
     tools?: ToolEntry[];
     routing?: RoutingFields | null;
+    // Stream J.6 Path B — VL fallback for a text-only main model (ask_image).
+    vision?: { model?: ModelFields; fallbacks?: ModelFields[]; [k: string]: unknown } | null;
     [k: string]: unknown;
   };
   [k: string]: unknown;
@@ -75,6 +77,15 @@ export const readReflectionEvaluator = (m: unknown): ModelFields | undefined =>
 
 export const readReflectionEvaluatorOn = (m: unknown): boolean =>
   readReflectionEvaluator(m) !== undefined;
+
+// ---- vision fallback (Stream J.6 Path B — the ``vision:`` block) ----
+// When the main model is NOT vision-capable, a separate VL model handles image
+// understanding via the ``ask_image`` tool. Empty = no vision block = the agent
+// can't read images (the safe default for a text-only model).
+export const readVisionModel = (m: unknown): ModelFields | undefined => specOf(m).vision?.model;
+export const readVisionOn = (m: unknown): boolean => readVisionModel(m) !== undefined;
+export const readMainSupportsVision = (m: unknown): boolean =>
+  readModel(m).supports_vision === true;
 
 export interface ToolFlags {
   webSearch: boolean;
@@ -137,6 +148,19 @@ export function setReflectionEvaluator(m: unknown, model: ModelFields | null): A
     return patchSpec(m, { routing: Object.keys(rest).length > 0 ? rest : undefined });
   }
   return patchSpec(m, { routing: { ...routing, rules } });
+}
+
+// Stream J.6 Path B — set / clear the VL fallback model. ``null`` (or an empty
+// pick) removes the whole ``vision`` block so a text-only agent stays clean.
+// ``fallbacks`` (advanced, multi-VL chain) is preserved if hand-added in YAML.
+export function setVisionModel(m: unknown, model: ModelFields | null): AgentManifest {
+  const keep = model !== null && (model.provider !== undefined || model.name !== undefined);
+  const existing = specOf(m).vision ?? {};
+  if (!keep) {
+    const { model: _dropped, ...rest } = existing;
+    return patchSpec(m, { vision: Object.keys(rest).length > 0 ? rest : undefined });
+  }
+  return patchSpec(m, { vision: { ...existing, model } });
 }
 
 export function setTool(m: unknown, kind: "webSearch" | "http" | "mcp", on: boolean): AgentManifest {
