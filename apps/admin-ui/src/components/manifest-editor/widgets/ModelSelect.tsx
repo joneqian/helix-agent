@@ -18,18 +18,35 @@ interface ModelSelectProps {
   value: ModelFields;
   catalog?: ModelCatalog;
   onChange: (next: ModelFields) => void;
+  /** Restrict to vision-capable models — hides providers with no vision model
+   *  and non-vision models within a provider. Used by the VL fallback picker. */
+  visionOnly?: boolean;
 }
 
-export function ModelSelect({ value, catalog, onChange }: ModelSelectProps) {
+export function ModelSelect({
+  value,
+  catalog,
+  onChange,
+  visionOnly = false,
+}: ModelSelectProps) {
   const { t } = useTranslation();
-  const providers = catalog ? providerNames(catalog) : [];
-  const models = catalog && value.provider ? modelsFor(catalog, value.provider) : [];
+  const allProviders = catalog ? providerNames(catalog) : [];
+  const providers =
+    catalog && visionOnly
+      ? allProviders.filter((p) => modelsFor(catalog, p).some((m) => m.vision))
+      : allProviders;
+  const allModels =
+    catalog && value.provider ? modelsFor(catalog, value.provider) : [];
+  const models = visionOnly ? allModels.filter((m) => m.vision) : allModels;
 
   function onProvider(provider: string): void {
     onChange({ ...value, provider, name: undefined, supports_vision: false });
   }
   function onModel(name: string): void {
-    const entry = catalog && value.provider ? lookupModel(catalog, value.provider, name) : undefined;
+    const entry =
+      catalog && value.provider
+        ? lookupModel(catalog, value.provider, name)
+        : undefined;
     onChange({ ...value, name, supports_vision: entry?.vision ?? false });
   }
 
@@ -62,10 +79,15 @@ export function ModelSelect({ value, catalog, onChange }: ModelSelectProps) {
       </div>
       <div data-testid="model-select-vision" style={{ marginBottom: 8 }}>
         <Tag color={value.supports_vision ? "cyan" : "default"}>
-          {value.supports_vision ? t("model_select.vision_on") : t("model_select.vision_off")}
+          {value.supports_vision
+            ? t("model_select.vision_on")
+            : t("model_select.vision_off")}
         </Tag>
       </div>
-      <label data-testid="model-select-temperature" style={{ display: "block", marginBottom: 8 }}>
+      <label
+        data-testid="model-select-temperature"
+        style={{ display: "block", marginBottom: 8 }}
+      >
         <span style={{ display: "block", marginBottom: 4 }}>
           {t("model_select.temperature")}: {temperature}
         </span>
@@ -88,18 +110,26 @@ export function ModelSelect({ value, catalog, onChange }: ModelSelectProps) {
             children: (
               <>
                 <label style={{ display: "block", marginBottom: 8 }}>
-                  <span style={{ display: "block", marginBottom: 4 }}>max_tokens</span>
+                  <span style={{ display: "block", marginBottom: 4 }}>
+                    max_tokens
+                  </span>
                   <InputNumber
                     value={value.max_tokens}
-                    onChange={(v) => onChange({ ...value, max_tokens: v ?? undefined })}
+                    onChange={(v) =>
+                      onChange({ ...value, max_tokens: v ?? undefined })
+                    }
                     style={{ width: "100%" }}
                   />
                 </label>
                 <label style={{ display: "block", marginBottom: 8 }}>
-                  <span style={{ display: "block", marginBottom: 4 }}>rate_limit_rpm</span>
+                  <span style={{ display: "block", marginBottom: 4 }}>
+                    rate_limit_rpm
+                  </span>
                   <InputNumber
                     value={value.rate_limit_rpm}
-                    onChange={(v) => onChange({ ...value, rate_limit_rpm: v ?? undefined })}
+                    onChange={(v) =>
+                      onChange({ ...value, rate_limit_rpm: v ?? undefined })
+                    }
                     style={{ width: "100%" }}
                   />
                 </label>

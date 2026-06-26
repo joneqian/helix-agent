@@ -45,9 +45,7 @@ metadata:
   tenant: platform
 spec:
   tenant_config: {}
-  model:
-    provider: anthropic
-    name: claude-sonnet-4-5
+  model: {}
   system_prompt:
     template: You are a helpful assistant.
   sandbox:

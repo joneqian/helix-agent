@@ -241,6 +241,7 @@ export function FormView({
                 {t("agent_form.vision_hint")}
               </Text>
               <ModelSelect
+                visionOnly
                 value={readVisionModel(formData) ?? {}}
                 catalog={catalog}
                 onChange={(mdl) => onChange(setVisionModel(formData, mdl))}
