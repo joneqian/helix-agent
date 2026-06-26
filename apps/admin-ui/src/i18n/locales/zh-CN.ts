@@ -720,6 +720,17 @@ const zhCN: TranslationKeys = {
     header_name_invalid: "请求头名称只能用字母、数字和连字符",
     field_sse_read_timeout: "SSE 读取超时（秒）",
     sse_read_timeout_hint: "SSE 流的单次读取等待。留空用默认值（300 秒）。",
+    field_name_help: "租户内唯一的 MCP server 名,agent 按这个名字引用。\n示例:company-crm",
+    field_transport_help:
+      "客户端怎么连 MCP server。远程 server 用 SSE / streamable-http。\n示例:sse",
+    field_url_help:
+      "MCP server 的端点 URL,必须平台可达(私网 IP 被拦)。\n示例:https://mcp.example.com/sse",
+    field_auth_help:
+      "怎么对 server 鉴权。none=开放;bearer=静态令牌;oauth2=每用户登录授权。\n示例:bearer",
+    field_token_help:
+      "作为 Authorization 发送的 bearer 令牌,加密存储;编辑时留空保留原值。\n示例:sk-xxxx(粘真实令牌)",
+    field_timeout_help: "单次 MCP 请求最多等多少秒,超时放弃。\n示例:30",
+    field_sse_read_timeout_help: "SSE 流两块数据间最多等多少秒。留空用默认(300 秒)。\n示例:300",
   },
   mcp_catalog: {
     page_title: "MCP 目录",
@@ -1442,6 +1453,9 @@ const zhCN: TranslationKeys = {
     github_skill_ph: "find-skills(可选 —— 一仓多技能时必填)",
     github_ref_label: "版本",
     github_ref_ph: "分支 / 标签 / SHA(可选,默认分支)",
+    github_source_help: "要导入技能的 GitHub 仓库 —— owner/repo 或完整 URL。\n示例:anthropics/skills",
+    github_skill_help: "导入仓库里哪个技能文件夹。填单个名,或从检测到的列表里选。\n示例:pptx",
+    github_ref_help: "从哪个 git ref 导入 —— 分支/标签/commit SHA。留空=仓库默认分支。\n示例:main",
     github_submit: "导入",
     github_pick_skill: "该仓库有 {{count}} 个技能 —— 可多选批量导入。",
     github_pick_ph: "选择技能（可多选）",

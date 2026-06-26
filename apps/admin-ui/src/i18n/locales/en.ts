@@ -690,6 +690,13 @@ export interface TranslationKeys {
     header_name_invalid: string;
     field_sse_read_timeout: string;
     sse_read_timeout_hint: string;
+    field_name_help: string;
+    field_transport_help: string;
+    field_url_help: string;
+    field_auth_help: string;
+    field_token_help: string;
+    field_timeout_help: string;
+    field_sse_read_timeout_help: string;
   };
   mcp_catalog: {
     page_title: string;
@@ -1361,10 +1368,13 @@ export interface TranslationKeys {
     github_hint: string;
     github_source_label: string;
     github_source_ph: string;
+    github_source_help: string;
     github_skill_label: string;
     github_skill_ph: string;
+    github_skill_help: string;
     github_ref_label: string;
     github_ref_ph: string;
+    github_ref_help: string;
     github_submit: string;
     github_pick_skill: string;
     github_pick_ph: string;
@@ -2529,6 +2539,20 @@ const en: TranslationKeys = {
     field_sse_read_timeout: "SSE read timeout (seconds)",
     sse_read_timeout_hint:
       "Per-read wait for SSE streams. Leave blank for the default (300s).",
+    field_name_help:
+      "A unique name for this MCP server within your tenant; agents reference it by this name.\nExample: company-crm",
+    field_transport_help:
+      "How the client connects to the MCP server. SSE / streamable-http for remote servers.\nExample: sse",
+    field_url_help:
+      "The MCP server's endpoint URL. Must be reachable from the platform (private IPs are blocked).\nExample: https://mcp.example.com/sse",
+    field_auth_help:
+      "How to authenticate to the server. none = open; bearer = a static token; oauth2 = per-user login.\nExample: bearer",
+    field_token_help:
+      "The bearer token sent as Authorization. Stored encrypted; leave blank on edit to keep the existing one.\nExample: sk-xxxx (paste the real token)",
+    field_timeout_help:
+      "Max seconds to wait for a single MCP request before giving up.\nExample: 30",
+    field_sse_read_timeout_help:
+      "Max seconds to wait between chunks on an SSE stream. Leave blank for the default (300s).\nExample: 300",
   },
   mcp_catalog: {
     page_title: "MCP Catalog",
@@ -3294,6 +3318,12 @@ const en: TranslationKeys = {
     github_skill_ph: "find-skills (optional — required if the repo has many)",
     github_ref_label: "Ref",
     github_ref_ph: "branch / tag / SHA (optional, default branch)",
+    github_source_help:
+      "The GitHub repo to import skills from — owner/repo or full URL.\nExample: anthropics/skills",
+    github_skill_help:
+      "Which skill folder(s) inside the repo to import. Leave a single name, or pick from the detected list.\nExample: pptx",
+    github_ref_help:
+      "Git ref to import from — branch, tag, or commit SHA. Blank = the repo's default branch.\nExample: main",
     github_submit: "Import",
     github_pick_skill:
       "This repo has {{count}} skills — pick one or more to import.",
