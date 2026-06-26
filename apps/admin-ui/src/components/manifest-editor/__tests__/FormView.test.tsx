@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "../../../i18n";
 
@@ -95,10 +95,36 @@ describe("FormView", () => {
 
     renderSection("memory");
     expect(screen.getByTestId("af-memory")).toBeInTheDocument();
+    // Memory-on seed surfaces the write-back master toggle + the advanced panel.
+    expect(screen.getByTestId("af-memory-writeback")).toBeInTheDocument();
+    expect(screen.getByTestId("af-memory-advanced")).toBeInTheDocument();
 
     renderSection("governance");
     expect(screen.getByTestId("af-approval")).toBeInTheDocument();
     expect(screen.getByTestId("af-dynamic-workers")).toBeInTheDocument();
+    expect(screen.getByTestId("af-run-deadline")).toBeInTheDocument();
+    expect(screen.getByTestId("af-governance-advanced")).toBeInTheDocument();
+  });
+
+  it("toggling write-back off sets memory.long_term.write_back false", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderSection("memory", SEED, onChange);
+    await user.click(screen.getByTestId("af-memory-writeback"));
+    const last = onChange.mock.calls.at(-1)?.[0] as AgentManifest;
+    expect(last.spec?.memory?.long_term?.write_back).toBe(false);
+  });
+
+  it("setting a run deadline writes policies.run_deadline_s", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderSection("governance", SEED, onChange);
+    const input = within(screen.getByTestId("af-run-deadline")).getByRole(
+      "spinbutton",
+    );
+    await user.type(input, "1800");
+    const last = onChange.mock.calls.at(-1)?.[0] as AgentManifest;
+    expect(last.spec?.policies?.run_deadline_s).toBeGreaterThan(0);
   });
 
   it("checking an approval tool adds it to policies.approval_required_tools", async () => {

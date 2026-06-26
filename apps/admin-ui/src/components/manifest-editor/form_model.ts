@@ -11,6 +11,12 @@ export interface LongTermFields {
   retrieve_top_k?: number;
   write_back?: boolean;
   recall_mode?: string;
+  // Stream Memory-Enhance (M-3) — read-time verification of recalled memories.
+  verify_reads?: boolean;
+  // Stream Memory-Enhance (M-2) — importance floor for run-end write-back.
+  write_min_importance?: number;
+  // Stream CM-7 — Mem0-style reconcile (dedup/supersede) at write-back.
+  reconcile_writes?: boolean;
 }
 export interface RouteRuleFields {
   when?: string;
@@ -62,6 +68,12 @@ export interface AgentManifest {
     // always-on exec_python base capability).
     policies?: {
       approval_required_tools?: string[];
+      // Seconds a pending approval may sit before auto-reject (default 24h).
+      approval_timeout_s?: number;
+      // Wall-clock cap on the whole run incl. sub-agent recursion (0 = off).
+      run_deadline_s?: number;
+      // Stream L.L7 — record completed runs to ObjectStore (privacy toggle).
+      trajectory_recording?: boolean;
       [k: string]: unknown;
     } | null;
     // Orchestrator-Worker — whether the agent may spawn ephemeral workers at
@@ -122,6 +134,18 @@ export const readMemoryOn = (m: unknown): boolean =>
   (specOf(m).memory?.long_term ?? null) !== null;
 export const readTopK = (m: unknown): number | undefined =>
   specOf(m).memory?.long_term?.retrieve_top_k;
+// long_term knob readers — each defaults to the backend default so an
+// unset field reads as its effective value (LongTermMemorySpec).
+export const readWriteBack = (m: unknown): boolean =>
+  specOf(m).memory?.long_term?.write_back ?? true;
+export const readVerifyReads = (m: unknown): boolean =>
+  specOf(m).memory?.long_term?.verify_reads ?? true;
+export const readWriteMinImportance = (m: unknown): number =>
+  specOf(m).memory?.long_term?.write_min_importance ?? 0.3;
+export const readReconcileWrites = (m: unknown): boolean =>
+  specOf(m).memory?.long_term?.reconcile_writes ?? true;
+export const readRecallMode = (m: unknown): string =>
+  specOf(m).memory?.long_term?.recall_mode ?? "per_session";
 
 // ---- reflection evaluator (Stream J.11 routing — the `when=reflection` rule) ----
 // The "reflection evaluator model" friendly control is a curated view over the
@@ -224,16 +248,28 @@ export function setMemoryOn(m: unknown, on: boolean): AgentManifest {
   };
   return patchSpec(m, { memory: { ...memory, long_term: lt } });
 }
-export function setTopK(m: unknown, k: number): AgentManifest {
+// Merge a partial patch into ``memory.long_term`` preserving siblings. Used by
+// every long_term knob setter so toggling one never clobbers the others.
+function patchLongTerm(
+  m: unknown,
+  patch: Partial<LongTermFields>,
+): AgentManifest {
   const memory = specOf(m).memory ?? {};
-  const lt = specOf(m).memory?.long_term ?? {
-    write_back: true,
-    recall_mode: "per_session",
-  };
-  return patchSpec(m, {
-    memory: { ...memory, long_term: { ...lt, retrieve_top_k: k } },
-  });
+  const lt = specOf(m).memory?.long_term ?? {};
+  return patchSpec(m, { memory: { ...memory, long_term: { ...lt, ...patch } } });
 }
+export const setTopK = (m: unknown, k: number): AgentManifest =>
+  patchLongTerm(m, { retrieve_top_k: k });
+export const setWriteBack = (m: unknown, on: boolean): AgentManifest =>
+  patchLongTerm(m, { write_back: on });
+export const setVerifyReads = (m: unknown, on: boolean): AgentManifest =>
+  patchLongTerm(m, { verify_reads: on });
+export const setWriteMinImportance = (m: unknown, v: number): AgentManifest =>
+  patchLongTerm(m, { write_min_importance: v });
+export const setReconcileWrites = (m: unknown, on: boolean): AgentManifest =>
+  patchLongTerm(m, { reconcile_writes: on });
+export const setRecallMode = (m: unknown, mode: string): AgentManifest =>
+  patchLongTerm(m, { recall_mode: mode });
 export function setReflectionEvaluator(
   m: unknown,
   model: ModelFields | null,
@@ -364,6 +400,27 @@ export function setApprovalTools(m: unknown, tools: string[]): AgentManifest {
     policies: { ...policies, approval_required_tools: tools },
   });
 }
+
+// ---- other policy knobs (same ``policies`` block as the approval gate) ----
+function patchPolicies(
+  m: unknown,
+  patch: Record<string, unknown>,
+): AgentManifest {
+  const policies = specOf(m).policies ?? {};
+  return patchSpec(m, { policies: { ...policies, ...patch } });
+}
+export const readApprovalTimeout = (m: unknown): number =>
+  specOf(m).policies?.approval_timeout_s ?? 86400;
+export const setApprovalTimeout = (m: unknown, s: number): AgentManifest =>
+  patchPolicies(m, { approval_timeout_s: s });
+export const readRunDeadline = (m: unknown): number =>
+  specOf(m).policies?.run_deadline_s ?? 0;
+export const setRunDeadline = (m: unknown, s: number): AgentManifest =>
+  patchPolicies(m, { run_deadline_s: s });
+export const readTrajectoryRecording = (m: unknown): boolean =>
+  specOf(m).policies?.trajectory_recording ?? true;
+export const setTrajectoryRecording = (m: unknown, on: boolean): AgentManifest =>
+  patchPolicies(m, { trajectory_recording: on });
 
 // ---- dynamic workers (spawn_worker) ----
 // Whether the agent's LLM may spawn ephemeral workers at run time. The block is

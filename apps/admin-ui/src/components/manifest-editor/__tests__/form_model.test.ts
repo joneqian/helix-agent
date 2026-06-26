@@ -37,6 +37,22 @@ import {
   setTool,
   setTopK,
   setVisionModel,
+  readWriteBack,
+  readVerifyReads,
+  readWriteMinImportance,
+  readReconcileWrites,
+  readRecallMode,
+  setWriteBack,
+  setVerifyReads,
+  setWriteMinImportance,
+  setReconcileWrites,
+  setRecallMode,
+  readApprovalTimeout,
+  readRunDeadline,
+  readTrajectoryRecording,
+  setApprovalTimeout,
+  setRunDeadline,
+  setTrajectoryRecording,
 } from "../form_model";
 
 const seed = {
@@ -121,6 +137,53 @@ describe("form_model writers preserve siblings", () => {
     const next = setTopK(seed, 8);
     expect(next.spec?.memory?.long_term?.retrieve_top_k).toBe(8);
     expect(next.spec?.memory?.long_term?.write_back).toBe(true);
+  });
+
+  it("long_term knob readers default to the backend defaults when unset", () => {
+    const bare = { spec: { memory: { long_term: { retrieve_top_k: 5 } } } };
+    expect(readWriteBack(bare)).toBe(true);
+    expect(readVerifyReads(bare)).toBe(true);
+    expect(readWriteMinImportance(bare)).toBe(0.3);
+    expect(readReconcileWrites(bare)).toBe(true);
+    expect(readRecallMode(bare)).toBe("per_session");
+  });
+
+  it("long_term knob setters patch one field, preserving the rest", () => {
+    const a = setWriteBack(seed, false);
+    expect(a.spec?.memory?.long_term?.write_back).toBe(false);
+    expect(a.spec?.memory?.long_term?.retrieve_top_k).toBe(5);
+
+    const b = setVerifyReads(setWriteMinImportance(seed, 0.6), false);
+    expect(b.spec?.memory?.long_term?.write_min_importance).toBe(0.6);
+    expect(b.spec?.memory?.long_term?.verify_reads).toBe(false);
+    expect(b.spec?.memory?.long_term?.write_back).toBe(true);
+
+    const c = setRecallMode(setReconcileWrites(seed, false), "per_turn");
+    expect(c.spec?.memory?.long_term?.reconcile_writes).toBe(false);
+    expect(c.spec?.memory?.long_term?.recall_mode).toBe("per_turn");
+  });
+
+  it("policy knob readers default; setters share the policies block with approval", () => {
+    expect(readApprovalTimeout(seed)).toBe(86400);
+    expect(readRunDeadline(seed)).toBe(0);
+    expect(readTrajectoryRecording(seed)).toBe(true);
+
+    const withGate = setApprovalTools(seed, ["exec_python"]);
+    const withDeadline = setRunDeadline(withGate, 1800);
+    expect(withDeadline.spec?.policies?.run_deadline_s).toBe(1800);
+    // setting another policy knob keeps the approval gate intact
+    expect(withDeadline.spec?.policies?.approval_required_tools).toEqual([
+      "exec_python",
+    ]);
+
+    const noTrace = setTrajectoryRecording(seed, false);
+    expect(noTrace.spec?.policies?.trajectory_recording).toBe(false);
+
+    const withTimeout = setApprovalTimeout(withGate, 3600);
+    expect(withTimeout.spec?.policies?.approval_timeout_s).toBe(3600);
+    expect(withTimeout.spec?.policies?.approval_required_tools).toEqual([
+      "exec_python",
+    ]);
   });
 
   it("setTool adds/removes builtin and http tools independently", () => {
