@@ -315,6 +315,7 @@ export const AgentTemplateConfigForm = forwardRef<
         mode={isEditing ? "edit" : "create"}
         initialYaml={initialYaml}
         onChange={setYaml}
+        mcpSource="catalog"
         leadingTabs={[
           {
             value: "meta",

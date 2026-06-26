@@ -66,6 +66,12 @@ describe("FormView", () => {
 
     renderSection("tools");
     expect(screen.getByTestId("af-tools")).toBeInTheDocument();
+    // MCP is its own section now, not under tools.
+    expect(screen.queryByTestId("af-tool-mcp")).not.toBeInTheDocument();
+
+    renderSection("mcp");
+    expect(screen.getByTestId("af-mcp")).toBeInTheDocument();
+    expect(screen.getByTestId("af-tool-mcp")).toBeInTheDocument();
 
     renderSection("capabilities");
     expect(screen.getByTestId("af-knowledge")).toBeInTheDocument();

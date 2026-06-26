@@ -17,6 +17,7 @@ import { loadAgentSchema } from "./schema";
 import { dumpYaml, parseYaml } from "./yaml";
 import { FormView, type FormSection } from "./FormView";
 import { YamlView } from "./YamlView";
+import type { McpPickerSource } from "./widgets/McpToolPicker";
 
 // The curated manifest field groups + the YAML escape hatch, as one flat tab
 // row. ``labelKey`` is an i18n key.
@@ -28,6 +29,7 @@ const MANIFEST_TABS: ReadonlyArray<{
   { value: "model", labelKey: "manifest_editor.tab_model" },
   { value: "prompt", labelKey: "manifest_editor.tab_prompt" },
   { value: "tools", labelKey: "manifest_editor.tab_tools" },
+  { value: "mcp", labelKey: "manifest_editor.tab_mcp" },
   { value: "capabilities", labelKey: "manifest_editor.tab_capabilities" },
   { value: "memory", labelKey: "manifest_editor.tab_memory" },
   { value: "governance", labelKey: "manifest_editor.tab_governance" },
@@ -57,6 +59,8 @@ interface ManifestEditorProps {
   initialYaml: string;
   onChange: (yaml: string) => void;
   leadingTabs?: ReadonlyArray<LeadingTab>;
+  /** Forwarded to the MCP tab — ``catalog`` for a platform template. */
+  mcpSource?: McpPickerSource;
 }
 
 function safeSeed(initialYaml: string): unknown {
@@ -80,6 +84,7 @@ export function ManifestEditor({
   initialYaml,
   onChange,
   leadingTabs = [],
+  mcpSource,
 }: ManifestEditorProps) {
   const { t } = useTranslation();
   const seed = useMemo(() => safeSeed(initialYaml), [initialYaml]);
@@ -234,6 +239,7 @@ export function ManifestEditor({
       formData={manifestObject}
       onChange={handleFormChange}
       section={tab}
+      mcpSource={mcpSource}
     />
   ) : (
     <YamlView value={yamlText} onChange={handleYamlChange} />

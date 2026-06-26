@@ -9,8 +9,9 @@
  *   onAllowToolsChange — called when the tool selection changes
  *
  * Behavior:
- *   - On mount calls listAvailableMcpServers() → shows loading → list, error,
- *     or empty state.
+ *   - On mount lists selectable servers per ``source`` (``available`` = the
+ *     tenant's opted-in/custom servers; ``catalog`` = published platform
+ *     connectors, for a platform template) → loading → list, error, or empty.
  *   - Each available server is a Checkbox (testid af-mcp-server-{name}),
  *     checked when name ∈ servers.  A source Tag (platform/tenant) is shown.
  *   - Checking/unchecking a server updates onServersChange(next).
@@ -22,23 +23,56 @@
  *   - Tools cached per server in component state after first fetch.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Checkbox, Collapse, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import {
+  Alert,
+  Checkbox,
+  Collapse,
+  Space,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import { useTranslation } from "react-i18next";
 
 import {
   listAvailableMcpServers,
   listMcpServerTools,
-  type AvailableMcpServer,
   type McpTool,
 } from "../../../api/mcp-servers";
+import {
+  listPlatformCatalog,
+  listCatalogTools,
+} from "../../../api/mcp-catalog";
 
 // ── Types ──────────────────────────────────────────────────────────────────
+
+/** Where the picker sources selectable servers from:
+ *   - ``available`` (default): the tenant's opted-in + custom servers
+ *     (``/v1/mcp-servers/available``). For a tenant agent that runs now.
+ *   - ``catalog``: published platform connectors (``/v1/platform/mcp-catalog``,
+ *     ``enabled`` only). For a platform Agent template — a blueprint that
+ *     references connectors by name, so it lists the catalog directly instead
+ *     of requiring a per-tenant opt-in that doesn't apply to a template. */
+export type McpPickerSource = "available" | "catalog";
 
 interface McpToolPickerProps {
   servers: string[];
   allowTools: string[];
   onServersChange: (next: string[]) => void;
   onAllowToolsChange: (next: string[]) => void;
+  source?: McpPickerSource;
+}
+
+/** Normalised row shown in the list, regardless of source. ``toolKey`` is the
+ * argument the tool-list endpoint needs (server name for ``available``, catalog
+ * id for ``catalog``). */
+interface ServerRow {
+  name: string;
+  label: string;
+  tagText: string;
+  tagColor: string;
+  toolKey: string;
 }
 
 type ServerLoadState =
@@ -54,53 +88,102 @@ export function McpToolPicker({
   allowTools,
   onServersChange,
   onAllowToolsChange,
+  source = "available",
 }: McpToolPickerProps) {
   const { t } = useTranslation();
 
-  // Available servers from /v1/mcp-servers/available
-  const [available, setAvailable] = useState<AvailableMcpServer[]>([]);
+  const [rows, setRows] = useState<ServerRow[]>([]);
   const [serversLoading, setServersLoading] = useState(true);
   const [serversError, setServersError] = useState<string | null>(null);
 
   // Per-server tool fetch state; keyed by server name
-  const [toolStates, setToolStates] = useState<Record<string, ServerLoadState>>({});
+  const [toolStates, setToolStates] = useState<Record<string, ServerLoadState>>(
+    {},
+  );
 
-  // ── Load available servers on mount ─────────────────────────────────────
+  // ── Load selectable servers on mount (source-dependent) ──────────────────
 
   useEffect(() => {
+    let alive = true;
     setServersLoading(true);
-    listAvailableMcpServers().then(
+    const load: Promise<ServerRow[]> =
+      source === "catalog"
+        ? listPlatformCatalog().then((entries) =>
+            entries
+              .filter((e) => e.enabled)
+              .map((e) => ({
+                name: e.name,
+                label: e.display_name || e.name,
+                tagText: t("agent_form.mcp_source_platform"),
+                tagColor: "blue",
+                toolKey: e.id,
+              })),
+          )
+        : listAvailableMcpServers().then((data) =>
+            data.map((s) => ({
+              name: s.name,
+              label: s.name,
+              tagText:
+                s.source === "platform"
+                  ? t("agent_form.mcp_source_platform")
+                  : t("agent_form.mcp_source_tenant"),
+              tagColor: s.source === "platform" ? "blue" : "green",
+              toolKey: s.name,
+            })),
+          );
+    load.then(
       (data) => {
-        setAvailable(data);
+        if (!alive) return;
+        setRows(data);
         setServersLoading(false);
       },
       (err: unknown) => {
+        if (!alive) return;
         setServersError(err instanceof Error ? err.message : "unknown error");
         setServersLoading(false);
       },
     );
-  }, []);
+    return () => {
+      alive = false;
+    };
+  }, [source, t]);
 
   // ── Fetch tools for a server on first expand ─────────────────────────────
 
   const fetchTools = useCallback(
-    (name: string) => {
-      const current = toolStates[name];
+    (row: ServerRow) => {
+      const current = toolStates[row.name];
       // Already loaded or in flight — skip.
       if (current?.kind === "loaded" || current?.kind === "loading") {
         return;
       }
-      setToolStates((prev) => ({ ...prev, [name]: { kind: "loading" } }));
-      listMcpServerTools(name).then(
+      setToolStates((prev) => ({ ...prev, [row.name]: { kind: "loading" } }));
+      const fetch: Promise<McpTool[]> =
+        source === "catalog"
+          ? listCatalogTools(row.toolKey).then((res) =>
+              res.status === "ok"
+                ? res.tools
+                    .filter((tool) => !tool.disabled)
+                    .map((tool) => ({
+                      name: tool.name,
+                      description: tool.description,
+                    }))
+                : Promise.reject(new Error(res.error ?? "unreachable")),
+            )
+          : listMcpServerTools(row.toolKey);
+      fetch.then(
         (tools) => {
-          setToolStates((prev) => ({ ...prev, [name]: { kind: "loaded", tools } }));
+          setToolStates((prev) => ({
+            ...prev,
+            [row.name]: { kind: "loaded", tools },
+          }));
         },
         () => {
-          setToolStates((prev) => ({ ...prev, [name]: { kind: "error" } }));
+          setToolStates((prev) => ({ ...prev, [row.name]: { kind: "error" } }));
         },
       );
     },
-    [toolStates],
+    [toolStates, source],
   );
 
   // ── Server checkbox handler ───────────────────────────────────────────────
@@ -158,16 +241,19 @@ export function McpToolPicker({
 
   // ── Empty state ──────────────────────────────────────────────────────────
 
-  if (available.length === 0) {
+  if (rows.length === 0) {
     return (
       <div
+        data-testid="af-mcp-empty"
         style={{
           color: "var(--hx-text-tertiary, #666)",
           fontSize: 13,
           padding: "4px 0",
         }}
       >
-        {t("agent_form.mcp_no_servers")}
+        {source === "catalog"
+          ? t("agent_form.mcp_no_servers_catalog")
+          : t("agent_form.mcp_no_servers_available")}
       </div>
     );
   }
@@ -183,12 +269,15 @@ export function McpToolPicker({
         <Typography.Text strong style={{ display: "block", marginBottom: 2 }}>
           {t("agent_form.mcp_servers_label")}
         </Typography.Text>
-        <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+        <Typography.Text
+          type="secondary"
+          style={{ fontSize: 12, display: "block", marginBottom: 8 }}
+        >
           {t("agent_form.mcp_servers_hint")}
         </Typography.Text>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {available.map((server) => {
+          {rows.map((server) => {
             const isChecked = checkedServers.has(server.name);
             return (
               <div key={server.name}>
@@ -197,17 +286,14 @@ export function McpToolPicker({
                   <Checkbox
                     data-testid={`af-mcp-server-${server.name}`}
                     checked={isChecked}
-                    onChange={(e) => handleServerToggle(server.name, e.target.checked)}
+                    onChange={(e) =>
+                      handleServerToggle(server.name, e.target.checked)
+                    }
                   >
-                    <span style={{ fontWeight: 500 }}>{server.name}</span>
+                    <span style={{ fontWeight: 500 }}>{server.label}</span>
                   </Checkbox>
-                  <Tag
-                    color={server.source === "platform" ? "blue" : "green"}
-                    style={{ fontSize: 11 }}
-                  >
-                    {server.source === "platform"
-                      ? t("agent_form.mcp_source_platform")
-                      : t("agent_form.mcp_source_tenant")}
+                  <Tag color={server.tagColor} style={{ fontSize: 11 }}>
+                    {server.tagText}
                   </Tag>
                 </Space>
 
@@ -219,7 +305,7 @@ export function McpToolPicker({
                       data-testid={`af-mcp-tools-${server.name}`}
                       onChange={(keys) => {
                         if (keys.length > 0) {
-                          fetchTools(server.name);
+                          fetchTools(server);
                         }
                       }}
                       items={[
@@ -276,7 +362,10 @@ export function McpToolPicker({
 
     return (
       <div>
-        <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginBottom: 6 }}>
+        <Typography.Text
+          type="secondary"
+          style={{ fontSize: 11, display: "block", marginBottom: 6 }}
+        >
           {t("agent_form.mcp_tools_hint")}
         </Typography.Text>
         {tools.length === 0 ? (
@@ -294,9 +383,13 @@ export function McpToolPicker({
                 <Checkbox
                   data-testid={`af-mcp-tool-${tool.name}`}
                   checked={allowTools.includes(tool.name)}
-                  onChange={(e) => handleToolToggle(tool.name, e.target.checked)}
+                  onChange={(e) =>
+                    handleToolToggle(tool.name, e.target.checked)
+                  }
                 >
-                  <Typography.Text style={{ fontSize: 13 }}>{tool.name}</Typography.Text>
+                  <Typography.Text style={{ fontSize: 13 }}>
+                    {tool.name}
+                  </Typography.Text>
                 </Checkbox>
               </Tooltip>
             ))}

@@ -47,7 +47,7 @@ import {
   setTopK,
   setVisionModel,
 } from "./form_model";
-import { McpToolPicker } from "./widgets/McpToolPicker";
+import { McpToolPicker, type McpPickerSource } from "./widgets/McpToolPicker";
 
 const { Text } = Typography;
 
@@ -57,6 +57,7 @@ export type FormSection =
   | "model"
   | "prompt"
   | "tools"
+  | "mcp"
   | "capabilities"
   | "memory"
   | "governance";
@@ -66,6 +67,9 @@ interface FormViewProps {
   onChange: (data: unknown) => void;
   /** Which field group to render. Defaults to ``basic`` for stand-alone use. */
   section?: FormSection;
+  /** Where the MCP tab sources servers — ``catalog`` for a platform template,
+   *  ``available`` (default) for a tenant agent. */
+  mcpSource?: McpPickerSource;
 }
 
 const SECTION: React.CSSProperties = { marginBottom: 24 };
@@ -93,6 +97,7 @@ export function FormView({
   formData,
   onChange,
   section = "basic",
+  mcpSource = "available",
 }: FormViewProps) {
   const { t } = useTranslation();
   const [catalog, setCatalog] = useState<ModelCatalog | undefined>(undefined);
@@ -312,31 +317,45 @@ export function FormView({
               testId="af-tool-http"
             />
           </span>
-          <span>
-            <Checkbox
-              data-testid="af-tool-mcp"
-              checked={tools.mcp}
-              onChange={(e) =>
-                onChange(setTool(formData, "mcp", e.target.checked))
-              }
-            >
-              {t("agent_form.tool_mcp")}
-            </Checkbox>
-            <FieldHelp
-              text={t("agent_form.tool_mcp_help")}
-              testId="af-tool-mcp"
-            />
-          </span>
         </div>
-        {tools.mcp && (
-          <McpToolPicker
-            servers={tools.mcpServers}
-            allowTools={tools.mcpAllowTools}
-            onServersChange={(next) => onChange(setMcpServers(formData, next))}
-            onAllowToolsChange={(next) =>
-              onChange(setMcpAllowTools(formData, next))
+      </section>
+    ),
+
+    mcp: (
+      <section data-testid="af-mcp" style={SECTION}>
+        <Heading>
+          {t("agent_form.section_mcp")}
+          <FieldHelp text={t("agent_form.section_mcp_help")} testId="af-mcp" />
+        </Heading>
+        <span>
+          <Checkbox
+            data-testid="af-tool-mcp"
+            checked={tools.mcp}
+            onChange={(e) =>
+              onChange(setTool(formData, "mcp", e.target.checked))
             }
+          >
+            {t("agent_form.tool_mcp")}
+          </Checkbox>
+          <FieldHelp
+            text={t("agent_form.tool_mcp_help")}
+            testId="af-tool-mcp"
           />
+        </span>
+        {tools.mcp && (
+          <div style={{ marginTop: 12 }}>
+            <McpToolPicker
+              source={mcpSource}
+              servers={tools.mcpServers}
+              allowTools={tools.mcpAllowTools}
+              onServersChange={(next) =>
+                onChange(setMcpServers(formData, next))
+              }
+              onAllowToolsChange={(next) =>
+                onChange(setMcpAllowTools(formData, next))
+              }
+            />
+          </div>
         )}
       </section>
     ),

@@ -181,8 +181,8 @@ test("(a) create-agent: enable MCP, pick server+tool, submit — POST body conta
   await nameInput.clear();
   await nameInput.fill("mcp-agent");
 
-  // Tools live under the "Tools" tab now (the form is split into tabs).
-  await page.getByTestId("manifest-tab-tools").click();
+  // MCP lives under its own "MCP" tab now.
+  await page.getByTestId("manifest-tab-mcp").click();
 
   // Enable the MCP tool checkbox.
   await page.getByTestId("af-tool-mcp").click();
@@ -237,8 +237,8 @@ test("(b) create drawer with MCP picker passes axe (serious + critical)", async 
   await page.getByTestId("agents-create").click();
   await expect(page.getByTestId("manifest-form-view")).toBeVisible();
 
-  // Tools live under the "Tools" tab now (the form is split into tabs).
-  await page.getByTestId("manifest-tab-tools").click();
+  // MCP lives under its own "MCP" tab now.
+  await page.getByTestId("manifest-tab-mcp").click();
 
   // Enable MCP and wait for the picker to load so axe sees the full DOM.
   await page.getByTestId("af-tool-mcp").click();
