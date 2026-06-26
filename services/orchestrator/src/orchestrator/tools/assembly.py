@@ -50,6 +50,7 @@ from orchestrator.tools.http import AllowlistProvider, HTTPTool
 from orchestrator.tools.knowledge import KnowledgeRetriever, KnowledgeSearchTool
 from orchestrator.tools.locks import NullWorkspaceLock, WorkspaceLock
 from orchestrator.tools.mcp import MCPServerPool, register_mcp_tools
+from orchestrator.tools.read_document import ReadDocumentTool
 from orchestrator.tools.registry import ToolRegistry
 from orchestrator.tools.sandbox import ExecPythonTool, SupervisorClient
 from orchestrator.tools.skill_authoring import SKILL_AUTHORING_BUILTINS
@@ -78,6 +79,7 @@ KNOWN_BUILTINS = frozenset(
         "write_file",
         "edit_file",
         "list_dir",
+        "read_document",
         "save_artifact",
         "list_artifacts",
         "ask_for_approval",
@@ -230,6 +232,7 @@ async def build_tool_registry(
             _register_http(registry, tool_env)
         elif isinstance(entry, MCPToolSpec):
             await _register_mcp(registry, entry, tool_env)
+    _register_base_capabilities(registry, tool_env, skill_seed_files)
     _register_subagents(registry, subagents, tool_env, subagent_depth)
     _register_spawn_worker(registry, tool_env, parent_spec, dynamic_workers, subagent_depth)
     _register_knowledge_search(registry, knowledge, tool_env)
@@ -457,6 +460,8 @@ def _register_builtin(
         _register_bash(registry, env, skill_seed_files)
     elif entry.name in ("read_file", "write_file", "edit_file", "list_dir"):
         _register_file_op(registry, entry.name, env, skill_seed_files)
+    elif entry.name == "read_document":
+        _register_read_document(registry, env, skill_seed_files)
     elif entry.name == "save_artifact":
         registry.register(SaveArtifactTool(store=_require_artifact_store(env, "save_artifact")))
     elif entry.name == "list_artifacts":
@@ -469,6 +474,57 @@ def _register_builtin(
         # Stream SE (SE-3b) — registered in ``agent_factory.build_agent``
         # (it has agent_name + the SkillStore); no-op here.
         pass
+
+
+#: Tier 1 base capabilities — code execution + file + artifact tooling that
+#: EVERY agent gets, regardless of the manifest ``tools:`` list. A complete
+#: agent is not a per-manifest opt-in: without these it degrades to pure
+#: question-answer. The sandbox (gVisor + per-tenant isolation + egress proxy
+#: + audit) is the security boundary, so always-on code execution merely
+#: realises the sandbox's purpose; the governance counterweight is the
+#: declarative approval gate (``policies.approval_required_tools``), which can
+#: require a human verdict before a tool runs without removing the capability.
+#: See docs/design/agent-base-capabilities-and-form.md.
+BASE_CAPABILITY_BUILTINS: tuple[str, ...] = (
+    "exec_python",
+    "bash",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "read_document",
+    "save_artifact",
+    "list_artifacts",
+)
+
+
+def _register_base_capabilities(
+    registry: ToolRegistry,
+    env: ToolEnv,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
+) -> None:
+    """Register the Tier 1 base capabilities the manifest did not declare.
+
+    Each builtin registers only when (a) it is not already present (an
+    explicit manifest declaration wins and is not double-registered) and
+    (b) its :class:`ToolEnv` dependency is wired. Production always wires
+    ``supervisor_client`` + ``artifact_store`` (see control-plane app.py),
+    so every real agent gets the full set; a deployment lacking them is a
+    platform-level choice (no sandbox at all), not a per-agent off switch —
+    the implicit set is silently skipped rather than raising, preserving the
+    "empty :class:`ToolEnv` builds a pure-LLM agent" invariant for tests. The
+    fail-loud raise stays reserved for an EXPLICIT manifest declaration whose
+    dependency is missing (a real misconfiguration).
+    """
+    for name in BASE_CAPABILITY_BUILTINS:
+        if registry.get(name) is not None:
+            continue  # explicit manifest entry already registered it
+        if name in ("save_artifact", "list_artifacts"):
+            if env.artifact_store is None:
+                continue
+        elif env.supervisor_client is None:
+            continue
+        _register_builtin(registry, BuiltinToolSpec(name=name), env, skill_seed_files)
 
 
 def _register_web_search(registry: ToolRegistry, entry: BuiltinToolSpec, env: ToolEnv) -> None:
@@ -562,6 +618,26 @@ def _register_file_op(
                 skill_seed_files=skill_seed_files,
             )
         )
+
+
+def _register_read_document(
+    registry: ToolRegistry,
+    env: ToolEnv,
+    skill_seed_files: tuple[tuple[str, bytes], ...],
+) -> None:
+    # read_document rides the same warm Sandbox Supervisor exec channel as the
+    # TE-7 file primitives — the parse runs inside the per-user sandbox.
+    if env.supervisor_client is None:
+        raise AgentFactoryError(
+            "builtin 'read_document' declared but no Sandbox Supervisor client "
+            "is configured (ToolEnv.supervisor_client)"
+        )
+    registry.register(
+        ReadDocumentTool(
+            client=env.supervisor_client,
+            skill_seed_files=skill_seed_files,
+        )
+    )
 
 
 def _require_artifact_store(env: ToolEnv, tool_name: str) -> ArtifactStore:
