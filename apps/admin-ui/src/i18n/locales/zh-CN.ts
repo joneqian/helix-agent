@@ -1406,6 +1406,8 @@ const zhCN: TranslationKeys = {
     field_status: "状态",
     field_enabled: "启用",
     field_manifest: "Manifest",
+    tab_basic: "基本信息",
+    tab_manifest: "Agent 配置",
     field_display_name_help: "模板在市场里显示的名字,给租户看。\n示例:智能客服",
     field_description_help: "模板简介,说明用途和适用场景,帮租户决定要不要 fork。\n示例:开箱即用的多轮客服 Agent",
     field_category_help: "模板分类,用于市场筛选。\n示例:客服 / 销售 / 研发",

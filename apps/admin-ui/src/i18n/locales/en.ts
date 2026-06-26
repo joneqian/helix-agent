@@ -1332,6 +1332,8 @@ export interface TranslationKeys {
     field_status: string;
     field_enabled: string;
     field_manifest: string;
+    tab_basic: string;
+    tab_manifest: string;
     field_display_name_help: string;
     field_description_help: string;
     field_category_help: string;
@@ -3250,6 +3252,8 @@ const en: TranslationKeys = {
     field_status: "Status",
     field_enabled: "Enabled",
     field_manifest: "Manifest",
+    tab_basic: "Basic info",
+    tab_manifest: "Agent config",
     field_display_name_help:
       "The template's name shown to tenants in the marketplace.\nExample: Smart Support Bot",
     field_description_help:

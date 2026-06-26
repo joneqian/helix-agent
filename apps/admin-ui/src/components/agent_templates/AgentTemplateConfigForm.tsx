@@ -11,7 +11,7 @@
  * manifest + metadata; on edit → ``PATCH`` metadata + ``PUT`` the manifest.
  */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
-import { App, Form, Input, Select, Switch } from "antd";
+import { App, Form, Input, Select, Switch, Tabs } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { ManifestEditor } from "../manifest-editor/ManifestEditor";
@@ -171,7 +171,15 @@ export const AgentTemplateConfigForm = forwardRef<AgentTemplateConfigFormHandle,
 
     return (
       <div data-testid="atcf-form">
-        <Form<MetaFields> form={form} layout="vertical">
+        <Tabs
+          defaultActiveKey="basic"
+          items={[
+            {
+              key: "basic",
+              label: t("agent_templates.tab_basic"),
+              forceRender: true,
+              children: (
+                <Form<MetaFields> form={form} layout="vertical">
           <Form.Item
             name="display_name"
             label={lbl(
@@ -256,21 +264,37 @@ export const AgentTemplateConfigForm = forwardRef<AgentTemplateConfigFormHandle,
             )}
             valuePropName="checked"
           >
-            <Switch aria-label={t("agent_templates.field_enabled")} data-testid="atcf-enabled" />
-          </Form.Item>
-        </Form>
-
-        <div style={{ marginTop: 8, fontWeight: 600 }}>
-          {t("agent_templates.field_manifest")}
-          <FieldHelp text={t("agent_templates.field_manifest_help")} testId="manifest" />
-        </div>
-        <div data-testid="atcf-manifest" style={{ marginTop: 8 }}>
-          <ManifestEditor
-            mode={isEditing ? "edit" : "create"}
-            initialYaml={initialYaml}
-            onChange={setYaml}
-          />
-        </div>
+                  <Switch
+                    aria-label={t("agent_templates.field_enabled")}
+                    data-testid="atcf-enabled"
+                  />
+                </Form.Item>
+                </Form>
+              ),
+            },
+            {
+              key: "manifest",
+              label: t("agent_templates.tab_manifest"),
+              forceRender: true,
+              children: (
+                <div data-testid="atcf-manifest">
+                  <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                    {t("agent_templates.field_manifest")}
+                    <FieldHelp
+                      text={t("agent_templates.field_manifest_help")}
+                      testId="manifest"
+                    />
+                  </div>
+                  <ManifestEditor
+                    mode={isEditing ? "edit" : "create"}
+                    initialYaml={initialYaml}
+                    onChange={setYaml}
+                  />
+                </div>
+              ),
+            },
+          ]}
+        />
       </div>
     );
   },
