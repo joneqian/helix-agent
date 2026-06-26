@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 
 import type { ModelCatalog } from "../../api/model_catalog";
 import { FieldHelp } from "../FieldHelp";
+import { CapabilityPickers } from "./CapabilityPickers";
 import { loadModelCatalog } from "./catalog";
 import { ModelSelect } from "./widgets/ModelSelect";
 import {
@@ -349,6 +350,8 @@ export function FormView({ formData, onChange }: FormViewProps) {
           <Text type="secondary">{t("agent_form.dynamic_workers_hint")}</Text>
         </label>
       </section>
+
+      <CapabilityPickers formData={formData} onChange={onChange} />
               </>
             ),
           },

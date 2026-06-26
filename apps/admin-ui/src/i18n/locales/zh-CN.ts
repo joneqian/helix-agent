@@ -378,6 +378,25 @@ const zhCN: TranslationKeys = {
     section_dynamic_workers_help:
       "开启(默认)时,Agent 可在运行中临时创建短生命周期的辅助 worker 来拆解任务。需要严格单 worker 时关闭。\n示例:研究型 Agent 开,简单问答 Bot 关",
     dynamic_workers_hint: "允许 Agent 在运行中自主创建临时 worker(默认开启)。",
+    section_knowledge: "知识库(RAG)",
+    section_knowledge_help:
+      "Agent 可检索的租户知识库,用来给回答提供依据(启用 knowledge_search 工具)。可选已有库或输入名称。\n示例:hr-policies、eng-handbook",
+    knowledge_hint: "本 Agent 可检索的知识库。",
+    knowledge_placeholder: "选择或输入知识库名称",
+    section_skills: "技能",
+    section_skills_help:
+      "Agent 加载的可复用技能包(说明 + 脚本)。可从租户 + 平台技能中选。\n示例:pptx-builder、sql-analyst",
+    skills_hint: "挂到本 Agent 的技能。",
+    skills_placeholder: "选择或输入技能名称",
+    section_subagents: "子 Agent 委派",
+    section_subagents_help:
+      "具名委派目标 —— 本 Agent 可把子任务交给的其他已部署 Agent。父 Agent 的 LLM 把每个当成一个工具。\n示例:工具 researcher → deep-researcher@1.0.0",
+    subagents_hint: "本 Agent 可委派子任务的已部署 Agent。",
+    subagent_name: "工具名",
+    subagent_ref: "目标 Agent",
+    subagent_description: "何时委派",
+    subagent_remove: "删除",
+    subagent_add: "添加子 Agent",
   },
   playground: {
     session_label: "会话",
