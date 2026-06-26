@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   Input,
+  Modal,
   Segmented,
   Space,
   Spin,
@@ -79,6 +80,8 @@ export function McpToolPicker({
   const [scopeOverride, setScopeOverride] = useState<
     Record<string, "all" | "specific">
   >({});
+  // The server whose tool-selection sub-modal is open (null = closed).
+  const [modalServer, setModalServer] = useState<ServerRow | null>(null);
 
   // ── Load selectable servers (source-dependent) ───────────────────────────
   useEffect(() => {
@@ -201,8 +204,16 @@ export function McpToolPicker({
         allowTools.filter((a) => !names.has(a)),
       );
     } else {
+      // Switching to "specific" opens the tool-selection sub-modal so the main
+      // panel stays compact (no long inline list).
       fetchTools(row);
+      setModalServer(row);
     }
+  };
+
+  const selectedCountOf = (name: string): number => {
+    const names = new Set(toolNamesOf(name));
+    return allowTools.filter((a) => names.has(a)).length;
   };
 
   const toggleTool = (toolName: string, on: boolean): void =>
@@ -276,10 +287,6 @@ export function McpToolPicker({
 
   return (
     <div>
-      <Text strong style={{ display: "block", marginBottom: 8 }}>
-        {t("agent_form.mcp_servers_label")}
-      </Text>
-
       {rows.length > 6 && (
         <Input.Search
           allowClear
@@ -295,6 +302,7 @@ export function McpToolPicker({
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {visibleRows.map((row) => {
           const isChecked = checked.has(row.name);
+          const isSpecific = scopeOf(row.name) === "specific";
           return (
             <div key={row.name}>
               <Space size={6} align="center">
@@ -311,40 +319,78 @@ export function McpToolPicker({
               </Space>
 
               {isChecked && (
-                <div style={{ marginLeft: 24, marginTop: 6 }}>
-                  <Space size={8} align="center" style={{ marginBottom: 6 }}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {t("agent_form.mcp_scope_label")}
-                    </Text>
-                    <Segmented
-                      size="small"
-                      data-testid={`af-mcp-scope-${row.name}`}
-                      value={scopeOf(row.name)}
-                      onChange={(v) => setScope(row, v as "all" | "specific")}
-                      options={[
-                        { label: t("agent_form.mcp_scope_all"), value: "all" },
-                        {
-                          label: t("agent_form.mcp_scope_specific"),
-                          value: "specific",
-                        },
-                      ]}
-                    />
-                  </Space>
-                  {scopeOf(row.name) === "specific" && (
-                    <div data-testid={`af-mcp-tools-${row.name}`}>
-                      {renderToolPicker(row)}
-                    </div>
+                <Space
+                  size={8}
+                  align="center"
+                  style={{ marginLeft: 24, marginTop: 4 }}
+                >
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {t("agent_form.mcp_scope_label")}
+                  </Text>
+                  <Segmented
+                    size="small"
+                    data-testid={`af-mcp-scope-${row.name}`}
+                    value={scopeOf(row.name)}
+                    onChange={(v) => setScope(row, v as "all" | "specific")}
+                    options={[
+                      { label: t("agent_form.mcp_scope_all"), value: "all" },
+                      {
+                        label: t("agent_form.mcp_scope_specific"),
+                        value: "specific",
+                      },
+                    ]}
+                  />
+                  {isSpecific && (
+                    <>
+                      <Button
+                        type="link"
+                        size="small"
+                        data-testid={`af-mcp-choose-${row.name}`}
+                        onClick={() => {
+                          fetchTools(row);
+                          setModalServer(row);
+                        }}
+                      >
+                        {t("agent_form.mcp_choose_tools")}
+                      </Button>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {t("agent_form.mcp_selected_count", {
+                          count: selectedCountOf(row.name),
+                        })}
+                      </Text>
+                    </>
                   )}
-                </div>
+                </Space>
               )}
             </div>
           );
         })}
       </div>
+
+      <Modal
+        open={modalServer !== null}
+        title={
+          modalServer
+            ? `${modalServer.label} · ${t("agent_form.mcp_choose_tools")}`
+            : ""
+        }
+        okText={t("agent_form.mcp_done")}
+        cancelButtonProps={{ style: { display: "none" } }}
+        onOk={() => setModalServer(null)}
+        onCancel={() => setModalServer(null)}
+        destroyOnHidden
+        data-testid="af-mcp-tool-modal"
+      >
+        {modalServer && (
+          <div data-testid={`af-mcp-tools-${modalServer.name}`}>
+            {renderToolPicker(modalServer)}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 
-  // ── Per-server tool picker (specific scope) ──────────────────────────────
+  // ── Per-server tool picker (rendered inside the sub-modal) ────────────────
   function renderToolPicker(row: ServerRow) {
     const state = toolStates[row.name] ?? { kind: "idle" };
     if (state.kind === "idle" || state.kind === "loading") {
@@ -377,13 +423,7 @@ export function McpToolPicker({
     ).length;
 
     return (
-      <div
-        style={{
-          border: "1px solid var(--hx-border, #303030)",
-          borderRadius: 6,
-          padding: 8,
-        }}
-      >
+      <div>
         <Space size={8} style={{ marginBottom: 6, flexWrap: "wrap" }}>
           <Input.Search
             allowClear
@@ -416,7 +456,7 @@ export function McpToolPicker({
         </Space>
         <div
           style={{
-            maxHeight: 240,
+            maxHeight: "50vh",
             overflowY: "auto",
             display: "flex",
             flexDirection: "column",

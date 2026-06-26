@@ -435,7 +435,7 @@ export function FormView({
   };
 
   return (
-    <div data-testid="manifest-form-view" style={{ maxWidth: 560 }}>
+    <div data-testid="manifest-form-view" style={{ maxWidth: 760 }}>
       {sections[section]}
     </div>
   );

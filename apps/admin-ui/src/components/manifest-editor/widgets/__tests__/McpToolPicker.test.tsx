@@ -151,7 +151,7 @@ describe("McpToolPicker", () => {
       { name: "maps_geo", description: "" },
       { name: "maps_weather", description: "" },
     ]);
-    // Seed one allow_tool so the scope derives to "specific" (tool list shown).
+    // Seed one allow_tool so the scope derives to "specific".
     render(
       <McpToolPicker
         servers={["amap-maps"]}
@@ -159,6 +159,8 @@ describe("McpToolPicker", () => {
         onChange={onChange}
       />,
     );
+    // Open the tool sub-modal, then select all.
+    await user.click(await screen.findByTestId("af-mcp-choose-amap-maps"));
     await user.click(await screen.findByTestId("af-mcp-select-all-amap-maps"));
     await waitFor(() =>
       expect(onChange).toHaveBeenCalledWith(
@@ -184,6 +186,8 @@ describe("McpToolPicker", () => {
         onChange={noop}
       />,
     );
+    // Open the tool sub-modal.
+    await user.click(await screen.findByTestId("af-mcp-choose-amap-maps"));
     await screen.findByTestId("af-mcp-tool-maps_geo");
     await user.type(
       screen.getByTestId("af-mcp-tool-search-amap-maps"),
