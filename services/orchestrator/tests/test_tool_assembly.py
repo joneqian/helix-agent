@@ -9,7 +9,7 @@ from uuid import UUID
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from helix_agent.persistence import InMemoryKnowledgeStore
+from helix_agent.persistence import InMemoryArtifactStore, InMemoryKnowledgeStore
 from helix_agent.protocol import (
     BuiltinToolSpec,
     HTTPToolSpec,
@@ -25,10 +25,13 @@ from orchestrator.multimodal import InMemoryImageResolver
 from orchestrator.tools import (
     MAX_SUBAGENT_DEPTH,
     AskImageTool,
+    BashTool,
     EditFileTool,
+    ExecPythonTool,
     HTTPTool,
     KnowledgeRetriever,
     KnowledgeSearchTool,
+    ListArtifactsTool,
     ListDirTool,
     MCPServerPool,
     MCPToolDef,
@@ -37,6 +40,7 @@ from orchestrator.tools import (
     RecordingSupervisorClient,
     RecordingTavilyClient,
     RecordingWorkspaceLock,
+    SaveArtifactTool,
     SubAgentTool,
     ToolEnv,
     WebSearchTool,
@@ -726,3 +730,84 @@ async def test_file_op_write_tools_receive_workspace_lock() -> None:
 async def test_file_op_without_supervisor_raises() -> None:
     with pytest.raises(AgentFactoryError):
         await build_tool_registry([BuiltinToolSpec(name="edit_file")], tool_env=ToolEnv())
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 base capabilities — code execution + file + artifact tooling is
+# assembled for EVERY agent when the platform wires the sandbox / artifact
+# deps, regardless of the manifest ``tools:`` list. A complete agent is not a
+# per-manifest opt-in; the sandbox is the security boundary (not the absence
+# of a tool). See docs/design/agent-base-capabilities-and-form.md.
+# ---------------------------------------------------------------------------
+
+_BASE_SANDBOX_TOOLS = ("exec_python", "bash", "read_file", "write_file", "edit_file", "list_dir")
+_BASE_ARTIFACT_TOOLS = ("save_artifact", "list_artifacts")
+
+
+def _names(registry: object) -> set[str]:
+    return {s.name for s in registry.all_specs()}  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_base_capabilities_assembled_with_no_manifest_tools() -> None:
+    # An empty ``tools:`` list still yields a capable agent: exec_python /
+    # bash / file ops (supervisor) + artifacts (artifact store).
+    env = ToolEnv(
+        supervisor_client=RecordingSupervisorClient(),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    registry = await build_tool_registry([], tool_env=env)
+    assert isinstance(registry.get("exec_python"), ExecPythonTool)
+    assert isinstance(registry.get("bash"), BashTool)
+    assert isinstance(registry.get("read_file"), ReadFileTool)
+    assert isinstance(registry.get("write_file"), WriteFileTool)
+    assert isinstance(registry.get("edit_file"), EditFileTool)
+    assert isinstance(registry.get("list_dir"), ListDirTool)
+    assert isinstance(registry.get("save_artifact"), SaveArtifactTool)
+    assert isinstance(registry.get("list_artifacts"), ListArtifactsTool)
+
+
+@pytest.mark.asyncio
+async def test_base_capabilities_absent_without_deps_no_raise() -> None:
+    # A deployment that wires NO sandbox / artifact store (bare ToolEnv) is a
+    # platform-level choice — the implicit base set is simply skipped, never
+    # raised (the raise is reserved for an EXPLICIT manifest declaration).
+    # Preserves the "empty ToolEnv() builds a pure-LLM agent" invariant.
+    registry = await build_tool_registry([], tool_env=ToolEnv())
+    assert len(registry) == 0
+
+
+@pytest.mark.asyncio
+async def test_base_capabilities_gated_per_dependency() -> None:
+    # Each base tool registers only when ITS dependency is wired: an
+    # artifact store but no supervisor yields artifacts, not exec/bash/files.
+    env = ToolEnv(artifact_store=InMemoryArtifactStore())
+    registry = await build_tool_registry([], tool_env=env)
+    for name in _BASE_SANDBOX_TOOLS:
+        assert registry.get(name) is None, name
+    for name in _BASE_ARTIFACT_TOOLS:
+        assert registry.get(name) is not None, name
+
+
+@pytest.mark.asyncio
+async def test_explicit_base_tool_not_double_registered() -> None:
+    # A manifest that still lists a base tool explicitly must not register it
+    # twice — the implicit pass dedups against what the manifest loop added.
+    env = ToolEnv(supervisor_client=RecordingSupervisorClient())
+    registry = await build_tool_registry([BuiltinToolSpec(name="exec_python")], tool_env=env)
+    occurrences = [s for s in registry.all_specs() if s.name == "exec_python"]
+    assert len(occurrences) == 1
+
+
+@pytest.mark.asyncio
+async def test_base_capabilities_coexist_with_opt_in_tools() -> None:
+    # Declaring an opt-in tool (web_search) does not suppress the base set.
+    env = ToolEnv(
+        web_search_client=RecordingTavilyClient(),
+        supervisor_client=RecordingSupervisorClient(),
+        artifact_store=InMemoryArtifactStore(),
+    )
+    registry = await build_tool_registry([BuiltinToolSpec(name="web_search")], tool_env=env)
+    assert registry.get("web_search") is not None
+    for name in (*_BASE_SANDBOX_TOOLS, *_BASE_ARTIFACT_TOOLS):
+        assert registry.get(name) is not None, name
