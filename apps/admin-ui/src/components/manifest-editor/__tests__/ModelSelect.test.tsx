@@ -32,21 +32,44 @@ const CATALOG: ModelCatalog = {
     {
       provider: "deepseek",
       models: [
-        { name: "deepseek-v4-pro", vision: false, embeddings: false, context_window: 1000000, deprecated: false },
+        {
+          name: "deepseek-v4-pro",
+          vision: false,
+          embeddings: false,
+          context_window: 1000000,
+          deprecated: false,
+        },
       ],
     },
     {
       provider: "openai",
       models: [
-        { name: "gpt-5.5", vision: true, embeddings: false, context_window: 128000, deprecated: false },
-        { name: "text-embedding-3-large", vision: false, embeddings: true, context_window: null, deprecated: false },
+        {
+          name: "gpt-5.5",
+          vision: true,
+          embeddings: false,
+          context_window: 128000,
+          deprecated: false,
+        },
+        {
+          name: "text-embedding-3-large",
+          vision: false,
+          embeddings: true,
+          context_window: null,
+          deprecated: false,
+        },
       ],
     },
   ],
 };
 
 function renderSelect(value: ModelFields, onChange = vi.fn()) {
-  return { onChange, ...render(<ModelSelect value={value} catalog={CATALOG} onChange={onChange} />) };
+  return {
+    onChange,
+    ...render(
+      <ModelSelect value={value} catalog={CATALOG} onChange={onChange} />,
+    ),
+  };
 }
 
 describe("ModelSelect", () => {
@@ -54,10 +77,16 @@ describe("ModelSelect", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderSelect({}, onChange);
-    const provider = within(screen.getByTestId("model-select-provider")).getByRole("combobox");
+    const provider = within(
+      screen.getByTestId("model-select-provider"),
+    ).getByRole("combobox");
     await pickOption(user, provider, "openai");
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai", name: undefined, supports_vision: false }),
+      expect.objectContaining({
+        provider: "openai",
+        name: undefined,
+        supports_vision: false,
+      }),
     );
   });
 
@@ -65,10 +94,16 @@ describe("ModelSelect", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderSelect({ provider: "openai" }, onChange);
-    const nameSel = within(screen.getByTestId("model-select-name")).getByRole("combobox");
+    const nameSel = within(screen.getByTestId("model-select-name")).getByRole(
+      "combobox",
+    );
     await pickOption(user, nameSel, "gpt-5.5");
     expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai", name: "gpt-5.5", supports_vision: true }),
+      expect.objectContaining({
+        provider: "openai",
+        name: "gpt-5.5",
+        supports_vision: true,
+      }),
     );
   });
 
@@ -84,24 +119,91 @@ describe("ModelSelect", () => {
     // in jsdom (it reads layout geometry it can't measure), so drive the
     // handle's keyDown directly — rc-slider's keyboard handler is wired here.
     const onChange = vi.fn();
-    renderSelect({ provider: "openai", name: "gpt-5.5", temperature: 0.2 }, onChange);
-    const slider = within(screen.getByTestId("model-select-temperature")).getByRole("slider");
+    renderSelect(
+      { provider: "openai", name: "gpt-5.5", temperature: 0.2 },
+      onChange,
+    );
+    const slider = within(
+      screen.getByTestId("model-select-temperature"),
+    ).getByRole("slider");
     fireEvent.keyDown(slider, { key: "ArrowUp", keyCode: 38 });
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ temperature: expect.any(Number) }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ temperature: expect.any(Number) }),
+    );
   });
 
   it("advanced panel exposes max_tokens and rate_limit_rpm inputs", async () => {
     const user = userEvent.setup();
     renderSelect({ provider: "openai", name: "gpt-5.5" });
-    await user.click(within(screen.getByTestId("model-select-advanced")).getByText("Advanced"));
+    await user.click(
+      within(screen.getByTestId("model-select-advanced")).getByText("Advanced"),
+    );
     const advanced = screen.getByTestId("model-select-advanced");
     expect(within(advanced).getByText("max_tokens")).toBeInTheDocument();
     expect(within(advanced).getByText("rate_limit_rpm")).toBeInTheDocument();
   });
 
   it("renders translated vision label, not the raw i18n key", () => {
-    renderSelect({ provider: "deepseek", name: "deepseek-v4-pro", supports_vision: false });
-    expect(screen.queryByText("model_select.vision_off")).not.toBeInTheDocument();
-    expect(screen.getByTestId("model-select-vision")).toHaveTextContent(/视觉|Vision/);
+    renderSelect({
+      provider: "deepseek",
+      name: "deepseek-v4-pro",
+      supports_vision: false,
+    });
+    expect(
+      screen.queryByText("model_select.vision_off"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("model-select-vision")).toHaveTextContent(
+      /视觉|Vision/,
+    );
+  });
+
+  const optionContent = (label: string) => (_c: string, el: Element | null) =>
+    el?.classList.contains("ant-select-item-option-content") === true &&
+    el.textContent === label;
+
+  it("visionOnly hides providers with no vision model", async () => {
+    const user = userEvent.setup();
+    render(
+      <ModelSelect
+        visionOnly
+        value={{}}
+        catalog={CATALOG}
+        onChange={vi.fn()}
+      />,
+    );
+    const provider = within(
+      screen.getByTestId("model-select-provider"),
+    ).getByRole("combobox");
+    await user.click(provider);
+    // openai has gpt-5.5 (vision) → shown; deepseek has no vision model → hidden.
+    expect(
+      await screen.findByText(optionContent("openai")),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(optionContent("deepseek")),
+    ).not.toBeInTheDocument();
+  });
+
+  it("visionOnly shows only vision-capable models for a provider", async () => {
+    const user = userEvent.setup();
+    render(
+      <ModelSelect
+        visionOnly
+        value={{ provider: "openai" }}
+        catalog={CATALOG}
+        onChange={vi.fn()}
+      />,
+    );
+    const model = within(screen.getByTestId("model-select-name")).getByRole(
+      "combobox",
+    );
+    await user.click(model);
+    expect(
+      await screen.findByText(optionContent("gpt-5.5")),
+    ).toBeInTheDocument();
+    // the embedding model is non-vision → excluded.
+    expect(
+      screen.queryByText(optionContent("text-embedding-3-large")),
+    ).not.toBeInTheDocument();
   });
 });
