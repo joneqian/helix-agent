@@ -2254,86 +2254,86 @@ const en: TranslationKeys = {
     mcp_servers_load_failed: "Could not load servers",
     section_reflection_evaluator: "Reflection evaluator (optional)",
     reflection_evaluator_hint:
-      "When reflection is enabled, which model judges whether the task is done. Leave empty to reuse the agent's own model. Prefer a different model — not necessarily stronger; an independent vantage counters the model's bias toward its own output and covers shared blind spots (same-model self-critique tends to declare 'done' early and miss its own errors). Pick a stronger model for deep-reasoning tasks.",
+      "When reflection is on, which model judges whether the task is actually done.\nLeave empty to use the agent's own model.\nPrefer a different model: not necessarily stronger — a fresh vantage keeps the model from assuming its own answer is right and missing blind spots.\nPick a stronger one for deep-reasoning tasks.",
     reflection_evaluator_clear: "Clear (use the agent's own model)",
     section_vision: "Image understanding (VL model)",
     vision_hint:
-      "The main model can't read images. Add a vision (VL) model and the agent reads images via the ask_image tool — keeping the strong text model for reasoning.",
+      "The main model can't read images.\nAdd a model that can, and the agent can read images (via the ask_image tool); reasoning still runs on the main model.",
     vision_clear: "Clear (no image understanding)",
     section_vision_help:
-      "Shown because the main model is text-only. The VL model answers image questions on the side; the main model orchestrates. Leave empty = the agent can't read images.\nExample: qwen / qwen-vl-max",
+      "Shown only when the main model is text-only.\nThe vision model answers image-related questions; the main model coordinates.\nLeave empty = the agent can't see images.\nExample: qwen-vl-max",
     field_name_help:
-      "The agent's unique id (agent_code) external apps call by. Lowercase letters, digits, hyphens.\nExample: support-bot",
+      "The agent's unique id that external apps call by.\nLowercase letters, digits, and hyphens only.\nExample: support-bot",
     field_description_help:
       "One line on what this agent does, shown to users.\nExample: Customer-support assistant for product questions",
     section_model_help:
-      "The LLM powering the agent's main conversation. Pick provider then model; higher temperature = more creative.\nExample: anthropic / claude-sonnet-4-5, temperature 0.2",
+      "The LLM powering the agent's main conversation.\nPick the provider, then the model; higher temperature = more varied.\nExample: anthropic / claude-sonnet-4-5, temperature 0.2",
     section_prompt_help:
-      "System prompt — defines the agent's role, tone, and rules. The core of its persona.\nExample: You are a senior Python engineer; answer concisely with runnable code.",
+      "System prompt — defines the agent's role, tone, and rules. The core of its persona.\nExample: You are a senior Python engineer; answer concisely with runnable code",
     section_memory_help:
-      "When on, the agent remembers user facts + past interactions across sessions and recalls them next time. Off = each chat starts fresh.\nExample: on, topK=5",
+      "When on, the agent remembers user info and past interactions across sessions and recalls them automatically;\noff = every chat starts from scratch.\nExample: on, recall 5",
     memory_topk_help:
-      "How many most-relevant memories to inject per chat. Too many crowd the context; too few miss info.\nExample: 5",
+      "How many of the most relevant memories to pull in per chat.\nToo many crowd the context; too few miss info.\nExample: 5",
     section_reflection_evaluator_help:
-      "Optional. An evaluator model that lets the agent self-reflect / score before replying, raising quality. Skip to disable.\nExample: leave empty, or pick claude-haiku for light evaluation",
+      "Optional. Let the agent self-reflect and score before replying to raise quality; skip to disable.\nExample: leave empty, or pick a light model for evaluation",
     section_tools_help:
-      "Check the tools the agent may use. More capability = more power but harder to control.\nExample: web search + MCP",
+      "Check the tools the agent may use.\nMore capability = more power, but harder to manage.\nExample: web search + MCP",
     section_mcp: "MCP",
     section_mcp_help:
-      "Connect the agent to MCP servers (external tool providers). Pick servers, optionally narrow to specific tools.\nExample: amap-maps for location lookups",
+      "Connect the agent to MCP servers (sources of external tools).\nPick servers, and optionally narrow to specific tools.\nExample: connect a maps service for location lookups",
     tool_web_search_help:
       "Let the agent search the web for fresh info (via the platform's search service).\nExample: needed for 'today's news' questions",
     tool_http_help:
-      "Let the agent make HTTP requests to external APIs (through the audited egress proxy).\nExample: weather API, internal services",
+      "Let the agent call external APIs (through the audited egress proxy).\nExample: weather, internal services",
     tool_mcp_help:
-      "Let the agent call tools exposed by MCP servers (databases, business systems). Pick servers + tools below.\nExample: your company's CRM MCP",
-    section_approval: "Human approval gate",
+      "Let the agent use tools provided by MCP servers (databases, business systems).\nOnce checked, pick the specific servers and tools below.\nExample: connect your company's CRM",
+    section_approval: "Human approval",
     section_approval_help:
-      "Tools that pause the run for a human approve/reject before they execute. The governance counterweight to always-on code execution — the capability stays, but a human signs off first.\nExample: require approval for exec_python + http",
-    approval_hint: "Check the tools that need a human verdict before running.",
-    section_dynamic_workers: "Autonomous workers",
+      "For the tools you check, every run pauses before they execute and waits for a human to approve.\nBase abilities like code execution are on by default and can't be turned off — use this to add a human checkpoint before they run.\nExample: add approval for exec_python, http",
+    approval_hint: "Check the tools that need a human sign-off before running.",
+    section_dynamic_workers: "Temporary helpers",
     section_dynamic_workers_help:
-      "When on (the default), the agent may spawn short-lived helper workers at run time to split up a task. Turn off for a strictly single-worker agent.\nExample: on for a research agent, off for a simple FAQ bot",
+      "When on (the default), the agent can pull in a few temporary helpers mid-task to handle subtasks in parallel.\nTurn off when you need strictly one worker.\nExample: on for a research agent, off for a simple FAQ bot",
     dynamic_workers_hint:
-      "Allow the agent to create temporary workers at run time (on by default).",
+      "Let the agent create temporary helpers at run time to share the load (on by default).",
     section_advanced: "Advanced",
-    memory_write_back: "Learn (write back new memories)",
+    memory_write_back: "Learn (remember new info)",
     memory_write_back_help:
-      "When on, new facts from the conversation are extracted and persisted at run end and recalled next time; off = read existing memories only, never add.\nExample: on",
-    memory_verify_reads: "Verify on read",
+      "When on, each conversation ends by saving what it learned, recalled automatically next time.\nOff = only use existing memories, never add.\nExample: on",
+    memory_verify_reads: "Check memories before answering",
     memory_verify_reads_help:
-      "After recall, one batched LLM call drops memories that are irrelevant / stale / contradictory to the current request before injecting them (strongest anti-poisoning guard, on by default). Adds one LLM call per recall; fail-open.\nExample: on",
-    memory_write_min_importance: "Importance write filter",
+      "After pulling memories and before using them, the model screens them and drops anything irrelevant, stale, or contradictory, so old memories don't skew the answer.\nCosts one extra model call; if it errors, nothing is blocked.\nOn by default.\nExample: on",
+    memory_write_min_importance: "Importance filter",
     memory_write_min_importance_help:
-      "Extracted memories are scored for importance (0–1); those below this floor are dropped so trivial chatter never reaches the store. 0.3 = drop clearly trivial; 0 = no filter.\nExample: 0.3",
-    memory_reconcile_writes: "Reconcile writes (dedup/update)",
+      "Each thing worth remembering gets an importance score (0–1); anything below this isn't saved, so small talk doesn't get stored.\n0.3: drop the clearly trivial; 0: keep everything.\nExample: 0.3",
+    memory_reconcile_writes: "Tidy up (dedup/merge)",
     memory_reconcile_writes_help:
-      "At write-back, reconcile new memories against similar existing ones (add/update/delete/noop) so paraphrased duplicates stop piling up and contradicted facts get superseded. Off = write directly.\nExample: on",
-    memory_recall_mode: "Recall injection point",
+      "Before saving new info, compare it with similar existing memories and merge, update, or delete as needed, avoiding pile-ups and contradictions.\nOff = just append.\nOn by default.\nExample: on",
+    memory_recall_mode: "Where memories are inserted",
     memory_recall_mode_help:
-      "per_session: inject at a stable prefix slot once per session, enabling Anthropic prompt-cache anchoring (default); per_turn: re-render at each turn's tail (use when the agent self-edits memory mid-session).\nExample: per_session",
-    memory_recall_per_session: "Per session (cache-friendly)",
+      "Where memories go in the conversation.\nPer session: inserted once for the whole session — cheaper and faster (default).\nPer turn: re-inserted every turn — for agents that edit their own memory mid-conversation.\nExample: per session",
+    memory_recall_per_session: "Per session (cheaper, faster)",
     memory_recall_per_turn: "Per turn",
-    section_run_deadline: "Run wall-clock cap (seconds)",
+    section_run_deadline: "Max run time (seconds)",
     section_run_deadline_help:
-      "Wall-clock cap on the whole run, including sub-agent recursion. Exceeding it aborts the run — guards against runaway long runs / cost. 0 = no cap.\nExample: 0 (no cap) or 1800 (30 min)",
+      "How long a single run may take (seconds), including any sub-agents it spawns.\nWhen exceeded the run is aborted — guards against runaway runs and cost.\n0 = no limit.\nExample: 0 (no limit) or 1800 (30 min)",
     run_deadline_hint:
-      "Max wall-clock time for the whole run, sub-agents included; 0 = no cap.",
-    approval_timeout: "Approval timeout (seconds)",
+      "Max time for a single run (seconds), sub-agents included; 0 = no limit.",
+    approval_timeout: "Approval wait limit (seconds)",
     approval_timeout_help:
-      "How long a pending approval may sit before it is auto-rejected; otherwise it pins a checkpointer slot forever. Default 24h (86400).\nExample: 86400",
-    trajectory_recording: "Trajectory recording",
+      "How long a pending approval may wait (seconds) before it is auto-rejected, so it doesn't tie up resources.\nDefault 24h (86400).\nExample: 86400",
+    trajectory_recording: "Keep a record of conversations",
     trajectory_recording_help:
-      "When on, completed runs are serialised to ObjectStore (for the eval gate / fine-tuning). Turn off for agents that must not leak conversation content to non-WORM storage. On by default.\nExample: on",
+      "When on, each completed conversation is saved, used for quality evaluation and model improvement.\nTurn off if conversation content must not be retained.\nOn by default.\nExample: on",
     section_knowledge: "Knowledge bases (RAG)",
     section_knowledge_help:
-      "Tenant knowledge bases the agent can search to ground its answers (activates a knowledge_search tool). Pick existing bases or type a name.\nExample: hr-policies, eng-handbook",
+      "Knowledge bases the agent can search to back up its answers.\nPick existing bases, or type a name.\nExample: hr-policies, eng-handbook",
     knowledge_hint: "Knowledge bases this agent may search.",
     knowledge_placeholder: "Select or type knowledge base names",
     knowledge_chunk_label: "chunk {{max}}/overlap {{overlap}}",
     section_skills: "Skills",
     section_skills_help:
-      "Reusable skill packages (instructions + scripts) the agent loads. Pick from your tenant + platform skills.\nExample: pptx-builder, sql-analyst",
+      "Skill packages (instructions + scripts) attached to the agent.\nPick from your tenant's and the platform's skills.\nExample: pptx-builder, sql-analyst",
     skills_hint:
       "Check the skills to attach to this agent. Platform skills your plan tier cannot use are not selectable.",
     skills_search: "Search skills (name / description / category)",
@@ -2345,7 +2345,7 @@ const en: TranslationKeys = {
       "This platform skill requires the {{tier}} plan; the current tenant is not entitled.",
     section_subagents: "Sub-agent delegation",
     section_subagents_help:
-      "Named delegation targets — other deployed agents this one may hand a subtask to. The parent's LLM sees each as a tool.\nExample: tool 'researcher' → deep-researcher@1.0.0",
+      "Other deployed agents this one can hand a subtask to.\nEach target shows up to the agent as a tool it can call by name.\nExample: tool name 'researcher' → target deep-researcher@1.0.0",
     subagents_hint: "Deployed agents this agent may delegate subtasks to.",
     subagent_name: "Tool name",
     subagent_ref: "Target agent",
@@ -2354,10 +2354,10 @@ const en: TranslationKeys = {
     subagent_add: "Add sub-agent",
     section_prompt_vars: "Dynamic prompt (Jinja)",
     section_prompt_vars_help:
-      "Render the system prompt per-run with variables passed in the run request's 'inputs'. Declare each variable here; only declared names are accepted. 'Trusted' off spotlight-fences the value as DATA (use for values that may carry user input).\nExample: {{ persona }} declared as variable 'persona'",
+      "Declare the variables used in the prompt.\nValues come in through the API's 'inputs' on each call and are filled in per run; only names declared here work.\nTurning 'Trusted' off treats the incoming value as plain data, preventing any instructions hidden in it from running (use for variables that may carry user input).\nExample: write {{ persona }} in the template, declare variable 'persona' here",
     prompt_jinja_label: "Enable Jinja templating",
     prompt_jinja_hint:
-      "When on, the system prompt is a Jinja template: {{ name }} placeholders are filled per-run from the request 'inputs'. Only the prompt you write here is rendered.",
+      "When on, the prompt body is a Jinja template: {{ name }} placeholders are filled on each call from the API's 'inputs'.\nOnly the body you write is rendered.",
     prompt_var_name: "Variable name",
     prompt_var_trusted: "Trusted",
     prompt_var_required: "Required",

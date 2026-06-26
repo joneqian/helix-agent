@@ -368,84 +368,84 @@ const zhCN: TranslationKeys = {
     mcp_servers_load_failed: "服务器加载失败",
     section_reflection_evaluator: "反思评判者（可选）",
     reflection_evaluator_hint:
-      "反思（reflection）启用时，由谁来评判任务是否真正完成。留空 = 用 agent 自己的模型。建议选一个不同的模型——不必更强，关键是独立视角能破除模型偏爱自己输出、覆盖共同盲点（研究表明同模型自审会过早判定完成、漏掉自身错误）。深度推理任务可选更强模型。",
+      "反思开启时,由谁来判断任务是不是真的完成了。\n留空 = 用 Agent 自己的模型。\n建议换一个模型:不用更强,关键是换个视角,避免模型总觉得自己答得对、漏掉盲点。\n深度推理任务可以选更强的。",
     reflection_evaluator_clear: "清除（改用 agent 自己的模型）",
     section_vision: "图像理解(VL 模型)",
     vision_hint:
-      "主模型不能读图。配一个视觉(VL)模型,Agent 就能通过 ask_image 工具读图 —— 推理仍走强文本主模型。",
+      "主模型看不了图。\n配一个能看图的模型,Agent 就能读图(通过 ask_image 工具);推理还是走主模型。",
     vision_clear: "清除(不配图像理解)",
     section_vision_help:
-      "因为主模型是纯文本才显示这块。VL 模型在旁边回答图像问题,主模型负责编排。留空=Agent 不能读图。\n示例:qwen / qwen-vl-max",
+      "主模型是纯文本时才显示这块。\n配的视觉模型专门回答图片相关问题,主模型负责统筹。\n留空 = Agent 不能看图。\n示例:qwen-vl-max",
     field_name_help:
-      "Agent 的唯一标识(agent_code),外部程序按它调用。仅小写字母、数字、连字符。\n示例:support-bot",
+      "Agent 的唯一标识,外部程序按它调用。\n只能用小写字母、数字、连字符。\n示例:support-bot",
     field_description_help:
-      "一句话说明这个 Agent 做什么,展示给使用者。\n示例:回答产品使用问题的客服助手",
+      "一句话说明这个 Agent 是做什么的,给使用者看。\n示例:回答产品使用问题的客服助手",
     section_model_help:
-      "Agent 主对话用的大模型。先选厂商(provider)再选具体模型;温度越高回答越发散。\n示例:anthropic / claude-sonnet-4-5,温度 0.2",
+      "Agent 主对话用的大模型。\n先选厂商,再选具体模型;温度越高回答越发散。\n示例:anthropic / claude-sonnet-4-5,温度 0.2",
     section_prompt_help:
-      "系统提示词,定义 Agent 的角色、语气和行为规则,是塑造 Agent 性格的核心。\n示例:你是资深 Python 工程师,回答简洁、给可运行代码。",
+      "系统提示词,定义 Agent 的角色、语气和行为规则,是塑造性格的核心。\n示例:你是资深 Python 工程师,回答简洁、给可运行代码",
     section_memory_help:
-      "开启后 Agent 跨会话记住用户事实和过往交互,下次对话自动召回;关掉则每次从零开始。\n示例:开启,topK=5",
+      "开启后,Agent 跨会话记住用户信息和过往交互,下次自动想起来;\n关掉则每次对话都从零开始。\n示例:开启,召回 5 条",
     memory_topk_help:
-      "每次对话注入多少条最相关的记忆。太多挤占上下文,太少漏信息。\n示例:5",
+      "每次对话最多调取几条最相关的记忆。\n太多会挤占上下文,太少会漏信息。\n示例:5",
     section_reflection_evaluator_help:
-      "可选。配一个评估模型,让 Agent 答复前自我反思/打分,提升质量;不配则跳过。\n示例:留空(不启用),或选 claude-haiku 做轻量评估",
+      "可选。让 Agent 回答前先自我反思、打分,提升质量;不配则跳过。\n示例:留空(不启用),或选一个轻量模型做评估",
     section_tools_help:
-      "勾选 Agent 能用的工具。给的能力越多越强,但也更难控。\n示例:勾联网搜索 + MCP",
+      "勾选 Agent 能用的工具。\n给的能力越多越强,但也更难管。\n示例:勾联网搜索 + MCP",
     section_mcp: "MCP",
     section_mcp_help:
-      "把 Agent 接到 MCP 服务器(外部工具提供方)。选服务器,可进一步限定到具体工具。\n示例:高德地图 amap-maps 做位置查询",
+      "把 Agent 接到 MCP 服务器(外部工具来源)。\n选服务器,还能进一步限定到具体工具。\n示例:接高德地图查位置",
     tool_web_search_help:
-      "允许 Agent 联网搜索实时信息(走平台配置的搜索服务)。\n示例:问「今天的新闻」时用得上",
+      "允许 Agent 联网搜实时信息(走平台配的搜索服务)。\n示例:问「今天的新闻」时用得上",
     tool_http_help:
-      "允许 Agent 发 HTTP 请求调外部 API(经审计代理出网)。\n示例:查天气 API、调内部服务",
+      "允许 Agent 调外部 API(经审计代理出网)。\n示例:查天气、调内部服务",
     tool_mcp_help:
-      "允许 Agent 调 MCP server 暴露的工具(数据库、业务系统等)。勾选后下面选具体 server 和工具。\n示例:接入公司 CRM 的 MCP",
-    section_approval: "人工审批闸",
+      "允许 Agent 用 MCP 服务器提供的工具(数据库、业务系统等)。\n勾选后在下面选具体服务器和工具。\n示例:接公司 CRM",
+    section_approval: "人工审批",
     section_approval_help:
-      "勾选的工具在执行前会暂停,等人工批准/拒绝后才运行。这是代码执行等基础能力「默认开、不可关」的治理对手盘 —— 能力保留,但执行前先经人把关。\n示例:对 exec_python + http 要求审批",
-    approval_hint: "勾选执行前需人工把关的工具。",
-    section_dynamic_workers: "自主 worker",
+      "勾选的工具,每次执行前都会暂停,等人工批准后才继续。\n代码执行等基础能力默认开着、关不掉,用这个在执行前加一道人工关卡。\n示例:给 exec_python、http 加审批",
+    approval_hint: "勾选执行前需要人工把关的工具。",
+    section_dynamic_workers: "临时小助手",
     section_dynamic_workers_help:
-      "开启(默认)时,Agent 可在运行中临时创建短生命周期的辅助 worker 来拆解任务。需要严格单 worker 时关闭。\n示例:研究型 Agent 开,简单问答 Bot 关",
-    dynamic_workers_hint: "允许 Agent 在运行中自主创建临时 worker(默认开启)。",
+      "开启(默认)时,Agent 干活中可以临时拉几个小助手分头处理子任务。\n需要严格单线、只用一个执行体时关掉。\n示例:研究型 Agent 开,简单问答 Bot 关",
+    dynamic_workers_hint: "允许 Agent 运行中临时创建小助手分担任务(默认开启)。",
     section_advanced: "高级",
-    memory_write_back: "学习(写回新记忆)",
+    memory_write_back: "学习(记住新信息)",
     memory_write_back_help:
-      "开启时,run 结束抽取本次对话中的新事实并持久化,下次自动召回;关掉则只读已有记忆、不再新增。\n示例:开启",
-    memory_verify_reads: "读时验证",
+      "开启后,每次对话结束会把新了解到的信息记下来,下次自动想起。\n关掉则只用已有记忆,不再新增。\n示例:开启",
+    memory_verify_reads: "回答前核对记忆",
     memory_verify_reads_help:
-      "召回后多一次 LLM 批量判断,丢掉与当前请求无关/过期/矛盾的记忆再注入(最强抗投毒,默认开)。每次召回加一次 LLM 调用,出错时放行全部。\n示例:开启",
-    memory_write_min_importance: "重要性写过滤",
+      "调取记忆后、用进回答前,先让模型筛一遍,丢掉跟当前问题无关、过期或矛盾的,避免旧记忆带偏回答。\n会多花一次模型调用;万一出错则不拦截、全部放行。\n默认开启。\n示例:开启",
+    memory_write_min_importance: "重要性过滤",
     memory_write_min_importance_help:
-      "抽取出的记忆按重要性(0–1)打分,低于此阈值的丢弃,避免琐碎闲聊入库。0.3=丢明显琐碎;0=不过滤全写。\n示例:0.3",
-    memory_reconcile_writes: "写回去重/更新",
+      "给每条要记的信息打一个重要性分(0–1),低于这个值就不记,避免把闲聊也存进去。\n0.3:丢掉明显琐碎的;0:全部都记。\n示例:0.3",
+    memory_reconcile_writes: "去重整理",
     memory_reconcile_writes_help:
-      "写回时把新记忆与相似的已有记忆比对(新增/更新/删除/不变),避免改写式重复堆积、矛盾事实被覆盖。关掉=直接写。\n示例:开启",
-    memory_recall_mode: "召回注入位置",
+      "记新信息前,先和相似的旧记忆比对,自动合并、更新或删除,避免重复堆积、自相矛盾。\n关掉则直接追加。\n默认开启。\n示例:开启",
+    memory_recall_mode: "记忆插入位置",
     memory_recall_mode_help:
-      "per_session:会话级稳定前缀注入,可命中 Anthropic 提示缓存(默认);per_turn:每轮末尾重渲(自改记忆需当轮可见时用)。\n示例:per_session",
-    memory_recall_per_session: "每会话(缓存友好)",
+      "记忆插入对话的位置。\n每会话:整段对话固定插一次,更省更快(默认)。\n每轮:每轮都重新插,适合对话中会自己改记忆的 Agent。\n示例:每会话",
+    memory_recall_per_session: "每会话(更省更快)",
     memory_recall_per_turn: "每轮",
-    section_run_deadline: "运行墙钟上限(秒)",
+    section_run_deadline: "单次运行时长上限(秒)",
     section_run_deadline_help:
-      "整个 run 的墙钟时间上限,含子 Agent 递归。超时即中止,防失控长跑/成本失控。0=不限制。\n示例:0(不限)或 1800(30 分钟)",
-    run_deadline_hint: "整个运行的最长墙钟时间,含子 Agent;0 = 不限制。",
-    approval_timeout: "审批超时(秒)",
+      "一次运行最多跑多久(秒),包含它调起的子 Agent。\n超时就中止,防止失控长跑、费用爆掉。\n0 表示不限制。\n示例:0(不限)或 1800(30 分钟)",
+    run_deadline_hint: "一次运行的最长耗时(秒),含子 Agent;0 = 不限制。",
+    approval_timeout: "审批等待上限(秒)",
     approval_timeout_help:
-      "一个待审批请求最多挂多久,超时自动拒绝,否则会永久占用一个检查点槽位。默认 24h(86400)。\n示例:86400",
-    trajectory_recording: "轨迹记录",
+      "一个待审批的请求最多等多久(秒),超时自动拒绝,免得一直占着资源。\n默认 24 小时(86400)。\n示例:86400",
+    trajectory_recording: "记录对话留档",
     trajectory_recording_help:
-      "开启时已完成的 run 序列化落 ObjectStore(供 eval 闸/微调)。对不能把对话内容外泄到非 WORM 存储的 Agent 关闭。默认开。\n示例:开启",
+      "开启后,每次完整对话会被保存下来,用于质量评测和模型优化。\n如果对话内容不能留存,就关掉。\n默认开启。\n示例:开启",
     section_knowledge: "知识库(RAG)",
     section_knowledge_help:
-      "Agent 可检索的租户知识库,用来给回答提供依据(启用 knowledge_search 工具)。可选已有库或输入名称。\n示例:hr-policies、eng-handbook",
+      "Agent 可以检索的知识库,用来给回答找依据。\n选已有的库,或输入名称。\n示例:hr-policies、eng-handbook",
     knowledge_hint: "本 Agent 可检索的知识库。",
     knowledge_placeholder: "选择或输入知识库名称",
     knowledge_chunk_label: "切片 {{max}}/重叠 {{overlap}}",
     section_skills: "技能",
     section_skills_help:
-      "Agent 加载的可复用技能包(说明 + 脚本)。可从租户 + 平台技能中选。\n示例:pptx-builder、sql-analyst",
+      "挂给 Agent 的技能包(说明 + 脚本)。\n租户和平台的技能都能选。\n示例:pptx-builder、sql-analyst",
     skills_hint: "勾选挂到本 Agent 的技能。平台技能受套餐等级限制时不可勾选。",
     skills_search: "搜索技能(名称/描述/分类)",
     skills_empty: "暂无可用技能",
@@ -455,7 +455,7 @@ const zhCN: TranslationKeys = {
     skills_tier_locked_hint: "该平台技能需要 {{tier}} 套餐,当前租户无权使用。",
     section_subagents: "子 Agent 委派",
     section_subagents_help:
-      "具名委派目标 —— 本 Agent 可把子任务交给的其他已部署 Agent。父 Agent 的 LLM 把每个当成一个工具。\n示例:工具 researcher → deep-researcher@1.0.0",
+      "本 Agent 可以把子任务交给的其他已部署 Agent。\n每个目标对 Agent 来说就是一个工具,可按名调用。\n示例:工具名 researcher → 目标 deep-researcher@1.0.0",
     subagents_hint: "本 Agent 可委派子任务的已部署 Agent。",
     subagent_name: "工具名",
     subagent_ref: "目标 Agent",
@@ -464,10 +464,10 @@ const zhCN: TranslationKeys = {
     subagent_add: "添加子 Agent",
     section_prompt_vars: "动态 Prompt(Jinja)",
     section_prompt_vars_help:
-      "调用 run 接口时用请求体的 inputs 按次渲染 system prompt。在此声明每个变量,只有声明过的变量名才会被使用。「可信」关闭会把值作为数据用 spotlight 围栏包裹(用于可能携带用户输入的值)。\n示例:模板写 {{ persona }},此处声明变量 persona",
+      "声明 prompt 里用到的变量。\n调用时通过接口的 inputs 传值,每次按值填进 prompt;只有在这里声明过的变量名才生效。\n关掉「可信」= 把传入的值当纯数据处理、防止其中夹带的指令被执行(用于可能含用户输入的变量)。\n示例:模板里写 {{ persona }},这里声明变量 persona",
     prompt_jinja_label: "启用 Jinja 模板",
     prompt_jinja_hint:
-      "开启后 system prompt 是 Jinja 模板:{{ 变量名 }} 占位符按次从请求 inputs 填充。只渲染你在此编写的 prompt 正文。",
+      "开启后,prompt 正文是 Jinja 模板:{{ 变量名 }} 占位符在每次调用时用接口传入的 inputs 填充。\n只渲染你写的正文部分。",
     prompt_var_name: "变量名",
     prompt_var_trusted: "可信",
     prompt_var_required: "必填",
