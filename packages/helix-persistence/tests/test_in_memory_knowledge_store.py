@@ -160,6 +160,27 @@ async def test_base_stats_counts_documents_and_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stamp_embedding_and_reindex_flag() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    await store.stamp_embedding_model(
+        tenant_id=tenant, kb_id=base.id, embedding_provider="qwen", embedding_model="v4"
+    )
+    assert await store.request_reindex(tenant_id=tenant, kb_id=base.id) is True
+    fetched = await store.get_base(tenant_id=tenant, name="kb")
+    assert fetched is not None
+    assert (fetched.embedding_provider, fetched.embedding_model) == ("qwen", "v4")
+    assert fetched.reindex_requested_at is not None
+    await store.clear_reindex(tenant_id=tenant, kb_id=base.id)
+    cleared = await store.get_base(tenant_id=tenant, name="kb")
+    assert cleared is not None
+    assert cleared.reindex_requested_at is None
+    # Missing base → request_reindex returns False.
+    assert await store.request_reindex(tenant_id=tenant, kb_id=uuid4()) is False
+
+
+@pytest.mark.asyncio
 async def test_create_base_rejects_duplicate() -> None:
     store = InMemoryKnowledgeStore()
     tenant = uuid4()

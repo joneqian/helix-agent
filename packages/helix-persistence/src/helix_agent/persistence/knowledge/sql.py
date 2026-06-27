@@ -54,6 +54,7 @@ def _to_base(row: KnowledgeBaseRow) -> KnowledgeBase:
         rerank_enabled=row.rerank_enabled,
         embedding_provider=row.embedding_provider,
         embedding_model=row.embedding_model,
+        reindex_requested_at=row.reindex_requested_at,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -220,6 +221,50 @@ class SqlKnowledgeStore(KnowledgeStore):
         async with self._sf() as session:
             rows = (await session.execute(stmt)).all()
         return {row[0]: (int(row[1]), int(row[2])) for row in rows}
+
+    async def stamp_embedding_model(
+        self, *, tenant_id: UUID, kb_id: UUID, embedding_provider: str, embedding_model: str
+    ) -> None:
+        async with self._sf() as session:
+            await session.execute(
+                update(KnowledgeBaseRow)
+                .where(KnowledgeBaseRow.tenant_id == tenant_id, KnowledgeBaseRow.id == kb_id)
+                .values(
+                    embedding_provider=embedding_provider,
+                    embedding_model=embedding_model,
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
+
+    async def request_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
+        async with self._sf() as session:
+            exists = (
+                await session.execute(
+                    select(KnowledgeBaseRow.id).where(
+                        KnowledgeBaseRow.tenant_id == tenant_id,
+                        KnowledgeBaseRow.id == kb_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if exists is None:
+                return False
+            await session.execute(
+                update(KnowledgeBaseRow)
+                .where(KnowledgeBaseRow.tenant_id == tenant_id, KnowledgeBaseRow.id == kb_id)
+                .values(reindex_requested_at=datetime.now(UTC), updated_at=datetime.now(UTC))
+            )
+            await session.commit()
+        return True
+
+    async def clear_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> None:
+        async with self._sf() as session:
+            await session.execute(
+                update(KnowledgeBaseRow)
+                .where(KnowledgeBaseRow.tenant_id == tenant_id, KnowledgeBaseRow.id == kb_id)
+                .values(reindex_requested_at=None, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
 
     async def delete_base(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
         async with self._sf() as session:

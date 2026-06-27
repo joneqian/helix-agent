@@ -95,6 +95,10 @@ class KnowledgeBase(BaseModel):
     #: time; compared against the live platform model to derive ``needs_reindex``.
     embedding_provider: str | None = None
     embedding_model: str | None = None
+    #: Set while a re-index is in flight (the recovery/runner re-embeds the
+    #: base's retained chunk text), cleared on completion. Surfaced so the UI
+    #: can show a "re-indexing" state.
+    reindex_requested_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

@@ -57,6 +57,44 @@ async def setup() -> AsyncIterator[Setup]:
         yield client, runner
 
 
+class _FakeEmbeddingConfig:
+    """Mutable stand-in for ``PlatformEmbeddingConfigService`` — tests flip
+    ``pair`` to simulate a platform embedding-model change."""
+
+    def __init__(self, pair: tuple[str, str] | None) -> None:
+        self.pair = pair
+
+    async def effective_embedding_config(self) -> tuple[str, str] | None:
+        return self.pair
+
+
+ReindexSetup = tuple[AsyncClient, KnowledgeIngestionRunner, _FakeEmbeddingConfig]
+
+
+@pytest.fixture
+async def reindex_setup() -> AsyncIterator[ReindexSetup]:
+    """``full_setup`` plus a mutable fake embedding-config service so tests can
+    drive the ``needs_reindex`` / re-index flow deterministically."""
+    store = InMemoryKnowledgeStore()
+    embedder = FakeEmbedder()
+    runner = KnowledgeIngestionRunner(store=store, embedder=embedder)
+    config = _FakeEmbeddingConfig(("qwen", "text-embedding-v4"))
+    app = create_app(
+        settings=_settings(),
+        knowledge_repo=store,
+        knowledge_ingestion_runner=runner,
+        audit_logger=build_default_audit_logger(InMemoryAuditLogStore()),
+        jwt_verifier=build_test_jwt_verifier(),
+    )
+    app.state.knowledge_retriever = KnowledgeRetriever(store=store, embedder=embedder)
+    app.state.platform_embedding_config_service = config
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://cp.test", headers=_headers()
+    ) as client:
+        yield client, runner, config
+
+
 @pytest.fixture
 async def full_setup() -> AsyncIterator[FullSetup]:
     """Like ``setup`` but also attaches a real :class:`KnowledgeRetriever`
@@ -408,3 +446,65 @@ async def test_retrieval_test_503_when_retriever_unavailable(setup: Setup) -> No
     await client.post("/v1/knowledge/bases", json={"name": "kb"})
     resp = await client.post("/v1/knowledge/bases/kb/test", json={"query": "x"})
     assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# embedding pin + needs_reindex + re-index (commercial uplift)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_pins_embedding_model(reindex_setup: ReindexSetup) -> None:
+    client, _, _ = reindex_setup
+    created = (await client.post("/v1/knowledge/bases", json={"name": "kb"})).json()
+    assert created["embedding_provider"] == "qwen"
+    assert created["embedding_model"] == "text-embedding-v4"
+    assert created["needs_reindex"] is False
+
+
+@pytest.mark.asyncio
+async def test_needs_reindex_flips_on_model_change(reindex_setup: ReindexSetup) -> None:
+    client, _, config = reindex_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    # Platform admin swaps the embedding model.
+    config.pair = ("qwen", "text-embedding-v5")
+    single = (await client.get("/v1/knowledge/bases/kb")).json()
+    assert single["needs_reindex"] is True
+
+
+@pytest.mark.asyncio
+async def test_reindex_reembeds_and_restamps(reindex_setup: ReindexSetup) -> None:
+    client, runner, config = reindex_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("h.md", b"# H\n\nThe deductible is 500 dollars.", "text/markdown")},
+    )
+    await runner.drain()
+    # Swap the model → base is now stale.
+    config.pair = ("qwen", "text-embedding-v5")
+    assert (await client.get("/v1/knowledge/bases/kb")).json()["needs_reindex"] is True
+
+    accepted = await client.post("/v1/knowledge/bases/kb/reindex")
+    assert accepted.status_code == 202
+    await runner.drain()
+
+    refreshed = (await client.get("/v1/knowledge/bases/kb")).json()
+    assert refreshed["embedding_model"] == "text-embedding-v5"
+    assert refreshed["needs_reindex"] is False
+    assert refreshed["reindexing"] is False
+
+
+@pytest.mark.asyncio
+async def test_reindex_503_when_embedding_unconfigured(reindex_setup: ReindexSetup) -> None:
+    client, _, config = reindex_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    config.pair = None  # platform embedding unconfigured
+    resp = await client.post("/v1/knowledge/bases/kb/reindex")
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_reindex_missing_base_404(reindex_setup: ReindexSetup) -> None:
+    client, _, _ = reindex_setup
+    assert (await client.post("/v1/knowledge/bases/ghost/reindex")).status_code == 404

@@ -141,6 +141,34 @@ class InMemoryKnowledgeStore(KnowledgeStore):
             stats[doc.kb_id] = (count + 1, chunks + doc.chunk_count)
         return stats
 
+    async def stamp_embedding_model(
+        self, *, tenant_id: UUID, kb_id: UUID, embedding_provider: str, embedding_model: str
+    ) -> None:
+        await self._patch_base(
+            tenant_id,
+            kb_id,
+            {
+                "embedding_provider": embedding_provider,
+                "embedding_model": embedding_model,
+            },
+        )
+
+    async def request_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
+        return await self._patch_base(
+            tenant_id, kb_id, {"reindex_requested_at": datetime.now(UTC)}
+        )
+
+    async def clear_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> None:
+        await self._patch_base(tenant_id, kb_id, {"reindex_requested_at": None})
+
+    async def _patch_base(self, tenant_id: UUID, kb_id: UUID, update: dict[str, object]) -> bool:
+        base = next((b for b in self._bases if b.tenant_id == tenant_id and b.id == kb_id), None)
+        if base is None:
+            return False
+        merged = {**update, "updated_at": datetime.now(UTC)}
+        self._bases[self._bases.index(base)] = base.model_copy(update=merged)
+        return True
+
     async def delete_base(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
         base = next((b for b in self._bases if b.tenant_id == tenant_id and b.id == kb_id), None)
         if base is None:

@@ -97,11 +97,36 @@ def _get_knowledge_retriever(request: Request) -> Any | None:
     return getattr(request.app.state, "knowledge_retriever", None)
 
 
+def _get_embedding_config_service(request: Request) -> Any | None:
+    return getattr(request.app.state, "platform_embedding_config_service", None)
+
+
+async def _current_embedding_model(config_service: Any | None) -> tuple[str, str] | None:
+    if config_service is None:
+        return None
+    result: tuple[str, str] | None = await config_service.effective_embedding_config()
+    return result
+
+
+def _needs_reindex(base: KnowledgeBase, current: tuple[str, str] | None) -> bool:
+    """A base needs re-indexing when its recorded embedding model differs from
+    the live platform model. Unknown on either side (legacy base / unconfigured
+    platform) → ``False`` (nothing to compare)."""
+    if base.embedding_model is None or current is None:
+        return False
+    return (base.embedding_provider, base.embedding_model) != current
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _base_dict(base: KnowledgeBase, stats: tuple[int, int] = (0, 0)) -> dict[str, Any]:
+def _base_dict(
+    base: KnowledgeBase,
+    stats: tuple[int, int] = (0, 0),
+    *,
+    needs_reindex: bool = False,
+) -> dict[str, Any]:
     document_count, chunk_count = stats
     return {
         "id": str(base.id),
@@ -118,6 +143,8 @@ def _base_dict(base: KnowledgeBase, stats: tuple[int, int] = (0, 0)) -> dict[str
         },
         "embedding_provider": base.embedding_provider,
         "embedding_model": base.embedding_model,
+        "needs_reindex": needs_reindex,
+        "reindexing": base.reindex_requested_at is not None,
         "stats": {"document_count": document_count, "chunk_count": chunk_count},
         "created_at": _iso(base.created_at),
         "updated_at": _iso(base.updated_at),
@@ -152,6 +179,7 @@ def build_knowledge_router() -> APIRouter:
         body: _CreateBaseBody,
         request: Request,
         store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        config_service: Annotated[Any | None, Depends(_get_embedding_config_service)],
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         max_tokens = body.chunk_max_tokens or DEFAULT_CHUNK_MAX_TOKENS
@@ -165,6 +193,10 @@ def build_knowledge_router() -> APIRouter:
                 status_code=400,
                 detail="chunk_overlap_tokens must be less than chunk_max_tokens",
             )
+        # Pin the live platform embedding model so a later model swap is
+        # detectable (``needs_reindex``). NULL when embedding is unconfigured.
+        current = await _current_embedding_model(config_service)
+        provider, model = current if current is not None else (None, None)
         try:
             base = await store.create_base(
                 tenant_id=tenant_id,
@@ -177,22 +209,35 @@ def build_knowledge_router() -> APIRouter:
                 retrieval_score_threshold=body.retrieval_score_threshold,
                 retrieval_method=body.retrieval_method or RetrievalMethod.HYBRID,
                 rerank_enabled=body.rerank_enabled if body.rerank_enabled is not None else True,
+                embedding_provider=provider,
+                embedding_model=model,
             )
         except DuplicateKnowledgeBaseError as exc:
             raise HTTPException(status_code=409, detail="knowledge base already exists") from exc
-        return JSONResponse(status_code=201, content=_base_dict(base))
+        return JSONResponse(
+            status_code=201, content=_base_dict(base, needs_reindex=_needs_reindex(base, current))
+        )
 
     @router.get("/bases", response_model=None)
     async def list_bases(
         request: Request,
         store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        config_service: Annotated[Any | None, Depends(_get_embedding_config_service)],
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         bases = await store.list_bases(tenant_id=tenant_id)
         stats = await store.base_stats_many(tenant_id=tenant_id)
+        current = await _current_embedding_model(config_service)
         return JSONResponse(
             content={
-                "bases": [_base_dict(base, stats.get(base.id, (0, 0))) for base in bases]
+                "bases": [
+                    _base_dict(
+                        base,
+                        stats.get(base.id, (0, 0)),
+                        needs_reindex=_needs_reindex(base, current),
+                    )
+                    for base in bases
+                ]
             }
         )
 
@@ -201,11 +246,15 @@ def build_knowledge_router() -> APIRouter:
         name: str,
         request: Request,
         store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        config_service: Annotated[Any | None, Depends(_get_embedding_config_service)],
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         base = await _require_base(store, tenant_id, name)
         stats = await store.base_stats(tenant_id=tenant_id, kb_id=base.id)
-        return JSONResponse(content=_base_dict(base, stats))
+        current = await _current_embedding_model(config_service)
+        return JSONResponse(
+            content=_base_dict(base, stats, needs_reindex=_needs_reindex(base, current))
+        )
 
     @router.patch("/bases/{name}", response_model=None)
     async def update_base(
@@ -213,6 +262,7 @@ def build_knowledge_router() -> APIRouter:
         body: _UpdateBaseBody,
         request: Request,
         store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        config_service: Annotated[Any | None, Depends(_get_embedding_config_service)],
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         base = await _require_base(store, tenant_id, name)
@@ -253,7 +303,43 @@ def build_knowledge_router() -> APIRouter:
         if updated is None:  # pragma: no cover - guarded by _require_base above
             raise HTTPException(status_code=404, detail="knowledge base not found")
         stats = await store.base_stats(tenant_id=tenant_id, kb_id=updated.id)
-        return JSONResponse(content=_base_dict(updated, stats))
+        current = await _current_embedding_model(config_service)
+        return JSONResponse(
+            content=_base_dict(updated, stats, needs_reindex=_needs_reindex(updated, current))
+        )
+
+    @router.post("/bases/{name}/reindex", response_model=None)
+    async def reindex_base(
+        name: str,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        runner: Annotated[KnowledgeIngestionRunner | None, Depends(_get_ingestion_runner)],
+        config_service: Annotated[Any | None, Depends(_get_embedding_config_service)],
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        if runner is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge ingestion unavailable: no embedding model configured",
+            )
+        current = await _current_embedding_model(config_service)
+        if current is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge ingestion unavailable: no embedding model configured",
+            )
+        provider, model = current
+        # Mark in-flight (UI shows "re-indexing"); the runner re-embeds retained
+        # chunk text, stamps the model, and clears the flag on completion.
+        await store.request_reindex(tenant_id=tenant_id, kb_id=base.id)
+        runner.submit_reindex(
+            tenant_id=tenant_id,
+            kb_id=base.id,
+            embedding_provider=provider,
+            embedding_model=model,
+        )
+        return JSONResponse(status_code=202, content={"status": "reindexing", "name": base.name})
 
     @router.delete("/bases/{name}", status_code=204, response_model=None)
     async def delete_base(

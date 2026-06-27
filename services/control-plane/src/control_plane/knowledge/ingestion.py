@@ -69,6 +69,31 @@ class KnowledgeIngestionRunner:
         task.add_done_callback(self._tasks.discard)
         return task
 
+    def submit_reindex(
+        self,
+        *,
+        tenant_id: UUID,
+        kb_id: UUID,
+        embedding_provider: str,
+        embedding_model: str,
+    ) -> asyncio.Task[None]:
+        """Schedule a re-index: re-embed the base's retained chunk text with
+        the current platform model (chunk boundaries/text are preserved — a
+        pure embedding-model swap, valid only for a same-dimension model).
+        Stamps the base's model on success; always clears the reindex flag.
+        """
+        task: asyncio.Task[None] = asyncio.create_task(
+            self._run_reindex(
+                tenant_id=tenant_id,
+                kb_id=kb_id,
+                embedding_provider=embedding_provider,
+                embedding_model=embedding_model,
+            )
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
     async def drain(self) -> None:
         """Await all outstanding ingestion tasks (used by tests / shutdown)."""
         if self._tasks:
@@ -128,6 +153,85 @@ class KnowledgeIngestionRunner:
             )
         finally:
             current_tenant_id_var.reset(token)
+
+    async def _run_reindex(
+        self,
+        *,
+        tenant_id: UUID,
+        kb_id: UUID,
+        embedding_provider: str,
+        embedding_model: str,
+    ) -> None:
+        token = current_tenant_id_var.set(tenant_id)
+        failed = False
+        try:
+            documents = await self._store.list_documents(tenant_id=tenant_id, kb_id=kb_id)
+            for document in documents:
+                if document.status is not DocumentStatus.READY:
+                    continue  # only documents with chunks can be re-embedded
+                try:
+                    await self._reindex_document(tenant_id=tenant_id, document_id=document.id)
+                except Exception:
+                    # replace_chunks is transactional — a failed re-embed (e.g.
+                    # a model whose dimension differs from the fixed column) rolls
+                    # back, so existing vectors are preserved. Leave the model
+                    # unstamped so ``needs_reindex`` stays true and the admin sees
+                    # the re-index did not take.
+                    failed = True
+                    logger.warning(
+                        "knowledge.reindex_document_failed kb=%s document=%s",
+                        kb_id,
+                        document.id,
+                        exc_info=True,
+                    )
+            if not failed:
+                await self._store.stamp_embedding_model(
+                    tenant_id=tenant_id,
+                    kb_id=kb_id,
+                    embedding_provider=embedding_provider,
+                    embedding_model=embedding_model,
+                )
+                logger.info("knowledge.reindex_ready kb=%s", kb_id)
+        finally:
+            await self._store.clear_reindex(tenant_id=tenant_id, kb_id=kb_id)
+            current_tenant_id_var.reset(token)
+
+    async def _reindex_document(self, *, tenant_id: UUID, document_id: UUID) -> None:
+        existing = await self._collect_chunks(tenant_id=tenant_id, document_id=document_id)
+        if not existing:
+            return
+        texts = [chunk.content for chunk in existing]
+        embeddings = await self._embedder.embed(texts, tenant_id=tenant_id)
+        rebuilt = [
+            KnowledgeChunk(
+                id=chunk.id,
+                tenant_id=tenant_id,
+                kb_id=chunk.kb_id,
+                document_id=document_id,
+                chunk_index=chunk.chunk_index,
+                content=chunk.content,
+                embedding=embedding,
+            )
+            for chunk, embedding in zip(existing, embeddings, strict=True)
+        ]
+        await self._store.replace_chunks(
+            tenant_id=tenant_id, document_id=document_id, chunks=rebuilt
+        )
+
+    async def _collect_chunks(
+        self, *, tenant_id: UUID, document_id: UUID
+    ) -> list[KnowledgeChunk]:
+        collected: list[KnowledgeChunk] = []
+        offset = 0
+        while True:
+            page, total = await self._store.list_chunks(
+                tenant_id=tenant_id, document_id=document_id, offset=offset, limit=200
+            )
+            collected.extend(page)
+            offset += len(page)
+            if not page or offset >= total:
+                break
+        return collected
 
     async def _ingest(
         self,

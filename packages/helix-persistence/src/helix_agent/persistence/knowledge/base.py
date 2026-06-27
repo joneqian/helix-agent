@@ -119,6 +119,23 @@ class KnowledgeStore(abc.ABC):
         tenant's bases in one query — used by ``list_bases`` to avoid N+1."""
 
     @abc.abstractmethod
+    async def stamp_embedding_model(
+        self, *, tenant_id: UUID, kb_id: UUID, embedding_provider: str, embedding_model: str
+    ) -> None:
+        """Record the embedding model that produced (or re-produced) this
+        base's vectors. Set at create time and after a re-index so
+        ``needs_reindex`` (model != live platform model) is authoritative."""
+
+    @abc.abstractmethod
+    async def request_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
+        """Mark a base as re-index-requested (sets ``reindex_requested_at``);
+        ``False`` if no base matched."""
+
+    @abc.abstractmethod
+    async def clear_reindex(self, *, tenant_id: UUID, kb_id: UUID) -> None:
+        """Clear ``reindex_requested_at`` once a re-index completes."""
+
+    @abc.abstractmethod
     async def delete_base(self, *, tenant_id: UUID, kb_id: UUID) -> bool:
         """Delete a base and cascade its documents + chunks. ``False`` if
         no base matched."""
