@@ -36,7 +36,6 @@ import { SettingsRateCard } from "./pages/SettingsRateCard";
 import { SettingsUsage } from "./pages/SettingsUsage";
 import { SettingsBillingChargeback } from "./pages/SettingsBillingChargeback";
 import { SkillDetail } from "./pages/SkillDetail";
-import { SkillMarketplace } from "./pages/SkillMarketplace";
 import { SkillsList } from "./pages/SkillsList";
 import { TriggersList } from "./pages/TriggersList";
 import { WebhooksList } from "./pages/WebhooksList";
@@ -60,7 +59,6 @@ export function AppRouter() {
       <Route path="/knowledge" element={<KnowledgeAdmin />} />
       <Route path="/skills" element={<SkillsList />} />
       <Route path="/skills/:skillId" element={<SkillDetail />} />
-      <Route path="/skill-marketplace" element={<SkillMarketplace />} />
       <Route path="/agent-template-marketplace" element={<AgentTemplateMarketplace />} />
       <Route path="/triggers" element={<TriggersList />} />
       <Route path="/webhooks" element={<WebhooksList />} />
