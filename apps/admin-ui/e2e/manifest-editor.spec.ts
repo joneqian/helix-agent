@@ -1,9 +1,9 @@
 /**
  * Manifest editor E2E — Stream S PR C.
  *
- * Proves the Create-Agent drawer opens the visual ``<ManifestEditor>``
+ * Proves the Create-Agent modal opens the visual ``<ManifestEditor>``
  * on its Form tab, that the YAML tab switches the view, and that the
- * open drawer passes the axe a11y check.
+ * open modal passes the axe a11y check.
  *
  * The editor fetches ``GET /v1/agents/schema`` (enveloped) on mount, so
  * we stub it here. Because the shared ``installControlPlaneStub`` fixture
@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/v1/agents/schema", async (route) => {
     await route.fulfill({ json: SCHEMA_ENVELOPE });
   });
-  // The drawer fetches the platform embedding status on open (Stream T PR E);
+  // The modal fetches the platform embedding status on open (Stream T PR E);
   // stub the configured path so the editor renders deterministically.
   await page.route("**/v1/platform/embedding-config/status", (route) =>
     route.fulfill({ json: { success: true, data: { configured: true }, error: null } }),
@@ -55,9 +55,9 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByText("customer-support-bot")).toBeVisible();
 });
 
-test("create drawer opens the manifest editor on the Form tab", async ({ page }) => {
+test("create modal opens the manifest editor on the Form tab", async ({ page }) => {
   await page.getByTestId("agents-create").click();
-  await expect(page.getByTestId("create-agent-drawer")).toBeVisible();
+  await expect(page.getByTestId("create-agent-modal")).toBeVisible();
   await expect(page.getByTestId("manifest-editor-create")).toBeVisible();
   await expect(page.getByTestId("manifest-form-view")).toBeVisible();
 
@@ -65,8 +65,8 @@ test("create drawer opens the manifest editor on the Form tab", async ({ page })
   await expect(page.getByTestId("manifest-yaml-view")).toBeVisible();
 });
 
-test("create drawer passes axe (serious + critical)", async ({ page }) => {
+test("create modal passes axe (serious + critical)", async ({ page }) => {
   await page.getByTestId("agents-create").click();
   await expect(page.getByTestId("manifest-editor-create")).toBeVisible();
-  await expectNoA11yViolations(page, "create-agent-drawer");
+  await expectNoA11yViolations(page, "create-agent-modal");
 });

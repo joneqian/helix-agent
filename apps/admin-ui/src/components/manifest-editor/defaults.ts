@@ -7,7 +7,7 @@
  * platform can actually build. Long-term memory is ON by default
  * (Stream T): a memory-less agent has little product value, so new agents seed
  * with ``spec.memory.long_term``. This requires a platform embedding config —
- * CreateAgentDrawer blocks+guides when none is set (the build-time embedder
+ * CreateAgentModal blocks+guides when none is set (the build-time embedder
  * gate is the backstop).
  */
 import { parseYaml } from "./yaml";

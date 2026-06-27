@@ -1,17 +1,18 @@
 /**
- * Create Agent drawer — Stream H.2 PR 2.
+ * Create Agent modal — Stream H.2 PR 2.
  *
- * Antd Drawer hosting a Monaco YAML editor preloaded with a minimal
- * Agent manifest stub. On submit, POSTs to ``/v1/agents`` and lets the
- * backend's :class:`ManifestLoader` validate the payload end-to-end —
- * the same envelope errors that surface in ``ManifestTab`` apply here,
- * so the UI only renders them.
+ * Antd Modal hosting the curated ``ManifestEditor`` (tabs + Monaco) preloaded
+ * with a capability-adaptive Agent manifest stub. On submit, POSTs to
+ * ``/v1/agents`` and lets the backend's :class:`ManifestLoader` validate the
+ * payload end-to-end — the same envelope errors that surface in ``ManifestTab``
+ * apply here, so the UI only renders them. Uses a Modal (not a Drawer) to match
+ * the platform Agent-template create flow.
  *
- * On success the drawer closes and the parent decides what to do
+ * On success the modal closes and the parent decides what to do
  * (refresh list + optionally navigate to the new agent's detail page).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Drawer, Space, Typography } from "antd";
+import { Alert, Button, Modal, Space, Typography } from "antd";
 import { Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -30,7 +31,7 @@ const { Text } = Typography;
  *  default at open time (falls back to this base). */
 export const DEFAULT_AGENT_YAML = BASE_MANIFEST_YAML;
 
-interface CreateAgentDrawerProps {
+interface CreateAgentModalProps {
   open: boolean;
   onClose: () => void;
   /** Fires after a successful POST so the parent can refresh the list
@@ -38,7 +39,7 @@ interface CreateAgentDrawerProps {
   onCreated: (record: AgentDetailResponse) => void;
 }
 
-export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawerProps) {
+export function CreateAgentModal({ open, onClose, onCreated }: CreateAgentModalProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [buffer, setBuffer] = useState<string>(BASE_MANIFEST_YAML);
@@ -110,16 +111,16 @@ export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawe
   const blocked = embeddingConfigured === false;
 
   return (
-    <Drawer
+    <Modal
       open={open}
-      onClose={handleCancel}
+      onCancel={handleCancel}
       title={
         <Space size={8}>
           <Plus size={16} strokeWidth={1.75} />
           {t("create_agent.title")}
         </Space>
       }
-      width={720}
+      width={900}
       destroyOnHidden
       footer={
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -143,11 +144,15 @@ export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawe
           </Button>
         </div>
       }
-      data-testid="create-agent-drawer"
     >
-      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-        {t("create_agent.hint")}
-      </Text>
+      {/* The testid lives on a content wrapper (not the <Modal> root): antd puts
+          a forwarded data-testid on ``.ant-modal-root``, which Playwright treats
+          as hidden even when open. This inner div is visible when the modal is
+          open and unmounted (destroyOnHidden) when closed. */}
+      <div data-testid="create-agent-modal">
+        <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+          {t("create_agent.hint")}
+        </Text>
 
       {error !== null && (
         <Alert
@@ -192,6 +197,7 @@ export function CreateAgentDrawer({ open, onClose, onCreated }: CreateAgentDrawe
           onChange={setBuffer}
         />
       )}
-    </Drawer>
+      </div>
+    </Modal>
   );
 }

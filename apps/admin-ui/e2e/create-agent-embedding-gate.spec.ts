@@ -2,10 +2,10 @@
  * Create-agent embedding gate E2E — Stream T PR E.
  *
  * New agents default to long-term memory on, which requires a platform-level
- * embedding model. The Create-Agent drawer fetches
+ * embedding model. The Create-Agent modal fetches
  * ``GET /v1/platform/embedding-config/status`` on open. When the platform has
  * no embedding configured it renders ``create-agent-embedding-gate`` (an Alert
- * + a CTA that navigates to ``/settings/platform`` and closes the drawer) and
+ * + a CTA that navigates to ``/settings/platform`` and closes the modal) and
  * disables ``create-agent-submit``; otherwise the editor renders normally.
  *
  * Login + the schema/model-catalog stubs mirror ``manifest-editor.spec.ts`` /
@@ -91,7 +91,7 @@ test("blocks agent creation when platform embedding is unconfigured", async ({
   await loginWithStatus(page, false);
 
   await page.getByTestId("agents-create").click();
-  await expect(page.getByTestId("create-agent-drawer")).toBeVisible();
+  await expect(page.getByTestId("create-agent-modal")).toBeVisible();
   await expect(page.getByTestId("create-agent-embedding-gate")).toBeVisible();
   await expect(page.getByTestId("create-agent-submit")).toBeDisabled();
 
@@ -105,7 +105,7 @@ test("allows agent creation when platform embedding is configured", async ({
   await loginWithStatus(page, true);
 
   await page.getByTestId("agents-create").click();
-  await expect(page.getByTestId("create-agent-drawer")).toBeVisible();
+  await expect(page.getByTestId("create-agent-modal")).toBeVisible();
   await expect(page.getByTestId("create-agent-embedding-gate")).toHaveCount(0);
   await expect(page.getByTestId("create-agent-submit")).toBeEnabled();
 });

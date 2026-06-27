@@ -36,7 +36,7 @@ import { getPlatformEmbeddingStatus } from "../../api/platform_embedding_config"
 import { __resetSchemaCacheForTest } from "../manifest-editor/schema";
 import { __resetCatalogCacheForTest } from "../manifest-editor/catalog";
 import { ApiError } from "../../api/client";
-import { CreateAgentDrawer } from "../CreateAgentDrawer";
+import { CreateAgentModal } from "../CreateAgentModal";
 
 const sampleCreated = {
   record: { name: "my-agent", version: "1.0.0" },
@@ -75,9 +75,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("CreateAgentDrawer", () => {
+describe("CreateAgentModal", () => {
   it("renders the manifest editor on the Form tab", async () => {
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
     await waitFor(() => expect(screen.getByTestId("manifest-editor-create")).toBeInTheDocument());
     expect(screen.getByTestId("manifest-form-view")).toBeInTheDocument();
   });
@@ -85,7 +85,7 @@ describe("CreateAgentDrawer", () => {
   it("submits the default manifest YAML via createAgent", async () => {
     const user = userEvent.setup();
     const createMock = vi.spyOn(agentsSdk, "createAgent").mockResolvedValue(sampleCreated);
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
     await screen.findByTestId("manifest-editor-create");
 
     await user.click(screen.getByTestId("create-agent-submit"));
@@ -101,7 +101,7 @@ describe("CreateAgentDrawer", () => {
     vi.spyOn(agentsSdk, "createAgent").mockRejectedValue(
       new ApiError("name + version already exists", "MANIFEST_DUPLICATE", 409),
     );
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
     await screen.findByTestId("manifest-editor-create");
     await user.click(screen.getByTestId("create-agent-submit"));
     const alert = await screen.findByTestId("create-agent-error");
@@ -110,7 +110,7 @@ describe("CreateAgentDrawer", () => {
 
   it("seeds the editor with the first configured provider's model", async () => {
     const user = userEvent.setup();
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
     await screen.findByTestId("manifest-editor-create");
     await user.click(screen.getByTestId("manifest-tab-yaml"));
     const ta = screen.getByTestId("monaco-stub") as HTMLTextAreaElement;
@@ -119,7 +119,7 @@ describe("CreateAgentDrawer", () => {
 
   it("blocks creation and shows the gate when platform embedding is unconfigured", async () => {
     vi.mocked(getPlatformEmbeddingStatus).mockResolvedValue({ configured: false });
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
 
     await screen.findByTestId("create-agent-embedding-gate");
     expect(screen.queryByTestId("manifest-editor-create")).not.toBeInTheDocument();
@@ -128,7 +128,7 @@ describe("CreateAgentDrawer", () => {
 
   it("does not show the gate when platform embedding is configured", async () => {
     vi.mocked(getPlatformEmbeddingStatus).mockResolvedValue({ configured: true });
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
 
     await screen.findByTestId("manifest-editor-create");
     await waitFor(() =>
@@ -140,7 +140,7 @@ describe("CreateAgentDrawer", () => {
   it("navigates to platform settings and closes when the gate CTA is clicked", async () => {
     const user = userEvent.setup();
     vi.mocked(getPlatformEmbeddingStatus).mockResolvedValue({ configured: false });
-    render(<CreateAgentDrawer open onClose={onClose} onCreated={onCreated} />);
+    render(<CreateAgentModal open onClose={onClose} onCreated={onCreated} />);
 
     await screen.findByTestId("create-agent-embedding-gate");
     await user.click(screen.getByTestId("create-agent-embedding-cta"));
