@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage
 
 from helix_agent.common.search.rrf import rrf_fuse as _rrf_fuse
 from helix_agent.persistence import InMemoryKnowledgeStore
-from helix_agent.protocol import KnowledgeChunk
+from helix_agent.protocol import KnowledgeChunk, RetrievalMethod
 from orchestrator.tools import (
     KnowledgeRetriever,
     KnowledgeSearchTool,
@@ -231,6 +231,91 @@ async def test_retriever_applies_reranker() -> None:
     )
     fused = await plain.search(tenant_id=tenant, base_names=["kb"], query="deductible", limit=5)
     assert [r.content for r in reranked] == [r.content for r in reversed(fused)]
+
+
+@pytest.mark.asyncio
+async def test_retriever_surfaces_score_and_recall_source() -> None:
+    # query vector == chunk 0 → similarity ~1.0; "deductible" also matches it
+    # by keyword → recall_source "both".
+    store, tenant = await _seed_store()
+    retriever = KnowledgeRetriever(store=store, embedder=_FixedEmbedder((1.0, 0.0)))
+    results = await retriever.search(
+        tenant_id=tenant, base_names=["kb"], query="deductible", limit=5
+    )
+    top = next(r for r in results if r.chunk_index == 0)
+    assert top.score == pytest.approx(1.0)
+    assert top.recall_source == "both"
+
+
+@pytest.mark.asyncio
+async def test_retriever_override_method_and_threshold_filters() -> None:
+    # method=vector skips keyword; threshold 0.5 drops chunk 1 (similarity ~0).
+    store, tenant = await _seed_store()
+    retriever = KnowledgeRetriever(store=store, embedder=_FixedEmbedder((1.0, 0.0)))
+    results = await retriever.search(
+        tenant_id=tenant,
+        base_names=["kb"],
+        query="deductible",
+        limit=5,
+        method=RetrievalMethod.VECTOR,
+        score_threshold=0.5,
+    )
+    assert [r.chunk_index for r in results] == [0]
+    assert results[0].recall_source == "vector"
+
+
+@pytest.mark.asyncio
+async def test_retriever_reads_per_base_config_defaults() -> None:
+    # No overrides — the base's own stored config (vector-only + threshold)
+    # is applied, proving per-KB defaults are honoured.
+    store, tenant = await _seed_store()
+    base = await store.get_base(tenant_id=tenant, name="kb")
+    assert base is not None
+    await store.update_base(
+        tenant_id=tenant,
+        kb_id=base.id,
+        retrieval_method=RetrievalMethod.VECTOR,
+        retrieval_score_threshold=0.5,
+    )
+    retriever = KnowledgeRetriever(store=store, embedder=_FixedEmbedder((1.0, 0.0)))
+    results = await retriever.search(
+        tenant_id=tenant, base_names=["kb"], query="vacation", limit=5
+    )
+    # "vacation" matches chunk 1 by keyword, but keyword recall is off and
+    # chunk 1's vector similarity (~0) is below the base threshold → only
+    # chunk 0 survives.
+    assert [r.chunk_index for r in results] == [0]
+
+
+@pytest.mark.asyncio
+async def test_retriever_keyword_only_method() -> None:
+    store, tenant = await _seed_store()
+    retriever = KnowledgeRetriever(store=store, embedder=_FixedEmbedder((1.0, 0.0)))
+    results = await retriever.search(
+        tenant_id=tenant,
+        base_names=["kb"],
+        query="vacation",
+        limit=5,
+        method=RetrievalMethod.KEYWORD,
+    )
+    assert [r.chunk_index for r in results] == [1]
+    assert results[0].recall_source == "keyword"
+    assert results[0].score is None  # keyword-only hits carry no [0,1] similarity
+
+
+@pytest.mark.asyncio
+async def test_retriever_rerank_override_disables() -> None:
+    store, tenant = await _seed_store()
+    retriever = KnowledgeRetriever(
+        store=store, embedder=_FixedEmbedder((1.0, 0.0)), reranker=_ReversingReranker()
+    )
+    plain = KnowledgeRetriever(store=store, embedder=_FixedEmbedder((1.0, 0.0)))
+    no_rerank = await retriever.search(
+        tenant_id=tenant, base_names=["kb"], query="deductible", limit=5, rerank=False
+    )
+    fused = await plain.search(tenant_id=tenant, base_names=["kb"], query="deductible", limit=5)
+    # rerank=False → the reranker is skipped, so the order matches plain fusion.
+    assert [r.content for r in no_rerank] == [r.content for r in fused]
 
 
 # ---------------------------------------------------------------------------
