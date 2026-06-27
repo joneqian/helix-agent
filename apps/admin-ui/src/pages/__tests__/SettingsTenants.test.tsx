@@ -84,6 +84,34 @@ describe("SettingsTenants", () => {
     expect(await screen.findByText("乐毅大公司")).toBeInTheDocument();
   });
 
+  it("hides the synthetic platform tenant from the table", async () => {
+    setStoredToken(
+      makeJwt({ sub: "u1", tenant_id: "t1", roles: ["admin", "system_admin"] }),
+    );
+    vi.mocked(listTenants).mockResolvedValue([
+      {
+        tenant_id: "11111111-1111-1111-1111-111111111111",
+        display_name: "Platform",
+        plan: "enterprise",
+        created_at: "2026-06-02T00:00:00Z",
+        status: "active",
+        is_platform: true,
+      },
+      {
+        tenant_id: "33333333-3333-3333-3333-333333333333",
+        display_name: "真实租户",
+        plan: "free",
+        created_at: "2026-06-02T00:00:00Z",
+        status: "active",
+        is_platform: false,
+      },
+    ]);
+    renderPage();
+
+    expect(await screen.findByText("真实租户")).toBeInTheDocument();
+    expect(screen.queryByText("Platform")).not.toBeInTheDocument();
+  });
+
   it("Manage switches scope and navigates to tenant config", async () => {
     const user = userEvent.setup();
     setStoredToken(

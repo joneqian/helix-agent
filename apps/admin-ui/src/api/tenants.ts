@@ -49,6 +49,10 @@ export interface TenantSummary {
   plan: TenantPlan;
   created_at: string;
   status: "active" | "suspended";
+  /** The synthetic platform tenant — owns platform-level shared resources and
+   *  is reached via the ``*`` scope, not as a peer row. Hidden from the
+   *  customer-tenant table + switcher. Optional so pre-flag mocks stay valid. */
+  is_platform?: boolean;
 }
 
 export async function listTenants(limit = 50, offset = 0): Promise<TenantSummary[]> {

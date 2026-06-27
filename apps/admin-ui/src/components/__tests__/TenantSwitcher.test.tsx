@@ -127,6 +127,41 @@ describe("TenantSwitcher — Stream N integration", () => {
     expect(option.textContent).toContain("乐毅大公司");
   });
 
+  it("omits the synthetic platform tenant from the options", async () => {
+    const platformId = "11111111-1111-1111-1111-111111111111";
+    const realId = "33333333-3333-3333-3333-333333333333";
+    (listTenants as Mock).mockResolvedValue([
+      {
+        tenant_id: platformId,
+        display_name: "Platform",
+        plan: "enterprise",
+        created_at: "2026-06-02T00:00:00Z",
+        is_platform: true,
+      },
+      {
+        tenant_id: realId,
+        display_name: "真实租户",
+        plan: "free",
+        created_at: "2026-06-02T00:00:00Z",
+        is_platform: false,
+      },
+    ]);
+    const token = makeJwt({
+      sub: "00000000-0000-0000-0000-0000000000aa",
+      sub_type: "user",
+      tenant_id: "00000000-0000-0000-0000-0000000000a1",
+      roles: ["system_admin"],
+    });
+    const user = userEvent.setup();
+    renderWith(token);
+    const select = await screen.findByTestId("tenant-switcher");
+    await user.click(within(select).getByRole("combobox"));
+    await screen.findByTestId(`tenant-switcher-option-${realId}`);
+    expect(
+      screen.queryByTestId(`tenant-switcher-option-${platformId}`),
+    ).toBeNull();
+  });
+
   it("selecting a concrete tenant persists the UUID scope", async () => {
     const tenantId = "11111111-1111-1111-1111-111111111111";
     (listTenants as Mock).mockResolvedValue([
