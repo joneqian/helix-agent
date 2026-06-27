@@ -269,7 +269,7 @@ export function SkillsList() {
       width: 180,
       render: (s: SkillStatus, record) => (
         <Space size={6}>
-          <Tag color={STATUS_COLOR[s]}>{s}</Tag>
+          <Tag color={STATUS_COLOR[s]}>{t(`skills.status_${s}`)}</Tag>
           {/* Sprint #4 (Mini-ADR U-30) — distance-to-stale hint.
               Shows only for ``active`` rows so operators get an early
               signal before the Curator's nightly sweep flips them. */}
@@ -331,7 +331,10 @@ export function SkillsList() {
               data-testid="skills-status-filter"
               options={[
                 { value: "all", label: t("skills.filter_status_all") },
-                ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
+                ...STATUS_OPTIONS.map((s) => ({
+                  value: s,
+                  label: t(`skills.status_${s}`),
+                })),
               ]}
             />
             <Select<SkillVisibility | "all">
