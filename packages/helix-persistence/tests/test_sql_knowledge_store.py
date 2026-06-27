@@ -20,7 +20,7 @@ from helix_agent.persistence import (
 )
 from helix_agent.persistence.embedding import EMBEDDING_DIM
 from helix_agent.persistence.knowledge import DuplicateKnowledgeBaseError
-from helix_agent.protocol import DocumentStatus, KnowledgeChunk
+from helix_agent.protocol import DocumentStatus, KnowledgeChunk, RetrievalMethod
 
 pytestmark = pytest.mark.integration
 
@@ -183,6 +183,173 @@ async def test_delete_base_cascades(sql_store: SqlStoreFixture) -> None:
         assert (
             await store.search(tenant_id=tenant, kb_ids=[base.id], query_embedding=_vec(1.0)) == []
         )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_base_persists_metadata_and_retrieval_config(
+    sql_store: SqlStoreFixture,
+) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        await store.create_base(
+            tenant_id=tenant,
+            name="kb",
+            description="HR docs",
+            created_by="alice@acme.com",
+            retrieval_top_k=8,
+            retrieval_score_threshold=0.4,
+            retrieval_method=RetrievalMethod.VECTOR,
+            rerank_enabled=False,
+            embedding_provider="qwen",
+            embedding_model="text-embedding-v4",
+        )
+        fetched = await store.get_base(tenant_id=tenant, name="kb")
+        assert fetched is not None
+        assert fetched.description == "HR docs"
+        assert fetched.created_by == "alice@acme.com"
+        assert fetched.retrieval_top_k == 8
+        assert fetched.retrieval_score_threshold == 0.4
+        assert fetched.retrieval_method is RetrievalMethod.VECTOR
+        assert fetched.rerank_enabled is False
+        assert fetched.embedding_model == "text-embedding-v4"
+        assert fetched.updated_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_update_base_clear_vs_omit(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(
+            tenant_id=tenant, name="kb", description="orig", retrieval_score_threshold=0.5
+        )
+        # Omit description (unchanged); clear threshold with explicit None; bump top_k.
+        updated = await store.update_base(
+            tenant_id=tenant,
+            kb_id=base.id,
+            retrieval_score_threshold=None,
+            retrieval_top_k=12,
+            retrieval_method=RetrievalMethod.KEYWORD,
+        )
+        assert updated is not None
+        assert updated.description == "orig"
+        assert updated.retrieval_score_threshold is None
+        assert updated.retrieval_top_k == 12
+        assert updated.retrieval_method is RetrievalMethod.KEYWORD
+        # Clearing description explicitly.
+        cleared = await store.update_base(tenant_id=tenant, kb_id=base.id, description=None)
+        assert cleared is not None
+        assert cleared.description is None
+        # Missing base → None.
+        assert await store.update_base(tenant_id=tenant, kb_id=uuid4(), description="x") is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_base_stats_aggregate(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        empty = await store.create_base(tenant_id=tenant, name="empty")
+        d1 = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="a.pdf")
+        d2 = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="b.pdf")
+        await store.set_document_status(
+            tenant_id=tenant, document_id=d1.id, status=DocumentStatus.READY, chunk_count=3
+        )
+        await store.set_document_status(
+            tenant_id=tenant, document_id=d2.id, status=DocumentStatus.READY, chunk_count=4
+        )
+        assert await store.base_stats(tenant_id=tenant, kb_id=base.id) == (2, 7)
+        assert await store.base_stats(tenant_id=tenant, kb_id=empty.id) == (0, 0)
+        many = await store.base_stats_many(tenant_id=tenant)
+        assert many[base.id] == (2, 7)
+        assert empty.id not in many
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_search_scored_surfaces_similarity(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="d.pdf")
+        await store.replace_chunks(
+            tenant_id=tenant,
+            document_id=doc.id,
+            chunks=[
+                _make_chunk(tenant, base.id, doc.id, 0, "near", _vec(1.0, 0.0)),
+                _make_chunk(tenant, base.id, doc.id, 1, "far", _vec(0.0, 1.0)),
+            ],
+        )
+        hits = await store.search_scored(
+            tenant_id=tenant, kb_ids=[base.id], query_embedding=_vec(1.0, 0.0)
+        )
+        assert [h.chunk.content for h in hits] == ["near", "far"]
+        assert all(h.source == "vector" for h in hits)
+        # 1 - cosine_distance lands in [0, 1] for normalised vectors, descending.
+        assert hits[0].score == pytest.approx(1.0, abs=1e-6)
+        assert hits[1].score == pytest.approx(0.0, abs=1e-6)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_scored_surfaces_rank(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="d.pdf")
+        await store.replace_chunks(
+            tenant_id=tenant,
+            document_id=doc.id,
+            chunks=[
+                _make_chunk(tenant, base.id, doc.id, 0, "quarterly invoice payment", _vec(1.0)),
+            ],
+        )
+        hits = await store.keyword_search_scored(
+            tenant_id=tenant, kb_ids=[base.id], query="invoice"
+        )
+        assert len(hits) == 1
+        assert hits[0].source == "keyword"
+        assert hits[0].score > 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_paginates_and_omits_embedding(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="d.pdf")
+        await store.replace_chunks(
+            tenant_id=tenant,
+            document_id=doc.id,
+            chunks=[
+                _make_chunk(tenant, base.id, doc.id, i, f"chunk-{i}", _vec(float(i)))
+                for i in range(5)
+            ],
+        )
+        page, total = await store.list_chunks(
+            tenant_id=tenant, document_id=doc.id, offset=1, limit=2
+        )
+        assert total == 5
+        assert [c.chunk_index for c in page] == [1, 2]
+        assert all(c.embedding == () for c in page)
+        # Cross-tenant isolation.
+        other_page, other_total = await store.list_chunks(tenant_id=uuid4(), document_id=doc.id)
+        assert (other_page, other_total) == ([], 0)
     finally:
         await engine.dispose()
 
