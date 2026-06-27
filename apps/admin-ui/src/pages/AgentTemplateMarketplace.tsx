@@ -4,7 +4,7 @@
  * Browse-and-fork shelf for the platform-curated Agent template catalog. Reads
  * the tenant-facing ``GET /v1/agents/templates`` view (published + enabled, one
  * card per name, each annotated with ``can_fork`` per the tenant's plan tier)
- * and renders a card wall mirroring ``SkillMarketplace``.
+ * and renders a card wall of those templates.
  *
  * Forking materializes a tenant-owned ``agent_spec`` (``extends`` pinned to the
  * template version — the tier① security floor re-applies at build) via

@@ -81,12 +81,6 @@ export const WORKSPACE_ITEMS: readonly NavEntry[] = [
     group: "workspace",
   },
   {
-    key: "skill-marketplace",
-    labelKey: "nav.skill_marketplace",
-    path: "/skill-marketplace",
-    group: "workspace",
-  },
-  {
     key: "agent-template-marketplace",
     labelKey: "nav.agent_template_marketplace",
     path: "/agent-template-marketplace",
