@@ -95,6 +95,48 @@ async def test_openai_compatible_embedder_empty_input_skips_call() -> None:
     assert client.calls == []
 
 
+@dataclass
+class _EchoEmbeddingClient:
+    """EmbeddingClient stub: one vector per input, index-ordered per call.
+
+    Each vector encodes the input text length so order can be verified
+    across batch boundaries.
+    """
+
+    calls: list[list[str]] = field(default_factory=list)
+
+    async def embeddings(self, *, model: str, texts: Sequence[str]) -> Mapping[str, Any]:
+        del model
+        self.calls.append(list(texts))
+        return {
+            "data": [{"index": i, "embedding": [float(len(text))]} for i, text in enumerate(texts)]
+        }
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_embedder_splits_oversized_batch() -> None:
+    """DashScope text-embedding-v4 caps a request at 10 inputs — a larger
+    set must be split into sub-batches, vectors concatenated in input order."""
+    client = _EchoEmbeddingClient()
+    embedder = OpenAICompatibleEmbedder(client=client, model="text-embedding-v4")
+    texts = [str(n) * n for n in range(1, 26)]  # 25 distinct-length texts
+
+    vectors = await embedder.embed(texts, tenant_id=uuid4())
+
+    # 25 inputs at batch size 10 → 10 + 10 + 5.
+    assert [len(batch) for batch in client.calls] == [10, 10, 5]
+    # Vectors stay aligned to inputs across batch boundaries.
+    assert vectors == [(float(len(text)),) for text in texts]
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_embedder_custom_batch_size() -> None:
+    client = _EchoEmbeddingClient()
+    embedder = OpenAICompatibleEmbedder(client=client, model="m", max_batch_size=2)
+    await embedder.embed(["a", "b", "c"], tenant_id=uuid4())
+    assert [len(batch) for batch in client.calls] == [2, 1]
+
+
 # ---------------------------------------------------------------------------
 # HTTPEmbeddingClient
 # ---------------------------------------------------------------------------
@@ -129,3 +171,20 @@ async def test_http_embedding_client_raises_on_http_error() -> None:
     client = HTTPEmbeddingClient(api_key="bad", transport=httpx.MockTransport(_handler))
     with pytest.raises(httpx.HTTPStatusError):
         await client.embeddings(model="m", texts=["x"])
+
+
+@pytest.mark.asyncio
+async def test_http_embedding_client_error_surfaces_response_body() -> None:
+    """A vendor 400 carries the real reason in its body — surface it instead
+    of httpx's opaque "Client error '400 Bad Request'" message."""
+
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, json={"error": {"message": "batch size is invalid, expecting: range[1, 10]"}}
+        )
+
+    client = HTTPEmbeddingClient(api_key="k", transport=httpx.MockTransport(_handler))
+    with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        await client.embeddings(model="text-embedding-v4", texts=["x"])
+
+    assert "batch size is invalid" in str(excinfo.value)

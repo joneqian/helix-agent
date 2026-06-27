@@ -34,6 +34,16 @@ QWEN_EMBEDDING_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode"
 _DEFAULT_TIMEOUT_S = 30.0
 _UINT32_MAX = 0xFFFFFFFF
 
+#: Inputs per embeddings request. qwen DashScope compatible-mode caps a
+#: request at 10 strings (``text-embedding-v4``); larger sets must be split
+#: or the API returns 400 "batch size is invalid, expecting: range[1, 10]".
+#: Safe for every OpenAI-compatible vendor (others allow more, never fewer).
+_DEFAULT_MAX_BATCH_SIZE = 10
+
+#: Cap the vendor error body folded into the raised message — enough to read
+#: the reason, bounded so a stray HTML page can't flood it.
+_ERROR_BODY_LIMIT = 500
+
 
 @runtime_checkable
 class Embedder(Protocol):
@@ -79,7 +89,16 @@ class HTTPEmbeddingClient:
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={"model": model, "input": list(texts)},
             )
-            response.raise_for_status()
+            if response.is_error:
+                # httpx's default message is opaque ("Client error '400 Bad
+                # Request'"); the vendor puts the real reason in the body
+                # (e.g. DashScope "batch size is invalid"). Surface it.
+                detail = response.text[:_ERROR_BODY_LIMIT]
+                raise httpx.HTTPStatusError(
+                    f"embeddings request failed: {response.status_code} {detail}",
+                    request=response.request,
+                    response=response,
+                )
             body: Mapping[str, Any] = response.json()
             return body
 
@@ -90,18 +109,26 @@ class OpenAICompatibleEmbedder:
 
     client: EmbeddingClient
     model: str
+    #: Inputs per request — split larger sets so qwen's 10-input cap (and any
+    #: other vendor batch limit) is never exceeded. See _DEFAULT_MAX_BATCH_SIZE.
+    max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE
 
     async def embed(self, texts: Sequence[str], *, tenant_id: UUID) -> list[tuple[float, ...]]:
         # Fixed-key embedder — the credential is baked into ``client``;
         # ``tenant_id`` is accepted for protocol conformance and ignored.
         del tenant_id
-        if not texts:
+        items = list(texts)
+        if not items:
             return []
-        body = await self.client.embeddings(model=self.model, texts=texts)
-        # ``index`` orders the vectors back onto the inputs — the API may
-        # return them out of order.
-        rows = sorted(body["data"], key=lambda row: row["index"])
-        return [tuple(float(value) for value in row["embedding"]) for row in rows]
+        vectors: list[tuple[float, ...]] = []
+        for start in range(0, len(items), self.max_batch_size):
+            batch = items[start : start + self.max_batch_size]
+            body = await self.client.embeddings(model=self.model, texts=batch)
+            # ``index`` is per-request (0-based within this batch); sort then
+            # append so vectors stay aligned to inputs across batches.
+            rows = sorted(body["data"], key=lambda row: row["index"])
+            vectors.extend(tuple(float(value) for value in row["embedding"]) for row in rows)
+        return vectors
 
 
 @dataclass(frozen=True)
