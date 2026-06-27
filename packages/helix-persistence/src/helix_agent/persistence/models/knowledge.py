@@ -14,7 +14,18 @@ from datetime import datetime
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Index, Integer, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    LargeBinary,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,7 +53,36 @@ class KnowledgeBaseRow(Base):
     chunk_overlap_tokens: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text(str(DEFAULT_CHUNK_OVERLAP_TOKENS))
     )
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Subject id of the creator. Nullable: rows predating migration ``0100``
+    #: have no recorded creator.
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Per-base retrieval defaults — surfaced so they are not hardcoded.
+    retrieval_top_k: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("5")
+    )
+    retrieval_score_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retrieval_method: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'hybrid'")
+    )
+    rerank_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    #: Embedding model that produced this base's vectors (captured at create).
+    #: Compared against the live platform model to derive ``needs_reindex``.
+    embedding_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Set when a re-index is requested; the recovery worker re-embeds the
+    #: base's retained chunk text with the current model, then clears it.
+    reindex_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
@@ -71,6 +111,15 @@ class KnowledgeDocumentRow(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    #: Ingestion durability (migration ``0101``). A document is CAS-claimed for
+    #: ingest; ``lease_until`` lets a reaper reclaim crashed/expired work and
+    #: ``attempts`` bounds retries. ``content`` retains the original bytes so a
+    #: failed/crashed/re-ingested document can be re-driven without re-upload.
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -84,6 +133,11 @@ class KnowledgeDocumentRow(Base):
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "kb_id", "filename", name="knowledge_document_identity_uniq"),
+        Index(
+            "knowledge_document_recovery_idx",
+            "lease_until",
+            postgresql_where=text("status IN ('pending', 'processing')"),
+        ),
     )
 
 

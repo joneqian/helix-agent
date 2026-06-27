@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,6 +24,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DEFAULT_CHUNK_MAX_TOKENS: Final = 512
 DEFAULT_CHUNK_OVERLAP_TOKENS: Final = 64
 
+#: Default per-base retrieval parameters. Surfaced (not hardcoded) so a
+#: base can tune how its ``knowledge_search`` recall behaves.
+DEFAULT_RETRIEVAL_TOP_K: Final = 5
+
 
 class DocumentStatus(StrEnum):
     """``knowledge_document.status`` — one document's ingestion lifecycle."""
@@ -32,6 +36,18 @@ class DocumentStatus(StrEnum):
     PROCESSING = "processing"
     READY = "ready"
     FAILED = "failed"
+
+
+class RetrievalMethod(StrEnum):
+    """How a base recalls candidate chunks for ``knowledge_search``.
+
+    ``HYBRID`` runs both the dense (vector) and keyword (FTS) recall paths
+    and fuses them with RRF; ``VECTOR`` / ``KEYWORD`` restrict to one path.
+    """
+
+    VECTOR = "vector"
+    KEYWORD = "keyword"
+    HYBRID = "hybrid"
 
 
 class KnowledgeBase(BaseModel):
@@ -47,6 +63,8 @@ class KnowledgeBase(BaseModel):
     id: UUID
     tenant_id: UUID
     name: str = Field(description="logical name, unique per tenant")
+    description: str | None = Field(default=None, description="free-text purpose, shown in the UI")
+    created_by: str | None = Field(default=None, description="subject id of the creator")
     chunk_max_tokens: int = Field(
         default=DEFAULT_CHUNK_MAX_TOKENS, gt=0, description="max tokens per chunk"
     )
@@ -55,7 +73,30 @@ class KnowledgeBase(BaseModel):
         ge=0,
         description="tokens of overlap between adjacent chunks",
     )
+    retrieval_top_k: int = Field(
+        default=DEFAULT_RETRIEVAL_TOP_K,
+        ge=1,
+        le=50,
+        description="default number of chunks returned by knowledge_search",
+    )
+    retrieval_score_threshold: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="minimum vector similarity to keep a hit; None disables the cutoff",
+    )
+    retrieval_method: RetrievalMethod = Field(
+        default=RetrievalMethod.HYBRID, description="recall strategy: vector, keyword, or hybrid"
+    )
+    rerank_enabled: bool = Field(
+        default=True, description="apply the LLM reranker after fusion when configured"
+    )
+    #: Embedding model that produced this base's vectors. Captured at create
+    #: time; compared against the live platform model to derive ``needs_reindex``.
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @model_validator(mode="after")
     def _check_chunking(self) -> KnowledgeBase:
@@ -81,6 +122,7 @@ class KnowledgeDocument(BaseModel):
     status: DocumentStatus
     error: str | None = Field(default=None, description="failure detail when status is FAILED")
     chunk_count: int = Field(default=0, ge=0, description="chunks produced by the latest ingest")
+    attempts: int = Field(default=0, ge=0, description="ingestion attempts so far (durability)")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -100,3 +142,19 @@ class KnowledgeChunk(BaseModel):
         repr=False, description="semantic embedding vector of ``content``"
     )
     created_at: datetime | None = None
+
+
+class ScoredChunk(BaseModel):
+    """A chunk plus its recall score and which recall path surfaced it.
+
+    Returned by the store's ``*_scored`` methods so the retriever can apply
+    a similarity threshold and the retrieval-test endpoint can show scores.
+    ``score`` is a vector similarity in [0, 1] (``1 - cosine_distance``) for
+    ``source == "vector"``, or an unbounded ``ts_rank`` for ``"keyword"``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    chunk: KnowledgeChunk
+    score: float
+    source: Literal["vector", "keyword"]
