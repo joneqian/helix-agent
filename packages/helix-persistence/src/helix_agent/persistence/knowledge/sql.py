@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from helix_agent.persistence.knowledge.base import (
     UNSET,
+    ClaimedIngestion,
     DuplicateKnowledgeBaseError,
     KnowledgeStore,
     _Unset,
@@ -37,6 +39,28 @@ from helix_agent.protocol import (
 #: Postgres text-search config — chunks are pre-segmented app-side, so
 #: ``simple`` (no stemming / stopwords) is the correct universal config.
 _TS_CONFIG = "simple"
+
+#: Terminal ingestion states — reaching one clears the durability lease so the
+#: document is never re-claimed.
+_TERMINAL_STATUSES = (DocumentStatus.READY.value, DocumentStatus.FAILED.value)
+
+
+def _claimable(now: datetime, max_attempts: int) -> ColumnElement[bool]:
+    """A document is claimable when it is ``pending``, or ``processing`` with
+    an expired (or absent) lease, and still under its retry budget."""
+    return and_(
+        KnowledgeDocumentRow.attempts < max_attempts,
+        or_(
+            KnowledgeDocumentRow.status == DocumentStatus.PENDING.value,
+            and_(
+                KnowledgeDocumentRow.status == DocumentStatus.PROCESSING.value,
+                or_(
+                    KnowledgeDocumentRow.lease_until.is_(None),
+                    KnowledgeDocumentRow.lease_until < now,
+                ),
+            ),
+        ),
+    )
 
 
 def _to_base(row: KnowledgeBaseRow) -> KnowledgeBase:
@@ -302,7 +326,13 @@ class SqlKnowledgeStore(KnowledgeStore):
     # -- documents ----------------------------------------------------------
 
     async def upsert_document(
-        self, *, tenant_id: UUID, kb_id: UUID, filename: str
+        self,
+        *,
+        tenant_id: UUID,
+        kb_id: UUID,
+        filename: str,
+        content: bytes | None = None,
+        content_sha256: str | None = None,
     ) -> KnowledgeDocument:
         async with self._sf() as session:
             existing = (
@@ -318,6 +348,12 @@ class SqlKnowledgeStore(KnowledgeStore):
                 existing.status = DocumentStatus.PENDING.value
                 existing.error = None
                 existing.chunk_count = 0
+                existing.attempts = 0
+                existing.claimed_at = None
+                existing.lease_until = None
+                if content is not None:
+                    existing.content = content
+                    existing.content_sha256 = content_sha256
                 existing.updated_at = datetime.now(UTC)
                 await session.execute(
                     delete(KnowledgeChunkRow).where(
@@ -333,6 +369,8 @@ class SqlKnowledgeStore(KnowledgeStore):
                 kb_id=kb_id,
                 filename=filename,
                 status=DocumentStatus.PENDING.value,
+                content=content,
+                content_sha256=content_sha256,
             )
             session.add(row)
             await session.commit()
@@ -347,6 +385,133 @@ class SqlKnowledgeStore(KnowledgeStore):
         async with self._sf() as session:
             row = (await session.execute(stmt)).scalar_one_or_none()
         return _to_document(row) if row is not None else None
+
+    async def get_document_content(
+        self, *, tenant_id: UUID, document_id: UUID
+    ) -> bytes | None:
+        stmt = select(KnowledgeDocumentRow.content).where(
+            KnowledgeDocumentRow.tenant_id == tenant_id,
+            KnowledgeDocumentRow.id == document_id,
+        )
+        async with self._sf() as session:
+            return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def claim_document(
+        self,
+        *,
+        tenant_id: UUID,
+        document_id: UUID,
+        now: datetime,
+        lease_seconds: int,
+        max_attempts: int,
+    ) -> ClaimedIngestion | None:
+        lease_until = now + timedelta(seconds=lease_seconds)
+        async with self._sf() as session:
+            row = (
+                await session.execute(
+                    update(KnowledgeDocumentRow)
+                    .where(
+                        KnowledgeDocumentRow.tenant_id == tenant_id,
+                        KnowledgeDocumentRow.id == document_id,
+                        _claimable(now, max_attempts),
+                    )
+                    .values(
+                        status=DocumentStatus.PROCESSING.value,
+                        claimed_at=now,
+                        lease_until=lease_until,
+                        attempts=KnowledgeDocumentRow.attempts + 1,
+                    )
+                    .returning(KnowledgeDocumentRow)
+                )
+            ).scalars().first()
+            if row is None:
+                await session.commit()
+                return None
+            claim = await self._build_claim(session, tenant_id, row)
+            await session.commit()
+            return claim
+
+    async def claim_documents_for_ingest(
+        self, *, now: datetime, lease_seconds: int, limit: int, max_attempts: int
+    ) -> list[ClaimedIngestion]:
+        lease_until = now + timedelta(seconds=lease_seconds)
+        async with self._sf() as session:
+            candidate_ids = (
+                await session.execute(
+                    select(KnowledgeDocumentRow.id)
+                    .where(_claimable(now, max_attempts))
+                    .order_by(KnowledgeDocumentRow.created_at.asc())
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            ).scalars().all()
+            if not candidate_ids:
+                await session.commit()
+                return []
+            rows = (
+                await session.execute(
+                    update(KnowledgeDocumentRow)
+                    .where(KnowledgeDocumentRow.id.in_(candidate_ids))
+                    .values(
+                        status=DocumentStatus.PROCESSING.value,
+                        claimed_at=now,
+                        lease_until=lease_until,
+                        attempts=KnowledgeDocumentRow.attempts + 1,
+                    )
+                    .returning(KnowledgeDocumentRow)
+                )
+            ).scalars().all()
+            claims = [await self._build_claim(session, row.tenant_id, row) for row in rows]
+            await session.commit()
+            return claims
+
+    async def _build_claim(
+        self, session: AsyncSession, tenant_id: UUID, row: KnowledgeDocumentRow
+    ) -> ClaimedIngestion:
+        params = (
+            await session.execute(
+                select(
+                    KnowledgeBaseRow.chunk_max_tokens,
+                    KnowledgeBaseRow.chunk_overlap_tokens,
+                ).where(KnowledgeBaseRow.id == row.kb_id)
+            )
+        ).first()
+        chunk_max, chunk_overlap = (
+            (params.chunk_max_tokens, params.chunk_overlap_tokens)
+            if params is not None
+            else (DEFAULT_CHUNK_MAX_TOKENS, DEFAULT_CHUNK_OVERLAP_TOKENS)
+        )
+        return ClaimedIngestion(
+            tenant_id=tenant_id,
+            document_id=row.id,
+            kb_id=row.kb_id,
+            filename=row.filename,
+            content=row.content,
+            content_sha256=row.content_sha256,
+            chunk_max_tokens=chunk_max,
+            chunk_overlap_tokens=chunk_overlap,
+            attempts=row.attempts,
+        )
+
+    async def mark_document_failed_terminal(
+        self, *, tenant_id: UUID, document_id: UUID, error: str
+    ) -> None:
+        async with self._sf() as session:
+            await session.execute(
+                update(KnowledgeDocumentRow)
+                .where(
+                    KnowledgeDocumentRow.tenant_id == tenant_id,
+                    KnowledgeDocumentRow.id == document_id,
+                )
+                .values(
+                    status=DocumentStatus.FAILED.value,
+                    error=error,
+                    claimed_at=None,
+                    lease_until=None,
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            await session.commit()
 
     async def list_documents(self, *, tenant_id: UUID, kb_id: UUID) -> list[KnowledgeDocument]:
         stmt = (
@@ -377,6 +542,11 @@ class SqlKnowledgeStore(KnowledgeStore):
         }
         if chunk_count is not None:
             values["chunk_count"] = chunk_count
+        # Reaching a terminal state releases the durability lease so the
+        # document is never re-claimed.
+        if status.value in _TERMINAL_STATUSES:
+            values["claimed_at"] = None
+            values["lease_until"] = None
         async with self._sf() as session:
             await session.execute(
                 update(KnowledgeDocumentRow)

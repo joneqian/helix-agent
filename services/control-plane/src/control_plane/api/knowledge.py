@@ -13,6 +13,7 @@ document list for its ``status``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -373,8 +374,14 @@ def build_knowledge_router() -> APIRouter:
         if Path(filename).suffix.lower() not in SUPPORTED_EXTENSIONS:
             raise HTTPException(status_code=400, detail=f"unsupported document type: {filename!r}")
         raw = await file.read()
+        # Retain the original bytes so a crashed/failed document can be
+        # re-driven (crash recovery + re-ingest) without a re-upload.
         document = await store.upsert_document(
-            tenant_id=tenant_id, kb_id=base.id, filename=filename
+            tenant_id=tenant_id,
+            kb_id=base.id,
+            filename=filename,
+            content=raw,
+            content_sha256=hashlib.sha256(raw).hexdigest(),
         )
         runner.submit(
             tenant_id=tenant_id,
@@ -413,6 +420,50 @@ def build_knowledge_router() -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=404, detail="document not found")
         return Response(status_code=204)
+
+    @router.post("/bases/{name}/documents/{document_id}/reingest", response_model=None)
+    async def reingest_document(
+        name: str,
+        document_id: UUID,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        runner: Annotated[KnowledgeIngestionRunner | None, Depends(_get_ingestion_runner)],
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        if runner is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge ingestion unavailable: no embedding model configured",
+            )
+        document = await store.get_document(tenant_id=tenant_id, document_id=document_id)
+        if document is None or document.kb_id != base.id:
+            raise HTTPException(status_code=404, detail="document not found")
+        content = await store.get_document_content(tenant_id=tenant_id, document_id=document_id)
+        if content is None:
+            # Legacy document predating retained bytes — cannot re-drive.
+            raise HTTPException(
+                status_code=409,
+                detail="original file not retained; please re-upload this document",
+            )
+        # Reset to pending (keeps the same bytes) and re-drive the fast path.
+        reset = await store.upsert_document(
+            tenant_id=tenant_id,
+            kb_id=base.id,
+            filename=document.filename,
+            content=content,
+            content_sha256=hashlib.sha256(content).hexdigest(),
+        )
+        runner.submit(
+            tenant_id=tenant_id,
+            document_id=reset.id,
+            kb_id=base.id,
+            filename=document.filename,
+            raw=content,
+            chunk_max_tokens=base.chunk_max_tokens,
+            chunk_overlap_tokens=base.chunk_overlap_tokens,
+        )
+        return JSONResponse(status_code=202, content=_document_dict(reset))
 
     @router.get("/bases/{name}/documents/{document_id}/chunks", response_model=None)
     async def list_chunks(

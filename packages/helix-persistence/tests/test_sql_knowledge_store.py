@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -373,6 +375,164 @@ async def test_stamp_embedding_and_reindex_flag(sql_store: SqlStoreFixture) -> N
         assert cleared is not None
         assert cleared.reindex_requested_at is None
         assert await store.request_reindex(tenant_id=tenant, kb_id=uuid4()) is False
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_upsert_retains_bytes(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"hello bytes"
+        )
+        assert (
+            await store.get_document_content(tenant_id=tenant, document_id=doc.id) == b"hello bytes"
+        )
+        assert await store.get_document_content(tenant_id=uuid4(), document_id=doc.id) is None
+    finally:
+        await engine.dispose()
+
+
+# NOTE: ``postgres_container`` is session-scoped (shared DB) and
+# ``claim_documents_for_ingest`` is intentionally cross-tenant, so assertions
+# below scope to this test's own seeded document ids and never assume the
+# claimable set is empty — other tests leave rows behind.
+
+
+@pytest.mark.asyncio
+async def test_claim_documents_concurrent_exactly_once(sql_store: SqlStoreFixture) -> None:
+    # The CAS + SKIP LOCKED claim must hand each document to exactly one
+    # concurrent claimer — the guarantee an in-memory store cannot prove.
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        seeded = set()
+        for i in range(10):
+            doc = await store.upsert_document(
+                tenant_id=tenant, kb_id=base.id, filename=f"d{i}.md", content=b"x"
+            )
+            seeded.add(doc.id)
+        now = datetime.now(UTC)
+        # Ample per-claimer capacity so every claimable doc (incl. unrelated
+        # leftovers) is taken — what matters is each is taken exactly once.
+        batches = await asyncio.gather(
+            *[
+                store.claim_documents_for_ingest(
+                    now=now, lease_seconds=300, limit=50, max_attempts=5
+                )
+                for _ in range(5)
+            ]
+        )
+        claimed = [c.document_id for batch in batches for c in batch]
+        assert len(claimed) == len(set(claimed))  # no document claimed twice, anywhere
+        claimed_seeded = [d for d in claimed if d in seeded]
+        assert sorted(claimed_seeded) == sorted(seeded)  # each seeded doc claimed exactly once
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_claim_reclaims_expired_processing(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"x"
+        )
+        past = datetime.now(UTC) - timedelta(seconds=10)
+        first = await store.claim_document(
+            tenant_id=tenant, document_id=doc.id, now=past, lease_seconds=0, max_attempts=5
+        )
+        assert first is not None and first.attempts == 1
+        # A sweep at the present reclaims it (the lease expired = crashed worker).
+        reclaimed = await store.claim_documents_for_ingest(
+            now=datetime.now(UTC), lease_seconds=300, limit=50, max_attempts=5
+        )
+        mine = [c for c in reclaimed if c.document_id == doc.id]
+        assert len(mine) == 1
+        assert mine[0].attempts == 2  # reclaimed = a second attempt
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_claim_respects_max_attempts(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"x"
+        )
+        base_time = datetime.now(UTC) - timedelta(seconds=30)
+        # Each claim uses a ``now`` past the previous (0s) lease so the row is
+        # re-claimable; two claims (max=2) exhaust the budget, the third fails.
+        assert (
+            await store.claim_document(
+                tenant_id=tenant,
+                document_id=doc.id,
+                now=base_time,
+                lease_seconds=0,
+                max_attempts=2,
+            )
+            is not None
+        )
+        assert (
+            await store.claim_document(
+                tenant_id=tenant,
+                document_id=doc.id,
+                now=base_time + timedelta(seconds=10),
+                lease_seconds=0,
+                max_attempts=2,
+            )
+            is not None
+        )
+        assert (
+            await store.claim_document(
+                tenant_id=tenant,
+                document_id=doc.id,
+                now=base_time + timedelta(seconds=20),
+                lease_seconds=0,
+                max_attempts=2,
+            )
+            is None
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_set_status_ready_clears_lease(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant = uuid4()
+        base = await store.create_base(tenant_id=tenant, name="kb")
+        doc = await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"x"
+        )
+        await store.claim_document(
+            tenant_id=tenant,
+            document_id=doc.id,
+            now=datetime.now(UTC),
+            lease_seconds=300,
+            max_attempts=5,
+        )
+        await store.set_document_status(
+            tenant_id=tenant, document_id=doc.id, status=DocumentStatus.READY, chunk_count=1
+        )
+        # Terminal → lease released → even a far-future sweep never re-claims it.
+        reclaimed = await store.claim_documents_for_ingest(
+            now=datetime.now(UTC) + timedelta(hours=1),
+            lease_seconds=300,
+            limit=50,
+            max_attempts=5,
+        )
+        assert doc.id not in {c.document_id for c in reclaimed}
     finally:
         await engine.dispose()
 

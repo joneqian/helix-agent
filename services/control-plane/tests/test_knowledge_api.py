@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -508,3 +509,50 @@ async def test_reindex_503_when_embedding_unconfigured(reindex_setup: ReindexSet
 async def test_reindex_missing_base_404(reindex_setup: ReindexSetup) -> None:
     client, _, _ = reindex_setup
     assert (await client.post("/v1/knowledge/bases/ghost/reindex")).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# document re-ingest (durability)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reingest_redrives_document(full_setup: FullSetup) -> None:
+    client, runner, _ = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("h.md", b"# H\n\nThe deductible is 500 dollars.", "text/markdown")},
+    )
+    await runner.drain()
+    doc_id = (await client.get("/v1/knowledge/bases/kb/documents")).json()["documents"][0]["id"]
+
+    resp = await client.post(f"/v1/knowledge/bases/kb/documents/{doc_id}/reingest")
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "pending"
+    await runner.drain()
+    refreshed = (await client.get("/v1/knowledge/bases/kb/documents")).json()["documents"][0]
+    assert refreshed["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_reingest_without_bytes_returns_409(full_setup: FullSetup) -> None:
+    client, _, store = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    base = (await client.get("/v1/knowledge/bases/kb")).json()
+    # A legacy document with no retained bytes (seeded straight on the store).
+    doc = await store.upsert_document(
+        tenant_id=_TENANT, kb_id=UUID(base["id"]), filename="legacy.md"
+    )
+    resp = await client.post(f"/v1/knowledge/bases/kb/documents/{doc.id}/reingest")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_reingest_missing_document_404(full_setup: FullSetup) -> None:
+    client, _, _ = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    resp = await client.post(
+        "/v1/knowledge/bases/kb/documents/00000000-0000-0000-0000-000000000000/reingest"
+    )
+    assert resp.status_code == 404

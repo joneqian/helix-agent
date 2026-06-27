@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -284,6 +285,74 @@ async def test_upsert_existing_document_resets_and_clears_chunks() -> None:
     assert reset.status is DocumentStatus.PENDING
     assert reset.chunk_count == 0
     assert await store.search(tenant_id=tenant, kb_ids=[kb_id], query_embedding=(1.0,)) == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_retains_bytes_and_get_content() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id = uuid4(), uuid4()
+    doc = await store.upsert_document(
+        tenant_id=tenant, kb_id=kb_id, filename="d.md", content=b"hello"
+    )
+    assert await store.get_document_content(tenant_id=tenant, document_id=doc.id) == b"hello"
+    # Cross-tenant isolation.
+    assert await store.get_document_content(tenant_id=uuid4(), document_id=doc.id) is None
+
+
+@pytest.mark.asyncio
+async def test_claim_document_cas_and_terminal_release() -> None:
+
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    doc = await store.upsert_document(
+        tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"x"
+    )
+    now = datetime.now(UTC)
+    claim = await store.claim_document(
+        tenant_id=tenant, document_id=doc.id, now=now, lease_seconds=300, max_attempts=5
+    )
+    assert claim is not None
+    assert claim.content == b"x"
+    assert claim.attempts == 1
+    assert claim.chunk_max_tokens == base.chunk_max_tokens
+    # A second claim while the lease is live returns None (already held).
+    assert (
+        await store.claim_document(
+            tenant_id=tenant, document_id=doc.id, now=now, lease_seconds=300, max_attempts=5
+        )
+        is None
+    )
+    # Reaching a terminal state releases the lease (not re-claimed).
+    await store.mark_document_failed_terminal(
+        tenant_id=tenant, document_id=doc.id, error="boom"
+    )
+    fetched = await store.get_document(tenant_id=tenant, document_id=doc.id)
+    assert fetched is not None
+    assert fetched.status is DocumentStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_claim_documents_for_ingest_batches_claimable() -> None:
+
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    for i in range(3):
+        await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename=f"d{i}.md", content=b"x"
+        )
+    claims = await store.claim_documents_for_ingest(
+        now=datetime.now(UTC), lease_seconds=300, limit=10, max_attempts=5
+    )
+    assert len(claims) == 3
+    # All now claimed (processing + live lease) → a second sweep finds none.
+    assert (
+        await store.claim_documents_for_ingest(
+            now=datetime.now(UTC), lease_seconds=300, limit=10, max_attempts=5
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

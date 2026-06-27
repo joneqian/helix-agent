@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from control_plane.knowledge.chunking import chunk_markdown_semantic
@@ -27,6 +28,58 @@ logger = logging.getLogger(__name__)
 #: A failed document's ``error`` is truncated to this many characters.
 _ERROR_CAP = 500
 
+#: Fast-path durability defaults. The lease is generous (longer than any
+#: single-document ingest) so the recovery worker only reclaims genuinely
+#: crashed work; ``max_attempts`` bounds crash-recovery retries.
+_DEFAULT_LEASE_SECONDS = 300
+_DEFAULT_MAX_ATTEMPTS = 5
+
+
+async def ingest_document_bytes(
+    *,
+    store: KnowledgeStore,
+    embedder: Embedder,
+    tenant_id: UUID,
+    document_id: UUID,
+    kb_id: UUID,
+    filename: str,
+    raw: bytes,
+    chunk_max_tokens: int,
+    chunk_overlap_tokens: int,
+) -> int:
+    """Parse → chunk → embed → store one document; return the chunk count.
+
+    The single source of truth for the pipeline, shared by the fast in-process
+    path (:class:`KnowledgeIngestionRunner`) and the durable recovery worker.
+    """
+    # Parsing is CPU-bound — run it off the event loop.
+    markdown = await asyncio.to_thread(parse_document, filename, raw)
+    chunk_texts = await chunk_markdown_semantic(
+        markdown,
+        max_tokens=chunk_max_tokens,
+        overlap_tokens=chunk_overlap_tokens,
+        embedder=embedder,
+        tenant_id=tenant_id,
+    )
+    if not chunk_texts:
+        await store.replace_chunks(tenant_id=tenant_id, document_id=document_id, chunks=[])
+        return 0
+    embeddings = await embedder.embed(chunk_texts, tenant_id=tenant_id)
+    chunks = [
+        KnowledgeChunk(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+            document_id=document_id,
+            chunk_index=index,
+            content=text,
+            embedding=embedding,
+        )
+        for index, (text, embedding) in enumerate(zip(chunk_texts, embeddings, strict=True))
+    ]
+    await store.replace_chunks(tenant_id=tenant_id, document_id=document_id, chunks=chunks)
+    return len(chunks)
+
 
 class KnowledgeIngestionRunner:
     """Runs the parse → chunk → embed → store pipeline off the request path.
@@ -37,9 +90,18 @@ class KnowledgeIngestionRunner:
     background task is not inside an HTTP request).
     """
 
-    def __init__(self, *, store: KnowledgeStore, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        *,
+        store: KnowledgeStore,
+        embedder: Embedder,
+        lease_seconds: int = _DEFAULT_LEASE_SECONDS,
+        max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+    ) -> None:
         self._store = store
         self._embedder = embedder
+        self._lease_seconds = lease_seconds
+        self._max_attempts = max_attempts
         self._tasks: set[asyncio.Task[None]] = set()
 
     def submit(
@@ -121,12 +183,21 @@ class KnowledgeIngestionRunner:
         # security (the reaper does the same, quota/reaper.py).
         token = current_tenant_id_var.set(tenant_id)
         try:
-            await self._store.set_document_status(
+            # CAS-claim before ingesting so a racing recovery sweep never
+            # double-processes this document. If the claim is lost (the reaper
+            # already took it), this fast path no-ops.
+            claim = await self._store.claim_document(
                 tenant_id=tenant_id,
                 document_id=document_id,
-                status=DocumentStatus.PROCESSING,
+                now=datetime.now(UTC),
+                lease_seconds=self._lease_seconds,
+                max_attempts=self._max_attempts,
             )
-            chunk_count = await self._ingest(
+            if claim is None:
+                return
+            chunk_count = await ingest_document_bytes(
+                store=self._store,
+                embedder=self._embedder,
                 tenant_id=tenant_id,
                 document_id=document_id,
                 kb_id=kb_id,
@@ -143,12 +214,13 @@ class KnowledgeIngestionRunner:
             )
             logger.info("knowledge.ingest_ready document=%s chunks=%d", document_id, chunk_count)
         except Exception as exc:
-            # Any failure marks the document FAILED with a truncated error.
+            # A fast-path failure (parse error, etc.) is terminal — re-ingest is
+            # an explicit user action. Crash recovery (process died mid-ingest)
+            # is handled separately by the recovery worker.
             logger.warning("knowledge.ingest_failed document=%s", document_id, exc_info=True)
-            await self._store.set_document_status(
+            await self._store.mark_document_failed_terminal(
                 tenant_id=tenant_id,
                 document_id=document_id,
-                status=DocumentStatus.FAILED,
                 error=str(exc)[:_ERROR_CAP],
             )
         finally:
@@ -232,46 +304,3 @@ class KnowledgeIngestionRunner:
             if not page or offset >= total:
                 break
         return collected
-
-    async def _ingest(
-        self,
-        *,
-        tenant_id: UUID,
-        document_id: UUID,
-        kb_id: UUID,
-        filename: str,
-        raw: bytes,
-        chunk_max_tokens: int,
-        chunk_overlap_tokens: int,
-    ) -> int:
-        # Parsing is CPU-bound — run it off the event loop.
-        markdown = await asyncio.to_thread(parse_document, filename, raw)
-        chunk_texts = await chunk_markdown_semantic(
-            markdown,
-            max_tokens=chunk_max_tokens,
-            overlap_tokens=chunk_overlap_tokens,
-            embedder=self._embedder,
-            tenant_id=tenant_id,
-        )
-        if not chunk_texts:
-            await self._store.replace_chunks(
-                tenant_id=tenant_id, document_id=document_id, chunks=[]
-            )
-            return 0
-        embeddings = await self._embedder.embed(chunk_texts, tenant_id=tenant_id)
-        chunks = [
-            KnowledgeChunk(
-                id=uuid4(),
-                tenant_id=tenant_id,
-                kb_id=kb_id,
-                document_id=document_id,
-                chunk_index=index,
-                content=text,
-                embedding=embedding,
-            )
-            for index, (text, embedding) in enumerate(zip(chunk_texts, embeddings, strict=True))
-        ]
-        await self._store.replace_chunks(
-            tenant_id=tenant_id, document_id=document_id, chunks=chunks
-        )
-        return len(chunks)

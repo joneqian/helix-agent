@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 from uuid import UUID
 
@@ -38,6 +40,24 @@ class _Unset:
 #: Singleton sentinel for unspecified ``update_base`` arguments. The API layer
 #: passes it (via ``model_fields_set``) for fields the caller omitted.
 UNSET: Final = _Unset()
+
+
+@dataclass(frozen=True)
+class ClaimedIngestion:
+    """A document CAS-claimed for (re-)ingestion plus the bytes + chunking
+    parameters needed to re-drive it without another round trip. ``content``
+    is ``None`` for a legacy document whose original bytes were not retained —
+    the worker marks such a document failed (re-upload required)."""
+
+    tenant_id: UUID
+    document_id: UUID
+    kb_id: UUID
+    filename: str
+    content: bytes | None
+    content_sha256: str | None
+    chunk_max_tokens: int
+    chunk_overlap_tokens: int
+    attempts: int
 
 
 class DuplicateKnowledgeBaseError(Exception):
@@ -144,15 +164,63 @@ class KnowledgeStore(abc.ABC):
 
     @abc.abstractmethod
     async def upsert_document(
-        self, *, tenant_id: UUID, kb_id: UUID, filename: str
+        self,
+        *,
+        tenant_id: UUID,
+        kb_id: UUID,
+        filename: str,
+        content: bytes | None = None,
+        content_sha256: str | None = None,
     ) -> KnowledgeDocument:
         """Create a document at ``PENDING``, or — if ``(kb_id, filename)``
         already exists — reset it to ``PENDING`` (clearing ``error`` /
-        ``chunk_count``) for re-ingestion. Returns the document."""
+        ``chunk_count`` and the durability lease + ``attempts``) for
+        re-ingestion. ``content`` retains the original bytes so the document
+        can be re-driven after a crash / for re-ingest. Returns the document."""
 
     @abc.abstractmethod
     async def get_document(self, *, tenant_id: UUID, document_id: UUID) -> KnowledgeDocument | None:
         """Fetch a document by id, or ``None``."""
+
+    @abc.abstractmethod
+    async def get_document_content(
+        self, *, tenant_id: UUID, document_id: UUID
+    ) -> bytes | None:
+        """The document's retained original bytes, or ``None`` (legacy rows /
+        unknown id)."""
+
+    @abc.abstractmethod
+    async def claim_document(
+        self,
+        *,
+        tenant_id: UUID,
+        document_id: UUID,
+        now: datetime,
+        lease_seconds: int,
+        max_attempts: int,
+    ) -> ClaimedIngestion | None:
+        """Tenant-scoped CAS claim of one document for the fast (in-process)
+        ingest path. Succeeds only if it is claimable (``pending``, or
+        ``processing`` with an expired lease) and under ``max_attempts``;
+        sets ``processing`` + a fresh lease and bumps ``attempts``. Returns
+        the claim or ``None`` if another worker already holds it."""
+
+    @abc.abstractmethod
+    async def claim_documents_for_ingest(
+        self, *, now: datetime, lease_seconds: int, limit: int, max_attempts: int
+    ) -> list[ClaimedIngestion]:
+        """Cross-tenant batch CAS claim for the recovery worker (caller wraps
+        it in a bypass-RLS scope). Claims up to ``limit`` claimable documents
+        (``pending`` or lease-expired ``processing``, under ``max_attempts``),
+        marking each ``processing`` with a fresh lease + bumped ``attempts``.
+        This single scan drains the queue AND recovers crashed work."""
+
+    @abc.abstractmethod
+    async def mark_document_failed_terminal(
+        self, *, tenant_id: UUID, document_id: UUID, error: str
+    ) -> None:
+        """Mark a document ``FAILED`` and clear its lease — used when retries
+        are exhausted or the original bytes are unavailable."""
 
     @abc.abstractmethod
     async def list_documents(self, *, tenant_id: UUID, kb_id: UUID) -> list[KnowledgeDocument]:

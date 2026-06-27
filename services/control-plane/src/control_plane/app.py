@@ -125,6 +125,7 @@ from control_plane.keycloak import (
     ServiceAccountTokenProvider,
 )
 from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
+from control_plane.knowledge.recovery import KnowledgeIngestRecoveryWorker
 from control_plane.manifest import ManifestLoader
 from control_plane.mcp_oauth import default_http_client
 from control_plane.mcp_oauth_refresh import McpOAuthRefresher
@@ -1293,10 +1294,29 @@ def create_app(
                 # takes effect without a restart" (resolve-at-use-time is intended).
                 #
                 # Stream J.5 — the ingestion runner needs the embedder to embed
-                # uploaded knowledge documents.
+                # uploaded knowledge documents. Lease + attempt bounds match the
+                # recovery worker so the fast path and the reaper share one
+                # exactly-once claim contract (Stream KB durability).
                 _app.state.knowledge_ingestion_runner = KnowledgeIngestionRunner(
-                    store=resolved_knowledge_store, embedder=embedder
+                    store=resolved_knowledge_store,
+                    embedder=embedder,
+                    lease_seconds=resolved_settings.knowledge_ingest_lease_s,
+                    max_attempts=resolved_settings.knowledge_ingest_max_attempts,
                 )
+                # Stream KB — durable crash recovery for ingestion: claims stuck
+                # documents (pending / lease-expired processing) and re-drives
+                # them from retained bytes.
+                if resolved_settings.enable_knowledge_recovery_worker:
+                    knowledge_recovery_worker = KnowledgeIngestRecoveryWorker(
+                        store=resolved_knowledge_store,
+                        embedder=embedder,
+                        interval_s=resolved_settings.knowledge_recovery_interval_s,
+                        batch_size=resolved_settings.knowledge_recovery_batch_size,
+                        lease_seconds=resolved_settings.knowledge_ingest_lease_s,
+                        max_attempts=resolved_settings.knowledge_ingest_max_attempts,
+                    )
+                    knowledge_recovery_worker.start()
+                    _app.state.knowledge_recovery_worker = knowledge_recovery_worker
             if reaper is not None:
                 reaper.start()
             if scheduler is not None:
@@ -1550,6 +1570,11 @@ def create_app(
                 langfuse_shutdown = getattr(langfuse_client, "shutdown", None)
                 if callable(langfuse_shutdown):
                     langfuse_shutdown()
+                knowledge_recovery: KnowledgeIngestRecoveryWorker | None = getattr(
+                    _app.state, "knowledge_recovery_worker", None
+                )
+                if knowledge_recovery is not None:
+                    await knowledge_recovery.stop()
                 ingestion_runner: KnowledgeIngestionRunner | None = getattr(
                     _app.state, "knowledge_ingestion_runner", None
                 )
@@ -1618,6 +1643,9 @@ def create_app(
     # lifespan (so it mirrors production retrieval exactly); ``None`` → the
     # endpoint returns 503. Tests inject one.
     app.state.knowledge_retriever = None
+    # The ingestion recovery worker is built + started in the lifespan; this is
+    # the pre-lifespan default so ``getattr`` lookups are well-defined.
+    app.state.knowledge_recovery_worker = None
     app.state.supervisor_client = resolved_supervisor_client
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from helix_agent.persistence.knowledge.base import (
     UNSET,
+    ClaimedIngestion,
     DuplicateKnowledgeBaseError,
     KnowledgeStore,
     _Unset,
@@ -44,6 +45,11 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         self._bases: list[KnowledgeBase] = []
         self._documents: list[KnowledgeDocument] = []
         self._chunks: list[KnowledgeChunk] = []
+        # Durability side-state (the public DTO omits bytes + lease): the SQL
+        # store keeps these on the row. ``_lease`` holds the lease expiry; CAS
+        # races are only meaningfully testable against real Postgres.
+        self._content: dict[UUID, bytes | None] = {}
+        self._lease: dict[UUID, datetime | None] = {}
 
     # -- knowledge bases ----------------------------------------------------
 
@@ -181,8 +187,15 @@ class InMemoryKnowledgeStore(KnowledgeStore):
     # -- documents ----------------------------------------------------------
 
     async def upsert_document(
-        self, *, tenant_id: UUID, kb_id: UUID, filename: str
+        self,
+        *,
+        tenant_id: UUID,
+        kb_id: UUID,
+        filename: str,
+        content: bytes | None = None,
+        content_sha256: str | None = None,
     ) -> KnowledgeDocument:
+        del content_sha256  # tracked alongside bytes in SQL; unused in-memory
         now = datetime.now(UTC)
         existing = next(
             (
@@ -198,11 +211,15 @@ class InMemoryKnowledgeStore(KnowledgeStore):
                     "status": DocumentStatus.PENDING,
                     "error": None,
                     "chunk_count": 0,
+                    "attempts": 0,
                     "updated_at": now,
                 }
             )
             self._documents[self._documents.index(existing)] = reset
             self._chunks = [c for c in self._chunks if c.document_id != existing.id]
+            self._lease[existing.id] = None
+            if content is not None:
+                self._content[existing.id] = content
             return reset
         document = KnowledgeDocument(
             id=uuid4(),
@@ -214,12 +231,88 @@ class InMemoryKnowledgeStore(KnowledgeStore):
             updated_at=now,
         )
         self._documents.append(document)
+        self._content[document.id] = content
+        self._lease[document.id] = None
         return document
 
     async def get_document(self, *, tenant_id: UUID, document_id: UUID) -> KnowledgeDocument | None:
         return next(
             (d for d in self._documents if d.tenant_id == tenant_id and d.id == document_id),
             None,
+        )
+
+    async def get_document_content(
+        self, *, tenant_id: UUID, document_id: UUID
+    ) -> bytes | None:
+        doc = await self.get_document(tenant_id=tenant_id, document_id=document_id)
+        return self._content.get(document_id) if doc is not None else None
+
+    async def claim_document(
+        self,
+        *,
+        tenant_id: UUID,
+        document_id: UUID,
+        now: datetime,
+        lease_seconds: int,
+        max_attempts: int,
+    ) -> ClaimedIngestion | None:
+        doc = await self.get_document(tenant_id=tenant_id, document_id=document_id)
+        if doc is None or not self._is_claimable(doc, now, max_attempts):
+            return None
+        return self._claim(doc, now, lease_seconds)
+
+    async def claim_documents_for_ingest(
+        self, *, now: datetime, lease_seconds: int, limit: int, max_attempts: int
+    ) -> list[ClaimedIngestion]:
+        claimable = [d for d in self._documents if self._is_claimable(d, now, max_attempts)]
+        claimable.sort(key=_created_key)
+        return [self._claim(doc, now, lease_seconds) for doc in claimable[:limit]]
+
+    def _is_claimable(self, doc: KnowledgeDocument, now: datetime, max_attempts: int) -> bool:
+        if doc.attempts >= max_attempts:
+            return False
+        if doc.status is DocumentStatus.PENDING:
+            return True
+        if doc.status is DocumentStatus.PROCESSING:
+            lease = self._lease.get(doc.id)
+            return lease is None or lease < now
+        return False
+
+    def _claim(
+        self, doc: KnowledgeDocument, now: datetime, lease_seconds: int
+    ) -> ClaimedIngestion:
+        claimed = doc.model_copy(
+            update={
+                "status": DocumentStatus.PROCESSING,
+                "attempts": doc.attempts + 1,
+                "updated_at": now,
+            }
+        )
+        self._documents[self._documents.index(doc)] = claimed
+        self._lease[doc.id] = now + timedelta(seconds=lease_seconds)
+        base = next((b for b in self._bases if b.id == doc.kb_id), None)
+        chunk_max = base.chunk_max_tokens if base else DEFAULT_CHUNK_MAX_TOKENS
+        chunk_overlap = base.chunk_overlap_tokens if base else DEFAULT_CHUNK_OVERLAP_TOKENS
+        return ClaimedIngestion(
+            tenant_id=doc.tenant_id,
+            document_id=doc.id,
+            kb_id=doc.kb_id,
+            filename=doc.filename,
+            content=self._content.get(doc.id),
+            content_sha256=None,
+            chunk_max_tokens=chunk_max,
+            chunk_overlap_tokens=chunk_overlap,
+            attempts=claimed.attempts,
+        )
+
+    async def mark_document_failed_terminal(
+        self, *, tenant_id: UUID, document_id: UUID, error: str
+    ) -> None:
+        await self.set_document_status(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            status=DocumentStatus.FAILED,
+            error=error,
         )
 
     async def list_documents(self, *, tenant_id: UUID, kb_id: UUID) -> list[KnowledgeDocument]:
@@ -245,6 +338,8 @@ class InMemoryKnowledgeStore(KnowledgeStore):
         }
         if chunk_count is not None:
             update["chunk_count"] = chunk_count
+        if status in (DocumentStatus.READY, DocumentStatus.FAILED):
+            self._lease[document_id] = None  # terminal → release lease
         self._documents[self._documents.index(document)] = document.model_copy(update=update)
 
     async def delete_document(self, *, tenant_id: UUID, document_id: UUID) -> bool:
