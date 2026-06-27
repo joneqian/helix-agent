@@ -6,7 +6,7 @@
  * "All tenants" choice flips to the cross-tenant aggregate without
  * extra plumbing.
  *
- * H.2 PR 2 adds the **Create** button + ``CreateAgentDrawer`` (Monaco
+ * H.2 PR 2 adds the **Create** button + ``CreateAgentModal`` (Monaco
  * YAML); on success the list refreshes and the new agent's detail page
  * loads. Cmd+K real routes + manifest upload are deferred follow-ups.
  */
@@ -20,7 +20,7 @@ import { useTranslation } from "react-i18next";
 import { listAgents, type AgentRecord, type AgentList } from "../api/agents";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
-import { CreateAgentDrawer } from "../components/CreateAgentDrawer";
+import { CreateAgentModal } from "../components/CreateAgentModal";
 import { PageHeader } from "../components/PageHeader";
 
 const { Text } = Typography;
@@ -233,7 +233,7 @@ export function AgentsList() {
         data-testid="agents-table"
       />
 
-      <CreateAgentDrawer
+      <CreateAgentModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={(created) => {
