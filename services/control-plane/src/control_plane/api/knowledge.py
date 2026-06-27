@@ -26,13 +26,20 @@ from pydantic import BaseModel, Field
 from control_plane.knowledge.ingestion import KnowledgeIngestionRunner
 from control_plane.knowledge.parsing import SUPPORTED_EXTENSIONS
 from helix_agent.persistence import KnowledgeStore
-from helix_agent.persistence.knowledge import DuplicateKnowledgeBaseError
+from helix_agent.persistence.knowledge import UNSET, DuplicateKnowledgeBaseError
 from helix_agent.protocol import (
     DEFAULT_CHUNK_MAX_TOKENS,
     DEFAULT_CHUNK_OVERLAP_TOKENS,
+    DEFAULT_RETRIEVAL_TOP_K,
     KnowledgeBase,
     KnowledgeDocument,
+    RetrievalMethod,
 )
+
+# NOTE: ``KnowledgeRetriever`` lives in ``orchestrator`` — importing it at
+# module top level would cycle (control-plane → orchestrator). The
+# retrieval-test endpoint depends on the object duck-typed (``Any``); it is
+# the same instance the lifespan builds and stashes on ``app.state``.
 
 logger = logging.getLogger("helix.control_plane.knowledge")
 
@@ -41,8 +48,41 @@ class _CreateBaseBody(BaseModel):
     """Body of ``POST /v1/knowledge/bases``."""
 
     name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=2000)
     chunk_max_tokens: int | None = Field(default=None, gt=0)
     chunk_overlap_tokens: int | None = Field(default=None, ge=0)
+    retrieval_top_k: int | None = Field(default=None, ge=1, le=50)
+    retrieval_score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    retrieval_method: RetrievalMethod | None = None
+    rerank_enabled: bool | None = None
+
+
+class _UpdateBaseBody(BaseModel):
+    """Body of ``PATCH /v1/knowledge/bases/{name}``.
+
+    Only the fields the caller actually sends are applied (decided via
+    ``model_fields_set``), so a nullable field can be cleared with an
+    explicit ``null`` and left alone by omission. ``name`` is intentionally
+    absent — renaming would silently break agent ``knowledge_base_refs``.
+    """
+
+    description: str | None = Field(default=None, max_length=2000)
+    chunk_max_tokens: int | None = Field(default=None, gt=0)
+    chunk_overlap_tokens: int | None = Field(default=None, ge=0)
+    retrieval_top_k: int | None = Field(default=None, ge=1, le=50)
+    retrieval_score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    retrieval_method: RetrievalMethod | None = None
+    rerank_enabled: bool | None = None
+
+
+class _TestBody(BaseModel):
+    """Body of ``POST /v1/knowledge/bases/{name}/test`` (retrieval hit-test)."""
+
+    query: str = Field(min_length=1, max_length=4000)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    method: RetrievalMethod | None = None
+    score_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    rerank: bool | None = None
 
 
 def _get_knowledge_store(request: Request) -> KnowledgeStore:
@@ -53,17 +93,34 @@ def _get_ingestion_runner(request: Request) -> KnowledgeIngestionRunner | None:
     return request.app.state.knowledge_ingestion_runner  # type: ignore[no-any-return]
 
 
+def _get_knowledge_retriever(request: Request) -> Any | None:
+    return getattr(request.app.state, "knowledge_retriever", None)
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _base_dict(base: KnowledgeBase) -> dict[str, Any]:
+def _base_dict(base: KnowledgeBase, stats: tuple[int, int] = (0, 0)) -> dict[str, Any]:
+    document_count, chunk_count = stats
     return {
         "id": str(base.id),
         "name": base.name,
+        "description": base.description,
+        "created_by": base.created_by,
         "chunk_max_tokens": base.chunk_max_tokens,
         "chunk_overlap_tokens": base.chunk_overlap_tokens,
+        "retrieval_config": {
+            "top_k": base.retrieval_top_k,
+            "score_threshold": base.retrieval_score_threshold,
+            "method": base.retrieval_method.value,
+            "rerank_enabled": base.rerank_enabled,
+        },
+        "embedding_provider": base.embedding_provider,
+        "embedding_model": base.embedding_model,
+        "stats": {"document_count": document_count, "chunk_count": chunk_count},
         "created_at": _iso(base.created_at),
+        "updated_at": _iso(base.updated_at),
     }
 
 
@@ -74,6 +131,7 @@ def _document_dict(document: KnowledgeDocument) -> dict[str, Any]:
         "status": document.status.value,
         "error": document.error,
         "chunk_count": document.chunk_count,
+        "attempts": document.attempts,
         "created_at": _iso(document.created_at),
         "updated_at": _iso(document.updated_at),
     }
@@ -111,8 +169,14 @@ def build_knowledge_router() -> APIRouter:
             base = await store.create_base(
                 tenant_id=tenant_id,
                 name=body.name,
+                description=body.description,
+                created_by=getattr(request.state, "actor_id", None),
                 chunk_max_tokens=max_tokens,
                 chunk_overlap_tokens=overlap_tokens,
+                retrieval_top_k=body.retrieval_top_k or DEFAULT_RETRIEVAL_TOP_K,
+                retrieval_score_threshold=body.retrieval_score_threshold,
+                retrieval_method=body.retrieval_method or RetrievalMethod.HYBRID,
+                rerank_enabled=body.rerank_enabled if body.rerank_enabled is not None else True,
             )
         except DuplicateKnowledgeBaseError as exc:
             raise HTTPException(status_code=409, detail="knowledge base already exists") from exc
@@ -125,7 +189,71 @@ def build_knowledge_router() -> APIRouter:
     ) -> JSONResponse:
         tenant_id: UUID = request.state.tenant_id
         bases = await store.list_bases(tenant_id=tenant_id)
-        return JSONResponse(content={"bases": [_base_dict(base) for base in bases]})
+        stats = await store.base_stats_many(tenant_id=tenant_id)
+        return JSONResponse(
+            content={
+                "bases": [_base_dict(base, stats.get(base.id, (0, 0))) for base in bases]
+            }
+        )
+
+    @router.get("/bases/{name}", response_model=None)
+    async def get_base(
+        name: str,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        stats = await store.base_stats(tenant_id=tenant_id, kb_id=base.id)
+        return JSONResponse(content=_base_dict(base, stats))
+
+    @router.patch("/bases/{name}", response_model=None)
+    async def update_base(
+        name: str,
+        body: _UpdateBaseBody,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        sent = body.model_fields_set
+        # Resolve the effective overlap/max for the cross-field check, falling
+        # back to the stored values for whichever side the caller omitted (or
+        # sent as null — these columns are non-nullable, so null = leave alone).
+        new_max = (
+            body.chunk_max_tokens
+            if "chunk_max_tokens" in sent and body.chunk_max_tokens is not None
+            else base.chunk_max_tokens
+        )
+        new_overlap = (
+            body.chunk_overlap_tokens
+            if "chunk_overlap_tokens" in sent and body.chunk_overlap_tokens is not None
+            else base.chunk_overlap_tokens
+        )
+        if new_overlap >= new_max:
+            raise HTTPException(
+                status_code=400,
+                detail="chunk_overlap_tokens must be less than chunk_max_tokens",
+            )
+        updated = await store.update_base(
+            tenant_id=tenant_id,
+            kb_id=base.id,
+            description=body.description if "description" in sent else UNSET,
+            chunk_max_tokens=body.chunk_max_tokens if "chunk_max_tokens" in sent else None,
+            chunk_overlap_tokens=(
+                body.chunk_overlap_tokens if "chunk_overlap_tokens" in sent else None
+            ),
+            retrieval_top_k=body.retrieval_top_k if "retrieval_top_k" in sent else None,
+            retrieval_score_threshold=(
+                body.retrieval_score_threshold if "retrieval_score_threshold" in sent else UNSET
+            ),
+            retrieval_method=body.retrieval_method if "retrieval_method" in sent else None,
+            rerank_enabled=body.rerank_enabled if "rerank_enabled" in sent else None,
+        )
+        if updated is None:  # pragma: no cover - guarded by _require_base above
+            raise HTTPException(status_code=404, detail="knowledge base not found")
+        stats = await store.base_stats(tenant_id=tenant_id, kb_id=updated.id)
+        return JSONResponse(content=_base_dict(updated, stats))
 
     @router.delete("/bases/{name}", status_code=204, response_model=None)
     async def delete_base(
@@ -199,5 +327,81 @@ def build_knowledge_router() -> APIRouter:
         if not deleted:
             raise HTTPException(status_code=404, detail="document not found")
         return Response(status_code=204)
+
+    @router.get("/bases/{name}/documents/{document_id}/chunks", response_model=None)
+    async def list_chunks(
+        name: str,
+        document_id: UUID,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        offset: int = 0,
+        limit: int = 50,
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        document = await store.get_document(tenant_id=tenant_id, document_id=document_id)
+        if document is None or document.kb_id != base.id:
+            raise HTTPException(status_code=404, detail="document not found")
+        safe_offset = max(0, offset)
+        safe_limit = max(1, min(limit, 200))
+        chunks, total = await store.list_chunks(
+            tenant_id=tenant_id,
+            document_id=document_id,
+            offset=safe_offset,
+            limit=safe_limit,
+        )
+        return JSONResponse(
+            content={
+                "chunks": [
+                    {"id": str(c.id), "chunk_index": c.chunk_index, "content": c.content}
+                    for c in chunks
+                ],
+                "total": total,
+                "offset": safe_offset,
+                "limit": safe_limit,
+            }
+        )
+
+    @router.post("/bases/{name}/test", response_model=None)
+    async def test_retrieval(
+        name: str,
+        body: _TestBody,
+        request: Request,
+        store: Annotated[KnowledgeStore, Depends(_get_knowledge_store)],
+        retriever: Annotated[Any | None, Depends(_get_knowledge_retriever)],
+    ) -> JSONResponse:
+        tenant_id: UUID = request.state.tenant_id
+        base = await _require_base(store, tenant_id, name)
+        if retriever is None:
+            raise HTTPException(
+                status_code=503,
+                detail="knowledge retrieval unavailable: no embedding model configured",
+            )
+        results = await retriever.search(
+            tenant_id=tenant_id,
+            base_names=[base.name],
+            query=body.query,
+            limit=body.top_k or base.retrieval_top_k,
+            method=body.method,
+            score_threshold=body.score_threshold,
+            rerank=body.rerank,
+        )
+        return JSONResponse(
+            content={
+                "query": body.query,
+                "results": [
+                    {
+                        "content": r.content,
+                        "source": f"{r.filename}#{r.chunk_index}",
+                        "filename": r.filename,
+                        "chunk_index": r.chunk_index,
+                        "score": r.score,
+                        "recall_source": r.recall_source,
+                    }
+                    for r in results
+                ],
+                "count": len(results),
+            }
+        )
 
     return router

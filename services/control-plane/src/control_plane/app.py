@@ -1128,6 +1128,9 @@ def create_app(
                 knowledge_retriever = make_knowledge_retriever(
                     store=resolved_knowledge_store, embedder=embedder, reranker=reranker
                 )
+                # Reused by the ``/v1/knowledge/bases/{name}/test`` endpoint so
+                # the retrieval-test mirrors production retrieval exactly.
+                _app.state.knowledge_retriever = knowledge_retriever
                 base_tool_env = build_tool_env(
                     resolved_tenant_config_service,
                     web_search_client=web_search_client,
@@ -1611,6 +1614,10 @@ def create_app(
     # The ingestion runner is built in the lifespan (it needs the resolved
     # embedder); tests inject one. ``None`` → document upload returns 503.
     app.state.knowledge_ingestion_runner = knowledge_ingestion_runner
+    # The retrieval-test endpoint reuses the same retriever built in the
+    # lifespan (so it mirrors production retrieval exactly); ``None`` → the
+    # endpoint returns 503. Tests inject one.
+    app.state.knowledge_retriever = None
     app.state.supervisor_client = resolved_supervisor_client
     app.state.audit_logger = resolved_audit
     app.state.manifest_loader = resolved_loader

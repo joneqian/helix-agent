@@ -14,6 +14,7 @@ from control_plane.settings import DEFAULT_DEV_TENANT_ID, Settings
 from helix_agent.persistence import InMemoryKnowledgeStore
 from helix_agent.persistence.audit_log import InMemoryAuditLogStore
 from orchestrator.llm import FakeEmbedder
+from orchestrator.tools import KnowledgeRetriever
 from tests.auth_fixtures import TEST_AUDIENCE, TEST_ISSUER, build_test_jwt_verifier, make_test_jwt
 
 _TENANT = DEFAULT_DEV_TENANT_ID
@@ -35,6 +36,7 @@ def _headers() -> dict[str, str]:
 
 
 Setup = tuple[AsyncClient, KnowledgeIngestionRunner]
+FullSetup = tuple[AsyncClient, KnowledgeIngestionRunner, InMemoryKnowledgeStore]
 
 
 @pytest.fixture
@@ -53,6 +55,29 @@ async def setup() -> AsyncIterator[Setup]:
         transport=transport, base_url="http://cp.test", headers=_headers()
     ) as client:
         yield client, runner
+
+
+@pytest.fixture
+async def full_setup() -> AsyncIterator[FullSetup]:
+    """Like ``setup`` but also attaches a real :class:`KnowledgeRetriever`
+    (the retrieval-test endpoint reads it off ``app.state``) and exposes the
+    store so tests can assert/seed directly."""
+    store = InMemoryKnowledgeStore()
+    embedder = FakeEmbedder()
+    runner = KnowledgeIngestionRunner(store=store, embedder=embedder)
+    app = create_app(
+        settings=_settings(),
+        knowledge_repo=store,
+        knowledge_ingestion_runner=runner,
+        audit_logger=build_default_audit_logger(InMemoryAuditLogStore()),
+        jwt_verifier=build_test_jwt_verifier(),
+    )
+    app.state.knowledge_retriever = KnowledgeRetriever(store=store, embedder=embedder)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://cp.test", headers=_headers()
+    ) as client:
+        yield client, runner, store
 
 
 # ---------------------------------------------------------------------------
@@ -193,3 +218,193 @@ async def test_delete_missing_document_returns_404(setup: Setup) -> None:
         "/v1/knowledge/bases/kb/documents/00000000-0000-0000-0000-000000000000"
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# single-base view + stats + edit (commercial uplift)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_base_with_config_and_get_single(setup: Setup) -> None:
+    client, runner = setup
+    created = await client.post(
+        "/v1/knowledge/bases",
+        json={
+            "name": "kb",
+            "description": "HR docs",
+            "retrieval_top_k": 8,
+            "retrieval_score_threshold": 0.4,
+            "retrieval_method": "vector",
+            "rerank_enabled": False,
+        },
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert body["description"] == "HR docs"
+    assert body["retrieval_config"] == {
+        "top_k": 8,
+        "score_threshold": 0.4,
+        "method": "vector",
+        "rerank_enabled": False,
+    }
+    assert body["stats"] == {"document_count": 0, "chunk_count": 0}
+
+    # Upload a doc so stats are non-zero, then GET the single base.
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("h.md", b"# H\n\nThe deductible is 500.", "text/markdown")},
+    )
+    await runner.drain()
+    single = await client.get("/v1/knowledge/bases/kb")
+    assert single.status_code == 200
+    sbody = single.json()
+    assert sbody["stats"]["document_count"] == 1
+    assert sbody["stats"]["chunk_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_get_missing_base_returns_404(setup: Setup) -> None:
+    client, _ = setup
+    assert (await client.get("/v1/knowledge/bases/ghost")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_bases_includes_stats(setup: Setup) -> None:
+    client, runner = setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("d.md", b"# D\n\nbody text here.", "text/markdown")},
+    )
+    await runner.drain()
+    listed = (await client.get("/v1/knowledge/bases")).json()["bases"]
+    assert listed[0]["stats"]["document_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_base_updates_config(setup: Setup) -> None:
+    client, _ = setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb", "description": "orig"})
+    patched = await client.patch(
+        "/v1/knowledge/bases/kb",
+        json={"retrieval_top_k": 12, "retrieval_method": "keyword"},
+    )
+    assert patched.status_code == 200
+    cfg = patched.json()["retrieval_config"]
+    assert cfg["top_k"] == 12
+    assert cfg["method"] == "keyword"
+    # Omitted description is preserved.
+    assert patched.json()["description"] == "orig"
+
+
+@pytest.mark.asyncio
+async def test_patch_base_clear_vs_omit_nullable(setup: Setup) -> None:
+    client, _ = setup
+    await client.post(
+        "/v1/knowledge/bases",
+        json={"name": "kb", "description": "orig", "retrieval_score_threshold": 0.5},
+    )
+    # Explicit null clears the threshold; description omitted → unchanged.
+    patched = await client.patch(
+        "/v1/knowledge/bases/kb", json={"retrieval_score_threshold": None}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["retrieval_config"]["score_threshold"] is None
+    assert patched.json()["description"] == "orig"
+
+
+@pytest.mark.asyncio
+async def test_patch_base_rejects_overlap_not_below_max(setup: Setup) -> None:
+    client, _ = setup
+    await client.post(
+        "/v1/knowledge/bases",
+        json={"name": "kb", "chunk_max_tokens": 200, "chunk_overlap_tokens": 16},
+    )
+    resp = await client.patch("/v1/knowledge/bases/kb", json={"chunk_overlap_tokens": 500})
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_patch_base_rejects_bad_method(setup: Setup) -> None:
+    client, _ = setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    resp = await client.patch("/v1/knowledge/bases/kb", json={"retrieval_method": "magic"})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_missing_base_returns_404(setup: Setup) -> None:
+    client, _ = setup
+    assert (await client.patch("/v1/knowledge/bases/ghost", json={})).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# chunk preview + retrieval test (commercial uplift)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_preview(full_setup: FullSetup) -> None:
+    client, runner, _ = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("h.md", b"# Handbook\n\nThe deductible is 500 dollars.", "text/markdown")},
+    )
+    await runner.drain()
+    doc_id = (await client.get("/v1/knowledge/bases/kb/documents")).json()["documents"][0]["id"]
+    resp = await client.get(f"/v1/knowledge/bases/kb/documents/{doc_id}/chunks")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] >= 1
+    assert body["chunks"][0]["chunk_index"] == 0
+    assert "content" in body["chunks"][0]
+    # The (large) embedding is never returned in a preview.
+    assert "embedding" not in body["chunks"][0]
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_unknown_document_404(full_setup: FullSetup) -> None:
+    client, _, _ = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    resp = await client.get(
+        "/v1/knowledge/bases/kb/documents/00000000-0000-0000-0000-000000000000/chunks"
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_returns_scored_results(full_setup: FullSetup) -> None:
+    client, runner, _ = full_setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    await client.post(
+        "/v1/knowledge/bases/kb/documents",
+        files={"file": ("h.md", b"# H\n\nThe deductible is 500 dollars.", "text/markdown")},
+    )
+    await runner.drain()
+    resp = await client.post("/v1/knowledge/bases/kb/test", json={"query": "deductible"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["query"] == "deductible"
+    assert body["count"] >= 1
+    first = body["results"][0]
+    assert set(first) >= {"content", "source", "filename", "chunk_index", "score", "recall_source"}
+    assert first["source"].startswith("h.md#")
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_missing_base_404(full_setup: FullSetup) -> None:
+    client, _, _ = full_setup
+    resp = await client.post("/v1/knowledge/bases/ghost/test", json={"query": "x"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_retrieval_test_503_when_retriever_unavailable(setup: Setup) -> None:
+    # The plain ``setup`` fixture does not attach a retriever (app.state value
+    # is None), so the endpoint reports the embedding-unconfigured 503.
+    client, _ = setup
+    await client.post("/v1/knowledge/bases", json={"name": "kb"})
+    resp = await client.post("/v1/knowledge/bases/kb/test", json={"query": "x"})
+    assert resp.status_code == 503
