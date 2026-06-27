@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,7 +11,7 @@ from helix_agent.persistence.knowledge import (
     DuplicateKnowledgeBaseError,
     InMemoryKnowledgeStore,
 )
-from helix_agent.protocol import DocumentStatus, KnowledgeChunk
+from helix_agent.protocol import DocumentStatus, KnowledgeChunk, RetrievalMethod
 
 
 def _chunk(
@@ -61,6 +62,123 @@ async def test_create_base_persists_chunk_params() -> None:
     fetched = await store.get_base(tenant_id=tenant, name="tuned")
     assert fetched is not None
     assert fetched.chunk_max_tokens == 256
+
+
+@pytest.mark.asyncio
+async def test_create_base_persists_metadata_and_retrieval_config() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    created = await store.create_base(
+        tenant_id=tenant,
+        name="kb",
+        description="HR docs",
+        created_by="alice@acme.com",
+        retrieval_top_k=8,
+        retrieval_score_threshold=0.4,
+        retrieval_method=RetrievalMethod.VECTOR,
+        rerank_enabled=False,
+        embedding_provider="qwen",
+        embedding_model="text-embedding-v4",
+    )
+    fetched = await store.get_base(tenant_id=tenant, name="kb")
+    assert fetched is not None
+    assert fetched.description == "HR docs"
+    assert fetched.created_by == "alice@acme.com"
+    assert fetched.retrieval_top_k == 8
+    assert fetched.retrieval_score_threshold == 0.4
+    assert fetched.retrieval_method is RetrievalMethod.VECTOR
+    assert fetched.rerank_enabled is False
+    assert fetched.embedding_model == "text-embedding-v4"
+    assert created.updated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_base_patches_supplied_fields_only() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(
+        tenant_id=tenant, name="kb", description="orig", retrieval_top_k=5
+    )
+    updated = await store.update_base(
+        tenant_id=tenant,
+        kb_id=base.id,
+        retrieval_top_k=12,
+        retrieval_method=RetrievalMethod.KEYWORD,
+    )
+    assert updated is not None
+    assert updated.retrieval_top_k == 12
+    assert updated.retrieval_method is RetrievalMethod.KEYWORD
+    # Untouched fields preserved.
+    assert updated.description == "orig"
+
+
+@pytest.mark.asyncio
+async def test_update_base_clear_vs_omit_nullable() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(
+        tenant_id=tenant, name="kb", description="orig", retrieval_score_threshold=0.5
+    )
+    # Omitting description leaves it; clearing the threshold with explicit None.
+    updated = await store.update_base(
+        tenant_id=tenant, kb_id=base.id, retrieval_score_threshold=None
+    )
+    assert updated is not None
+    assert updated.description == "orig"  # omitted → unchanged
+    assert updated.retrieval_score_threshold is None  # explicit None → cleared
+    # Now clear description explicitly.
+    cleared = await store.update_base(tenant_id=tenant, kb_id=base.id, description=None)
+    assert cleared is not None
+    assert cleared.description is None
+
+
+@pytest.mark.asyncio
+async def test_update_missing_base_returns_none() -> None:
+    store = InMemoryKnowledgeStore()
+    assert await store.update_base(tenant_id=uuid4(), kb_id=uuid4(), description="x") is None
+
+
+@pytest.mark.asyncio
+async def test_base_stats_counts_documents_and_chunks() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    other = await store.create_base(tenant_id=tenant, name="other")
+    d1 = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="a.pdf")
+    d2 = await store.upsert_document(tenant_id=tenant, kb_id=base.id, filename="b.pdf")
+    await store.set_document_status(
+        tenant_id=tenant, document_id=d1.id, status=DocumentStatus.READY, chunk_count=3
+    )
+    await store.set_document_status(
+        tenant_id=tenant, document_id=d2.id, status=DocumentStatus.READY, chunk_count=4
+    )
+    assert await store.base_stats(tenant_id=tenant, kb_id=base.id) == (2, 7)
+    assert await store.base_stats(tenant_id=tenant, kb_id=other.id) == (0, 0)
+    many = await store.base_stats_many(tenant_id=tenant)
+    assert many[base.id] == (2, 7)
+    # Bases with no documents are simply absent from the map.
+    assert other.id not in many
+
+
+@pytest.mark.asyncio
+async def test_stamp_embedding_and_reindex_flag() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    await store.stamp_embedding_model(
+        tenant_id=tenant, kb_id=base.id, embedding_provider="qwen", embedding_model="v4"
+    )
+    assert await store.request_reindex(tenant_id=tenant, kb_id=base.id) is True
+    fetched = await store.get_base(tenant_id=tenant, name="kb")
+    assert fetched is not None
+    assert (fetched.embedding_provider, fetched.embedding_model) == ("qwen", "v4")
+    assert fetched.reindex_requested_at is not None
+    await store.clear_reindex(tenant_id=tenant, kb_id=base.id)
+    cleared = await store.get_base(tenant_id=tenant, name="kb")
+    assert cleared is not None
+    assert cleared.reindex_requested_at is None
+    # Missing base → request_reindex returns False.
+    assert await store.request_reindex(tenant_id=tenant, kb_id=uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -167,6 +285,70 @@ async def test_upsert_existing_document_resets_and_clears_chunks() -> None:
     assert reset.status is DocumentStatus.PENDING
     assert reset.chunk_count == 0
     assert await store.search(tenant_id=tenant, kb_ids=[kb_id], query_embedding=(1.0,)) == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_retains_bytes_and_get_content() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id = uuid4(), uuid4()
+    doc = await store.upsert_document(
+        tenant_id=tenant, kb_id=kb_id, filename="d.md", content=b"hello"
+    )
+    assert await store.get_document_content(tenant_id=tenant, document_id=doc.id) == b"hello"
+    # Cross-tenant isolation.
+    assert await store.get_document_content(tenant_id=uuid4(), document_id=doc.id) is None
+
+
+@pytest.mark.asyncio
+async def test_claim_document_cas_and_terminal_release() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    doc = await store.upsert_document(
+        tenant_id=tenant, kb_id=base.id, filename="d.md", content=b"x"
+    )
+    now = datetime.now(UTC)
+    claim = await store.claim_document(
+        tenant_id=tenant, document_id=doc.id, now=now, lease_seconds=300, max_attempts=5
+    )
+    assert claim is not None
+    assert claim.content == b"x"
+    assert claim.attempts == 1
+    assert claim.chunk_max_tokens == base.chunk_max_tokens
+    # A second claim while the lease is live returns None (already held).
+    assert (
+        await store.claim_document(
+            tenant_id=tenant, document_id=doc.id, now=now, lease_seconds=300, max_attempts=5
+        )
+        is None
+    )
+    # Reaching a terminal state releases the lease (not re-claimed).
+    await store.mark_document_failed_terminal(tenant_id=tenant, document_id=doc.id, error="boom")
+    fetched = await store.get_document(tenant_id=tenant, document_id=doc.id)
+    assert fetched is not None
+    assert fetched.status is DocumentStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_claim_documents_for_ingest_batches_claimable() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant = uuid4()
+    base = await store.create_base(tenant_id=tenant, name="kb")
+    for i in range(3):
+        await store.upsert_document(
+            tenant_id=tenant, kb_id=base.id, filename=f"d{i}.md", content=b"x"
+        )
+    claims = await store.claim_documents_for_ingest(
+        now=datetime.now(UTC), lease_seconds=300, limit=10, max_attempts=5
+    )
+    assert len(claims) == 3
+    # All now claimed (processing + live lease) → a second sweep finds none.
+    assert (
+        await store.claim_documents_for_ingest(
+            now=datetime.now(UTC), lease_seconds=300, limit=10, max_attempts=5
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -420,3 +602,116 @@ async def test_keyword_search_no_match_returns_empty() -> None:
 async def test_keyword_search_empty_kb_ids_returns_empty() -> None:
     store = InMemoryKnowledgeStore()
     assert await store.keyword_search(tenant_id=uuid4(), kb_ids=[], query="x") == []
+
+
+# ---------------------------------------------------------------------------
+# scored search + chunk preview (commercial uplift)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_scored_returns_descending_similarity() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id, doc = uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=0,
+                content="near",
+                embedding=(1.0, 0.0),
+            ),
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=1,
+                content="far",
+                embedding=(0.0, 1.0),
+            ),
+        ],
+    )
+    hits = await store.search_scored(tenant_id=tenant, kb_ids=[kb_id], query_embedding=(1.0, 0.0))
+    assert [h.chunk.content for h in hits] == ["near", "far"]
+    assert all(h.source == "vector" for h in hits)
+    # Identical vector → similarity ~1.0; orthogonal → ~0.0.
+    assert hits[0].score == pytest.approx(1.0)
+    assert hits[1].score == pytest.approx(0.0, abs=1e-9)
+    # Scores are monotonically non-increasing.
+    assert hits[0].score >= hits[1].score
+
+
+@pytest.mark.asyncio
+async def test_keyword_search_scored_carries_rank_and_source() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id, doc = uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=0,
+                content="quick brown fox",
+                embedding=(1.0,),
+            )
+        ],
+    )
+    hits = await store.keyword_search_scored(tenant_id=tenant, kb_ids=[kb_id], query="quick fox")
+    assert len(hits) == 1
+    assert hits[0].source == "keyword"
+    assert hits[0].score > 0
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_paginates_and_omits_embedding() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, kb_id, doc = uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=i,
+                content=f"chunk-{i}",
+                embedding=(float(i),),
+            )
+            for i in range(5)
+        ],
+    )
+    page, total = await store.list_chunks(tenant_id=tenant, document_id=doc, offset=1, limit=2)
+    assert total == 5
+    assert [c.chunk_index for c in page] == [1, 2]
+    # Embedding omitted from preview rows.
+    assert all(c.embedding == () for c in page)
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_is_tenant_scoped() -> None:
+    store = InMemoryKnowledgeStore()
+    tenant, other, kb_id, doc = uuid4(), uuid4(), uuid4(), uuid4()
+    await store.replace_chunks(
+        tenant_id=tenant,
+        document_id=doc,
+        chunks=[
+            _chunk(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                document_id=doc,
+                index=0,
+                content="mine",
+                embedding=(1.0,),
+            )
+        ],
+    )
+    page, total = await store.list_chunks(tenant_id=other, document_id=doc)
+    assert (page, total) == ([], 0)

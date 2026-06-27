@@ -12,6 +12,8 @@ from helix_agent.protocol import (
     KnowledgeBase,
     KnowledgeChunk,
     KnowledgeDocument,
+    RetrievalMethod,
+    ScoredChunk,
 )
 
 
@@ -52,6 +54,68 @@ def test_knowledge_base_rejects_overlap_ge_max() -> None:
             chunk_max_tokens=200,
             chunk_overlap_tokens=200,
         )
+
+
+def test_knowledge_base_retrieval_defaults() -> None:
+    kb = KnowledgeBase(id=uuid4(), tenant_id=uuid4(), name="kb")
+    assert kb.retrieval_top_k == 5
+    assert kb.retrieval_score_threshold is None
+    assert kb.retrieval_method is RetrievalMethod.HYBRID
+    assert kb.rerank_enabled is True
+    assert kb.embedding_model is None
+    assert kb.description is None
+
+
+def test_knowledge_base_accepts_retrieval_config() -> None:
+    kb = KnowledgeBase(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        name="kb",
+        description="HR docs",
+        created_by="alice@acme.com",
+        retrieval_top_k=10,
+        retrieval_score_threshold=0.4,
+        retrieval_method=RetrievalMethod.VECTOR,
+        rerank_enabled=False,
+        embedding_provider="qwen",
+        embedding_model="text-embedding-v4",
+    )
+    assert kb.retrieval_top_k == 10
+    assert kb.retrieval_score_threshold == 0.4
+    assert kb.retrieval_method is RetrievalMethod.VECTOR
+    assert kb.rerank_enabled is False
+    assert kb.embedding_model == "text-embedding-v4"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("retrieval_top_k", 0),
+        ("retrieval_top_k", 51),
+        ("retrieval_score_threshold", -0.1),
+        ("retrieval_score_threshold", 1.1),
+    ],
+)
+def test_knowledge_base_rejects_out_of_range_retrieval(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        # Dynamic kwargs for parametrised range checks — mypy can't infer the
+        # per-field type from the spread dict, but the values are intentional.
+        KnowledgeBase(id=uuid4(), tenant_id=uuid4(), name="kb", **{field: value})  # type: ignore[arg-type]
+
+
+def test_scored_chunk_constructs() -> None:
+    chunk = KnowledgeChunk(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        kb_id=uuid4(),
+        document_id=uuid4(),
+        chunk_index=0,
+        content="x",
+        embedding=(0.1,),
+    )
+    scored = ScoredChunk(chunk=chunk, score=0.92, source="vector")
+    assert scored.score == 0.92
+    assert scored.source == "vector"
 
 
 def test_knowledge_document_constructs() -> None:

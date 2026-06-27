@@ -379,6 +379,26 @@ class Settings(BaseSettings):
     #: masse.
     quota_reaper_batch_size: int = Field(default=100, gt=0)
 
+    # ------------------------------------------------------ knowledge ingest durability (KB)
+    #: Whether the knowledge ingestion recovery worker runs. It CAS-claims
+    #: stuck documents (pending / lease-expired processing) and re-drives them
+    #: from retained bytes, so a crash mid-ingest never strands a document.
+    enable_knowledge_recovery_worker: bool = True
+
+    #: How often the recovery worker scans for stuck documents.
+    knowledge_recovery_interval_s: int = Field(default=30, gt=0)
+
+    #: Max documents claimed per recovery cycle.
+    knowledge_recovery_batch_size: int = Field(default=20, gt=0)
+
+    #: Ingestion lease — a claimed document past this with no terminal state is
+    #: treated as crashed and re-claimable. Generous: longer than any single
+    #: document's ingest so the fast path is not pre-empted.
+    knowledge_ingest_lease_s: int = Field(default=300, gt=0)
+
+    #: Bounded ingest attempts before a document goes terminally failed.
+    knowledge_ingest_max_attempts: int = Field(default=5, gt=0)
+
     # ------------------------------------------------------------------ memory DLQ (K.K7)
     #: Stream K.K7 — how often the memory writeback DLQ worker scans
     #: for retry-ready rows. Per-row backoff schedule is owned by the

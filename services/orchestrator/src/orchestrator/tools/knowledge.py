@@ -28,9 +28,9 @@ from uuid import UUID
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from helix_agent.common.search.rrf import rrf_fuse
+from helix_agent.common.search.rrf import rrf_fuse_scored
 from helix_agent.persistence import KnowledgeStore
-from helix_agent.protocol import KnowledgeChunk
+from helix_agent.protocol import KnowledgeBase, KnowledgeChunk, RetrievalMethod
 from orchestrator.tools.registry import ToolBlockedError, ToolContext, ToolResult, ToolSpec
 
 if TYPE_CHECKING:
@@ -70,11 +70,21 @@ class Reranker(Protocol):
 
 @dataclass(frozen=True)
 class RetrievedChunk:
-    """A retrieved chunk with its source document attribution."""
+    """A retrieved chunk with its source document attribution.
+
+    ``score`` is the vector cosine similarity in [0, 1] when the chunk was
+    surfaced by vector recall (``None`` for keyword-only hits, whose
+    ``ts_rank`` is not a comparable similarity). ``recall_source`` records
+    which recall path(s) found it. Both default to ``None`` so the tool's
+    formatted output is unaffected — they exist for the retrieval-test
+    endpoint's transparency.
+    """
 
     content: str
     filename: str
     chunk_index: int
+    score: float | None = None
+    recall_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,41 +151,89 @@ class KnowledgeRetriever:
         base_names: Sequence[str],
         query: str,
         limit: int,
+        method: RetrievalMethod | None = None,
+        score_threshold: float | None = None,
+        rerank: bool | None = None,
     ) -> list[RetrievedChunk]:
         """Hybrid-search ``base_names`` for ``query``, returning the
-        ``limit`` most relevant chunks with source attribution. Base
-        names that do not resolve to a knowledge base are skipped."""
-        kb_ids = await self._resolve_base_ids(tenant_id, base_names)
-        if not kb_ids:
+        ``limit`` most relevant chunks with source attribution + scores.
+
+        ``method`` / ``score_threshold`` / ``rerank`` are *overrides*: when
+        ``None`` each spanned base's own configured default is used. The
+        recall method and similarity threshold are applied **per base**
+        (a query may span bases with different configs); ``rerank`` is
+        resolved query-wide (override > "any spanned base enables it").
+        Base names that do not resolve to a knowledge base are skipped.
+        """
+        bases = await self._resolve_bases(tenant_id, base_names)
+        if not bases:
             return []
         query_embedding = (await self.embedder.embed([query], tenant_id=tenant_id))[0]
-        vector_hits = await self.store.search(
-            tenant_id=tenant_id,
-            kb_ids=kb_ids,
-            query_embedding=query_embedding,
-            limit=self.recall_limit,
-        )
-        keyword_hits = await self.store.keyword_search(
-            tenant_id=tenant_id, kb_ids=kb_ids, query=query, limit=self.recall_limit
-        )
-        fused = rrf_fuse([vector_hits, keyword_hits])
+
+        # Per-base recall, honouring each base's method + threshold. Vector
+        # similarity (the only [0, 1] score) is recorded per chunk; keyword
+        # hits only contribute to fusion + recall_source.
+        rankings: list[list[KnowledgeChunk]] = []
+        vector_score: dict[UUID, float] = {}
+        sources: dict[UUID, set[str]] = {}
+        for base in bases:
+            eff_method = method if method is not None else base.retrieval_method
+            eff_threshold = (
+                score_threshold if score_threshold is not None else base.retrieval_score_threshold
+            )
+            if eff_method in (RetrievalMethod.HYBRID, RetrievalMethod.VECTOR):
+                vector = await self.store.search_scored(
+                    tenant_id=tenant_id,
+                    kb_ids=[base.id],
+                    query_embedding=query_embedding,
+                    limit=self.recall_limit,
+                )
+                if eff_threshold is not None:
+                    vector = [hit for hit in vector if hit.score >= eff_threshold]
+                rankings.append([hit.chunk for hit in vector])
+                for hit in vector:
+                    vector_score[hit.chunk.id] = max(vector_score.get(hit.chunk.id, 0.0), hit.score)
+                    sources.setdefault(hit.chunk.id, set()).add("vector")
+            if eff_method in (RetrievalMethod.HYBRID, RetrievalMethod.KEYWORD):
+                keyword = await self.store.keyword_search_scored(
+                    tenant_id=tenant_id,
+                    kb_ids=[base.id],
+                    query=query,
+                    limit=self.recall_limit,
+                )
+                rankings.append([hit.chunk for hit in keyword])
+                for hit in keyword:
+                    sources.setdefault(hit.chunk.id, set()).add("keyword")
+
+        fused = [chunk for chunk, _score in rrf_fuse_scored(rankings)]
         if not fused:
             return []
-        chunks = await self._rerank(query, fused, limit, tenant_id=tenant_id)
-        return await self._attribute(tenant_id, chunks)
+        rerank_enabled = rerank if rerank is not None else any(b.rerank_enabled for b in bases)
+        chunks = await self._rerank(
+            query, fused, limit, tenant_id=tenant_id, enabled=rerank_enabled
+        )
+        return await self._attribute(tenant_id, chunks, vector_score, sources)
 
-    async def _resolve_base_ids(self, tenant_id: UUID, base_names: Sequence[str]) -> list[UUID]:
-        ids: list[UUID] = []
+    async def _resolve_bases(
+        self, tenant_id: UUID, base_names: Sequence[str]
+    ) -> list[KnowledgeBase]:
+        bases: list[KnowledgeBase] = []
         for name in base_names:
             base = await self.store.get_base(tenant_id=tenant_id, name=name)
             if base is not None:
-                ids.append(base.id)
-        return ids
+                bases.append(base)
+        return bases
 
     async def _rerank(
-        self, query: str, fused: list[KnowledgeChunk], limit: int, *, tenant_id: UUID
+        self,
+        query: str,
+        fused: list[KnowledgeChunk],
+        limit: int,
+        *,
+        tenant_id: UUID,
+        enabled: bool,
     ) -> list[KnowledgeChunk]:
-        if self.reranker is None:
+        if self.reranker is None or not enabled:
             return fused[:limit]
         candidates = fused[: self.recall_limit]
         order = await self.reranker.rerank(
@@ -187,7 +245,11 @@ class KnowledgeRetriever:
         return [candidates[i] for i in order]
 
     async def _attribute(
-        self, tenant_id: UUID, chunks: Sequence[KnowledgeChunk]
+        self,
+        tenant_id: UUID,
+        chunks: Sequence[KnowledgeChunk],
+        vector_score: Mapping[UUID, float],
+        sources: Mapping[UUID, set[str]],
     ) -> list[RetrievedChunk]:
         filenames: dict[UUID, str] = {}
         for document_id in {chunk.document_id for chunk in chunks}:
@@ -198,6 +260,8 @@ class KnowledgeRetriever:
                 content=chunk.content,
                 filename=filenames[chunk.document_id],
                 chunk_index=chunk.chunk_index,
+                score=vector_score.get(chunk.id),
+                recall_source=_recall_source(sources.get(chunk.id, set())),
             )
             for chunk in chunks
         ]
@@ -294,6 +358,16 @@ def _parse_rerank_order(text: str, count: int) -> list[int]:
             seen.add(index)
             order.append(index)
     return order
+
+
+def _recall_source(found_by: set[str]) -> str | None:
+    """Collapse the set of recall paths that surfaced a chunk into a label:
+    ``"both"`` when vector and keyword agreed, else the single path."""
+    if "vector" in found_by and "keyword" in found_by:
+        return "both"
+    if found_by:
+        return next(iter(found_by))
+    return None
 
 
 def _message_text(message: object) -> str:
