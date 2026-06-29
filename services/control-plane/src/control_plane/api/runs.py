@@ -1040,7 +1040,7 @@ def build_runs_router() -> APIRouter:
             }
             snapshot = await built.graph.aget_state(config)  # type: ignore[attr-defined]
         except Exception:
-            logger.warning("thread_messages.read_failed thread_id=%s", thread_id, exc_info=True)
+            logger.warning("thread_messages.read_failed", exc_info=True)
             return empty
         raw = snapshot.values.get("messages", []) if snapshot is not None else []
         out: list[dict[str, str]] = []
