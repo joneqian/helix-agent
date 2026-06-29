@@ -921,17 +921,6 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
               ? ""
               : t("playground.turn_count", { n: turns.length })}
           </Text>
-          <Segmented<"timeline" | "raw">
-            size="small"
-            value={eventView}
-            onChange={setEventView}
-            options={[
-              { value: "timeline", label: t("event_stream.view_timeline") },
-              { value: "raw", label: t("event_stream.view_raw") },
-            ]}
-            style={{ marginLeft: "auto" }}
-            data-testid="playground-event-view-toggle"
-          />
         </div>
 
         <div
@@ -958,6 +947,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
               key={turn.id}
               turn={turn}
               eventView={eventView}
+              onViewChange={setEventView}
               threadId={thread?.thread_id ?? null}
               rate={rate}
               onDecide={handleDecide}
@@ -1057,6 +1047,7 @@ function ApprovalGate({
 function TurnCard({
   turn,
   eventView,
+  onViewChange,
   threadId,
   rate,
   onDecide,
@@ -1064,6 +1055,7 @@ function TurnCard({
 }: {
   turn: Turn;
   eventView: "timeline" | "raw";
+  onViewChange: (view: "timeline" | "raw") => void;
   threadId: string | null;
   rate: RateCardRecord | null;
   onDecide: (turnId: string, approval: ApprovalItem, decision: "approve" | "reject") => void;
@@ -1256,7 +1248,35 @@ function TurnCard({
             : []),
           {
             key: "events",
-            label: t("playground.events_label"),
+            label: (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                }}
+              >
+                <span>{t("playground.events_label")}</span>
+                {/* Toggle lives next to the content it switches; stop the click
+                    from collapsing the panel. */}
+                <span
+                  onClick={(e) => e.stopPropagation()}
+                  role="presentation"
+                >
+                  <Segmented<"timeline" | "raw">
+                    size="small"
+                    value={eventView}
+                    onChange={onViewChange}
+                    options={[
+                      { value: "timeline", label: t("event_stream.view_timeline") },
+                      { value: "raw", label: t("event_stream.view_raw") },
+                    ]}
+                    data-testid="playground-event-view-toggle"
+                  />
+                </span>
+              </div>
+            ),
             children:
               turn.events.length === 0 ? (
                 <Text type="secondary" style={{ fontSize: 12 }}>
