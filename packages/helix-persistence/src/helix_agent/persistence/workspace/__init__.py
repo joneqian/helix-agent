@@ -29,6 +29,18 @@ from helix_agent.persistence.workspace.dlq import (
 from helix_agent.persistence.workspace.dlq import (
     VolumeOpKind as VolumeOpKind,
 )
+from helix_agent.persistence.workspace.layout import (
+    WORKSPACE_RESERVED_PREFIXES as WORKSPACE_RESERVED_PREFIXES,
+)
+from helix_agent.persistence.workspace.layout import (
+    WORKSPACE_SKILLS_DIR as WORKSPACE_SKILLS_DIR,
+)
+from helix_agent.persistence.workspace.layout import (
+    WORKSPACE_UPLOADS_DIR as WORKSPACE_UPLOADS_DIR,
+)
+from helix_agent.persistence.workspace.layout import (
+    is_reserved_workspace_path as is_reserved_workspace_path,
+)
 from helix_agent.persistence.workspace.memory import (
     InMemoryUserWorkspaceStore as InMemoryUserWorkspaceStore,
 )
@@ -37,6 +49,9 @@ from helix_agent.persistence.workspace.sql import (
 )
 
 __all__ = [
+    "WORKSPACE_RESERVED_PREFIXES",
+    "WORKSPACE_SKILLS_DIR",
+    "WORKSPACE_UPLOADS_DIR",
     "InMemoryUserWorkspaceStore",
     "InMemoryVolumeBackupDLQ",
     "SqlUserWorkspaceStore",
@@ -46,5 +61,6 @@ __all__ = [
     "VolumeDLQRow",
     "VolumeOpKind",
     "WorkspaceNotFoundError",
+    "is_reserved_workspace_path",
     "workspace_volume_name",
 ]

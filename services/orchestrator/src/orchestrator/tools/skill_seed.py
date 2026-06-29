@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from helix_agent.common.threat_patterns import scan_for_threats
+from helix_agent.persistence import WORKSPACE_SKILLS_DIR
 from helix_agent.protocol import AuditAction, AuditResult, SkillVersion
 from helix_agent.protocol.audit import AuditEntry
 from helix_agent.protocol.skill import compute_content_hash, supporting_files_to_jsonable
@@ -150,7 +151,10 @@ def build_skill_seed_files(
             continue
 
         candidates: list[tuple[str, bytes]] = [
-            (f"skills/{name}/SKILL.md", _skill_md_with_name(name, version).encode("utf-8"))
+            (
+                f"{WORKSPACE_SKILLS_DIR}/{name}/SKILL.md",
+                _skill_md_with_name(name, version).encode("utf-8"),
+            )
         ]
         for relpath, entry in sorted(version.supporting_files.items()):
             try:
@@ -168,7 +172,7 @@ def build_skill_seed_files(
                 logger.warning("skill_seed.blocked skill=%s path=%s", name, relpath)
                 drops.append(SeedDrop(skill_name=name, reason="injection", path=relpath))
                 continue
-            candidates.append((f"skills/{name}/{relpath}", raw))
+            candidates.append((f"{WORKSPACE_SKILLS_DIR}/{name}/{relpath}", raw))
 
         for path, data in candidates:
             if len(out) >= _MAX_SEED_FILES or total + len(data) > _MAX_SEED_TOTAL_BYTES:
