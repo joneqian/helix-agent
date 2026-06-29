@@ -81,5 +81,11 @@ impersonation + 自由填都受同一闸:仅 admin 角色可设,全审计(audit-
 
 ## 实施顺序(分 PR)
 
-- PR1 后端:`run_as_user_id` + 审计 + workspace 端点。
-- PR2 前端:多轮转录 + user picker + 每轮观测 + 工作区面板。
+- PR1 后端:`run_as_user_id` + 审计(已交付)。
+- PR2 前端:多轮转录 + user picker + 每轮观测(已交付)。
+- **PR3 D4 工作区检视(待确认)**:实施期发现 `UserWorkspaceStore.resolve` 是
+  **upsert**(读会创建行 → 违背「验证是否真启动」),且该 store 未挂 control-plane
+  `app.state`。正确做法 = 加只读 `get`(ABC+sql+memory)+ app.state 接线 + 新端点,
+  非「artifacts-only」弱面板。故 D4 拆为独立 PR3,避免弱能力伪装成设计选择
+  (feedback_no_design_choice_disguise)。**临时验证路径**:设 user_id 后跑一个沙箱
+  工具(exec_python/bash)→ 事件流时间线即证 VM 起了。
