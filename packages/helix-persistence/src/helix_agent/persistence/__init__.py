@@ -286,6 +286,15 @@ from helix_agent.persistence.webhook import SqlWebhookEndpointStore as SqlWebhoo
 from helix_agent.persistence.webhook import WebhookDeliveryStore as WebhookDeliveryStore
 from helix_agent.persistence.webhook import WebhookEndpointStore as WebhookEndpointStore
 from helix_agent.persistence.workspace import (
+    WORKSPACE_RESERVED_PREFIXES as WORKSPACE_RESERVED_PREFIXES,
+)
+from helix_agent.persistence.workspace import (
+    WORKSPACE_SKILLS_DIR as WORKSPACE_SKILLS_DIR,
+)
+from helix_agent.persistence.workspace import (
+    WORKSPACE_UPLOADS_DIR as WORKSPACE_UPLOADS_DIR,
+)
+from helix_agent.persistence.workspace import (
     InMemoryUserWorkspaceStore as InMemoryUserWorkspaceStore,
 )
 from helix_agent.persistence.workspace import (
@@ -310,12 +319,18 @@ from helix_agent.persistence.workspace import (
     WorkspaceNotFoundError as WorkspaceNotFoundError,
 )
 from helix_agent.persistence.workspace import (
+    is_reserved_workspace_path as is_reserved_workspace_path,
+)
+from helix_agent.persistence.workspace import (
     workspace_volume_name as workspace_volume_name,
 )
 
 __all__ = [
     "RLS_GUC_NAME",
     "RLS_USER_GUC_NAME",
+    "WORKSPACE_RESERVED_PREFIXES",
+    "WORKSPACE_SKILLS_DIR",
+    "WORKSPACE_UPLOADS_DIR",
     "ApprovalStore",
     "ArtifactRow",
     "ArtifactStore",
@@ -444,5 +459,6 @@ __all__ = [
     "create_async_session_factory",
     "current_tenant_id_var",
     "current_user_id_var",
+    "is_reserved_workspace_path",
     "workspace_volume_name",
 ]

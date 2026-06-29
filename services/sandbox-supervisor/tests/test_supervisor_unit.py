@@ -937,6 +937,25 @@ async def test_list_workspace_files_returns_entries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_workspace_files_hides_reserved_prefixes() -> None:
+    # ``skills/`` (seeded machinery) + ``uploads/`` (user inputs) are reserved
+    # namespaces — the browse listing shows only the agent's own output.
+    h = _harness(
+        docker=RecordingDockerClient(
+            volume_files=[
+                (8900, "skills/pptx/SKILL.md"),
+                (4900, "skills/pptx/scripts/office/pack.py"),
+                (50, "uploads/ticket.pdf"),
+                (2048, "report.pdf"),
+                (12, "out/notes.txt"),
+            ]
+        )
+    )
+    entries = await h.supervisor.list_workspace_files(tenant_id=uuid4(), user_id=uuid4())
+    assert entries == [(2048, "report.pdf"), (12, "out/notes.txt")]
+
+
+@pytest.mark.asyncio
 async def test_list_workspace_files_missing_volume_is_empty() -> None:
     # A volume that has never been created surfaces as an empty inventory,
     # not an error — the inspector renders "no files" the same as "no volume".

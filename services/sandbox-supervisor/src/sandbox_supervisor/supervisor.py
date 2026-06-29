@@ -24,7 +24,11 @@ from uuid import UUID, uuid4
 
 from helix_agent.common.egress_token import mint_egress_token
 from helix_agent.common.observability import helix_histogram
-from helix_agent.persistence import UserWorkspaceStore, workspace_volume_name
+from helix_agent.persistence import (
+    UserWorkspaceStore,
+    is_reserved_workspace_path,
+    workspace_volume_name,
+)
 from helix_agent.protocol import AuditEntry, UserWorkspace
 from helix_agent.protocol.audit import AuditAction, AuditResult
 from helix_agent.runtime.sandbox import SandboxResourceLimits, SandboxRuntimeProvider
@@ -483,13 +487,17 @@ class SandboxSupervisor:
         """
         volume = workspace_volume_name(tenant_id, user_id)
         try:
-            return await self._docker.list_volume_files(
+            entries = await self._docker.list_volume_files(
                 volume=volume,
                 image=self._settings.sandbox_image,
                 max_entries=_MAX_WORKSPACE_LIST_ENTRIES,
             )
         except DockerError:
             return []
+        # Hide machinery (seeded skill packages) + inputs (uploads) — show only
+        # what the agent itself produced. ``is_reserved_workspace_path`` is the
+        # shared source of truth with the seeders that write those prefixes.
+        return [(size, rel) for size, rel in entries if not is_reserved_workspace_path(rel)]
 
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         """Read a file from a user's persistent workspace volume (Stream J.9).

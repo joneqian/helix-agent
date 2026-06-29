@@ -36,6 +36,7 @@ from control_plane.audit import emit as audit_emit
 from control_plane.quota.base import QuotaService
 from control_plane.settings import Settings
 from helix_agent.common.observability import current_trace_id_hex
+from helix_agent.persistence import WORKSPACE_UPLOADS_DIR
 from helix_agent.persistence.image_upload import ImageUploadStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.protocol import AuditAction, AuditResult, QuotaDimension
@@ -72,8 +73,10 @@ _ZIP_DOC_EXTS: Final[frozenset[str]] = frozenset({".docx", ".xlsx", ".pptx"})
 #: sandbox parse memory (read from the central directory, nothing is extracted).
 _MAX_ZIP_UNCOMPRESSED_BYTES: Final[int] = 200 * 1024 * 1024
 #: Workspace subdirectory uploaded documents land in (namespaced away from
-#: agent-written files so an upload can't clobber the agent's own output).
-_UPLOAD_DIR: Final[str] = "uploads"
+#: agent-written files so an upload can't clobber the agent's own output, and
+#: hidden from the "agent products" browse — shared source of truth in
+#: :mod:`helix_agent.persistence.workspace.layout`).
+_UPLOAD_DIR: Final[str] = WORKSPACE_UPLOADS_DIR
 _SAFE_STEM_RE: Final[re.Pattern[str]] = re.compile(r"[^A-Za-z0-9._-]+")
 
 
