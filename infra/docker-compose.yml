@@ -22,6 +22,15 @@ x-control-plane-base: &control-plane-base
     # ADR B-6: durable Postgres stores. The ``migrate`` one-shot service
     # runs the Alembic migrations first (depends_on below).
     HELIX_AGENT_STORE_BACKEND: sql
+    # LangGraph conversation checkpointer. Default postgres so the per-user
+    # persistent agent (conversation + memory + workspace) keeps its history
+    # across restarts — the in-memory saver loses every thread on restart,
+    # which contradicts the product's "persistent" promise. ``AsyncPostgresSaver``
+    # self-creates its tables (saver.setup()); it connects DIRECT to postgres:5432
+    # (NOT pgbouncer — transaction pooling breaks LangGraph's prepared statements).
+    # Override to ``memory`` in infra/.env for a throwaway single-process stack.
+    HELIX_AGENT_CHECKPOINTER_BACKEND: ${HELIX_AGENT_CHECKPOINTER_BACKEND:-postgres}
+    HELIX_AGENT_CHECKPOINTER_DSN: postgresql://${HELIX_DB_USER:-helix_agent}:${HELIX_DB_PASSWORD:-helix_agent_dev}@postgres:5432/${HELIX_DB_NAME:-helix_agent_dev}
     HELIX_AGENT_QUOTA_REDIS_URL: redis://redis:6379/0
     HELIX_AGENT_SANDBOX_SUPERVISOR_URL: http://sandbox-supervisor:8000
     # Trace export (A.8) — reached only when the observability profile
