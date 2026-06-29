@@ -577,6 +577,13 @@ const zhCN: TranslationKeys = {
     usage_reasoning: "思考",
     reasoning_label: "思考过程",
     events_label: "事件",
+    workspace_label: "工作区",
+    workspace_refresh: "刷新工作区",
+    workspace_volume: "卷",
+    workspace_size: "大小",
+    workspace_deleted: "已删除",
+    workspace_none: "暂无工作区 —— 写文件的运行会创建它。",
+    workspace_artifacts: "产物",
   },
   event_stream: {
     title: "事件流",

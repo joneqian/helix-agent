@@ -51,6 +51,7 @@ const streamRunMock = vi.spyOn(sessionsSdk, "streamRun");
 const uploadImageMock = vi.spyOn(uploadsSdk, "uploadImage");
 const uploadDocumentMock = vi.spyOn(uploadsSdk, "uploadDocument");
 const listMembersMock = vi.spyOn(membersSdk, "listMembers");
+const getWorkspaceMock = vi.spyOn(sessionsSdk, "getSessionWorkspace");
 
 beforeEach(() => {
   createSessionMock.mockReset();
@@ -59,6 +60,8 @@ beforeEach(() => {
   uploadDocumentMock.mockReset();
   listMembersMock.mockReset();
   listMembersMock.mockResolvedValue({ items: [], total: 0 });
+  getWorkspaceMock.mockReset();
+  getWorkspaceMock.mockResolvedValue({ workspace: null, artifacts: [] });
 });
 
 afterEach(() => {
@@ -377,6 +380,48 @@ describe("PlaygroundTab", () => {
     expect(screen.getAllByTestId("playground-usage")).toHaveLength(2);
     // The thread is reused across turns (multi-turn continuation).
     expect(streamRunMock.mock.calls.every(([tid]) => tid === sampleThread.thread_id)).toBe(true);
+  });
+
+  it("shows the workspace inspector with the volume + artifacts", async () => {
+    createSessionMock.mockResolvedValue(sampleThread);
+    getWorkspaceMock.mockResolvedValue({
+      workspace: {
+        id: "w1",
+        tenant_id: sampleThread.tenant_id,
+        user_id: "u-1",
+        volume_name: "helix-ws-t-u",
+        size_bytes: 2048,
+        size_limit_bytes: 1000000,
+        created_at: null,
+        last_accessed_at: null,
+        deleted_at: null,
+        archived_object_key: null,
+      },
+      artifacts: [
+        {
+          name: "report.md",
+          kind: "document",
+          latest_version: 2,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+    });
+    render(<PlaygroundTab detail={sampleDetail} />);
+    await screen.findByText(/33333333-3333-3333/);
+    const panel = await screen.findByTestId("playground-workspace");
+    expect(panel).toHaveTextContent("helix-ws-t-u");
+    expect(panel).toHaveTextContent("2.0 KB");
+    expect(panel).toHaveTextContent("report.md");
+  });
+
+  it("shows 'no workspace' when the user has none (read-only null)", async () => {
+    createSessionMock.mockResolvedValue(sampleThread);
+    render(<PlaygroundTab detail={sampleDetail} />);
+    await screen.findByText(/33333333-3333-3333/);
+    expect(
+      await screen.findByTestId("playground-workspace-none"),
+    ).toBeInTheDocument();
   });
 
   it("removes an attachment when its tag is closed", async () => {

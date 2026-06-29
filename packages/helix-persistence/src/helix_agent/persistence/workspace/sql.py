@@ -80,6 +80,17 @@ class SqlUserWorkspaceStore(UserWorkspaceStore):
                 raise RuntimeError(msg)
             return _row_to_workspace(row)
 
+    async def get(self, *, tenant_id: UUID, user_id: UUID) -> UserWorkspace | None:
+        async with self._sf() as session:
+            result = await session.execute(
+                select(UserWorkspaceRow).where(
+                    UserWorkspaceRow.tenant_id == tenant_id,
+                    UserWorkspaceRow.user_id == user_id,
+                )
+            )
+            row = result.scalar_one_or_none()
+            return _row_to_workspace(row) if row is not None else None
+
     async def update_size(self, *, workspace_id: UUID, size_bytes: int) -> None:
         async with self._sf() as session:
             result = await session.execute(

@@ -50,6 +50,44 @@ export async function createSession(
   return unwrap(response.data);
 }
 
+/** Playground-Uplift D4 — the thread user's persistent workspace + artifacts.
+ *  ``workspace`` is null when no VM has ever started for that user (read-only;
+ *  the inspector never provisions one). */
+export interface WorkspaceMeta {
+  id: string;
+  tenant_id: string;
+  user_id: string;
+  volume_name: string;
+  size_bytes: number;
+  size_limit_bytes: number;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  deleted_at: string | null;
+  archived_object_key: string | null;
+}
+
+export interface WorkspaceArtifact {
+  name: string;
+  kind: string;
+  latest_version: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SessionWorkspace {
+  workspace: WorkspaceMeta | null;
+  artifacts: WorkspaceArtifact[];
+}
+
+export async function getSessionWorkspace(
+  threadId: string,
+): Promise<SessionWorkspace> {
+  const response = await apiClient.get<ApiEnvelope<SessionWorkspace>>(
+    `/v1/sessions/${threadId}/workspace`,
+  );
+  return unwrap(response.data);
+}
+
 export interface RunRequest {
   input?: string | null;
   image_refs?: string[];

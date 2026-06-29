@@ -31,8 +31,10 @@ import {
 } from "antd";
 import {
   FileText,
+  HardDrive,
   ImagePlus,
   Play,
+  RefreshCw,
   RotateCcw,
   Send,
   Square,
@@ -45,8 +47,10 @@ import { ApiError } from "../../api/client";
 import { listMembers } from "../../api/members";
 import {
   createSession,
+  getSessionWorkspace,
   streamRun,
   type RunRequest,
+  type SessionWorkspace,
   type SseEvent,
   type ThreadMeta,
 } from "../../api/sessions";
@@ -98,6 +102,18 @@ interface UserOption {
   label: string;
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(1)} ${units[i]}`;
+}
+
 export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   const { t } = useTranslation();
   const r = detail.record;
@@ -125,6 +141,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   // Playground-Uplift D1 — impersonation. Empty = run as self.
   const [runAsUser, setRunAsUser] = useState("");
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  // Playground-Uplift D4 — workspace inspector (verify the VM started + persists).
+  const [workspace, setWorkspace] = useState<SessionWorkspace | null>(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -299,6 +318,23 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
       abortRef.current = null;
     }
   }, [thread, input, running, attachments, promptVariables, varValues, turns.length, t]);
+
+  const loadWorkspace = useCallback(async (threadId: string) => {
+    setWorkspaceLoading(true);
+    try {
+      setWorkspace(await getSessionWorkspace(threadId));
+    } catch {
+      setWorkspace(null);
+    } finally {
+      setWorkspaceLoading(false);
+    }
+  }, []);
+
+  // Refresh the workspace view when the thread (re)binds and after each run —
+  // a run that wrote files makes the volume appear / its size grow.
+  useEffect(() => {
+    if (thread && !running) void loadWorkspace(thread.thread_id);
+  }, [thread, running, loadWorkspace]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -575,6 +611,83 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             </Button>
           )}
         </Space>
+
+        {/* Playground-Uplift D4 — workspace inspector. */}
+        {thread && (
+          <div
+            data-testid="playground-workspace"
+            style={{
+              marginTop: "auto",
+              borderTop: "1px solid var(--hx-border-subtle)",
+              paddingTop: 8,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginBottom: 6,
+              }}
+            >
+              <HardDrive size={13} strokeWidth={1.75} />
+              <Text strong style={{ fontSize: 12 }}>
+                {t("playground.workspace_label")}
+              </Text>
+              <Button
+                size="small"
+                type="text"
+                icon={<RefreshCw size={11} strokeWidth={1.75} />}
+                loading={workspaceLoading}
+                onClick={() => void loadWorkspace(thread.thread_id)}
+                aria-label={t("playground.workspace_refresh")}
+                data-testid="playground-workspace-refresh"
+                style={{ marginLeft: "auto" }}
+              />
+            </div>
+            {workspace?.workspace ? (
+              <div style={{ fontSize: 11 }} className="mono">
+                <div data-testid="playground-workspace-volume">
+                  {t("playground.workspace_volume")}:{" "}
+                  {workspace.workspace.volume_name}
+                </div>
+                <div>
+                  {t("playground.workspace_size")}:{" "}
+                  {formatBytes(workspace.workspace.size_bytes)}
+                  {workspace.workspace.deleted_at
+                    ? ` · ${t("playground.workspace_deleted")}`
+                    : ""}
+                </div>
+              </div>
+            ) : (
+              <Text
+                type="secondary"
+                style={{ fontSize: 11 }}
+                data-testid="playground-workspace-none"
+              >
+                {t("playground.workspace_none")}
+              </Text>
+            )}
+            {workspace && workspace.artifacts.length > 0 && (
+              <div style={{ marginTop: 6 }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {t("playground.workspace_artifacts")}:
+                </Text>
+                <div style={{ marginTop: 4 }}>
+                  {workspace.artifacts.map((a) => (
+                    <Tag
+                      key={a.name}
+                      bordered={false}
+                      style={{ fontSize: 10, marginBottom: 2 }}
+                    >
+                      {a.name} · {a.kind} v{a.latest_version}
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Right — conversation transcript */}

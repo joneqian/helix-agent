@@ -46,9 +46,11 @@ from control_plane.tenant_scope import (
 )
 from helix_agent.common.observability import current_trace_id_hex
 from helix_agent.persistence.agent_spec import AgentSpecStore
+from helix_agent.persistence.artifact import ArtifactStore
 from helix_agent.persistence.tenant_config import TenantConfigStore
 from helix_agent.persistence.tenant_user import TenantUserStore
 from helix_agent.persistence.thread_meta import ThreadMetaStore
+from helix_agent.persistence.workspace import UserWorkspaceStore
 from helix_agent.protocol import AgentSpecStatus, AuditAction, AuditResult, ThreadStatus
 from helix_agent.runtime.audit.logger import AuditLogger
 
@@ -115,6 +117,14 @@ def _get_quota(request: Request) -> QuotaService:
 
 def _get_tenant_config_repo(request: Request) -> TenantConfigStore:
     return request.app.state.tenant_config_repo  # type: ignore[no-any-return]
+
+
+def _get_workspace_store(request: Request) -> UserWorkspaceStore:
+    return request.app.state.user_workspace_store  # type: ignore[no-any-return]
+
+
+def _get_artifact_store(request: Request) -> ArtifactStore:
+    return request.app.state.artifact_store  # type: ignore[no-any-return]
 
 
 async def _resolve_agent_selection(
@@ -337,6 +347,46 @@ def build_sessions_router() -> APIRouter:
             trace_id=current_trace_id_hex(),
         )
         return JSONResponse({"success": True, "data": meta.model_dump(mode="json")})
+
+    @router.get("/{thread_id}/workspace")
+    async def get_session_workspace(
+        thread_id: UUID,
+        request: Request,
+        threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        workspaces: Annotated[UserWorkspaceStore, Depends(_get_workspace_store)],
+        artifacts: Annotated[ArtifactStore, Depends(_get_artifact_store)],
+    ) -> JSONResponse:
+        """Playground-Uplift D4 — the thread user's persistent workspace + artifacts.
+
+        Read-only: ``workspaces.get`` never provisions a row, so a ``null``
+        workspace truthfully means "no VM has ever started for this user". Keyed
+        on the thread's ``user_id`` (the impersonated user when an admin ran as
+        another user), gated by the same thread-ownership check as GET.
+        """
+        tenant_id: UUID = request.state.tenant_id
+        meta = await threads.get(thread_id, tenant_id=tenant_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
+            raise HTTPException(status_code=404, detail="session not found")
+        if meta.user_id is None:
+            # Machine/unowned thread — no per-user workspace.
+            return JSONResponse({"success": True, "data": {"workspace": None, "artifacts": []}})
+        workspace = await workspaces.get(tenant_id=tenant_id, user_id=meta.user_id)
+        arts = await artifacts.list_for_user(tenant_id=tenant_id, user_id=meta.user_id)
+        return JSONResponse(
+            {
+                "success": True,
+                "data": {
+                    "workspace": workspace.model_dump(mode="json") if workspace else None,
+                    "artifacts": [a.model_dump(mode="json") for a in arts],
+                },
+            }
+        )
 
     @router.get("")
     async def list_sessions(

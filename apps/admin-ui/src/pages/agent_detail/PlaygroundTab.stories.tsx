@@ -30,6 +30,42 @@ const detail: AgentDetailResponse = {
 function withStubs(Story: ComponentType) {
   apiClient.defaults.adapter = (config) => {
     const url = config.url ?? "";
+    if (url.includes("/workspace")) {
+      return Promise.resolve({
+        data: {
+          success: true,
+          data: {
+            workspace: {
+              id: "w1",
+              tenant_id: "22222222-2222-2222-2222-222222222222",
+              user_id: "u-1",
+              volume_name: "helix-ws-demo",
+              size_bytes: 1048576,
+              size_limit_bytes: 10737418240,
+              created_at: "2026-05-25T00:00:00Z",
+              last_accessed_at: "2026-05-25T00:00:00Z",
+              deleted_at: null,
+              archived_object_key: null,
+            },
+            artifacts: [
+              {
+                name: "summary.md",
+                kind: "document",
+                latest_version: 1,
+                created_at: null,
+                updated_at: null,
+              },
+            ],
+          },
+          error: null,
+        },
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        config,
+        request: {},
+      });
+    }
     if (url.includes("/v1/members")) {
       return Promise.resolve({
         data: {

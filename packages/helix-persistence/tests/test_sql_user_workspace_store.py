@@ -71,6 +71,24 @@ async def test_resolve_upsert_round_trip(sql_store: SqlStoreFixture) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_is_read_only(sql_store: SqlStoreFixture) -> None:
+    store, engine = sql_store
+    try:
+        tenant_id, user_id = uuid4(), uuid4()
+        # Read-only get on an absent (tenant, user) returns None without creating.
+        assert await store.get(tenant_id=tenant_id, user_id=user_id) is None
+        assert await store.get(tenant_id=tenant_id, user_id=user_id) is None
+
+        created = await store.resolve(tenant_id=tenant_id, user_id=user_id)
+        fetched = await store.get(tenant_id=tenant_id, user_id=user_id)
+        assert fetched is not None
+        assert fetched.id == created.id
+        assert fetched.volume_name == created.volume_name
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_resolve_distinguishes_tenant_and_user(sql_store: SqlStoreFixture) -> None:
     store, engine = sql_store
     try:

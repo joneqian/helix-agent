@@ -55,6 +55,16 @@ class UserWorkspaceStore(abc.ABC):
         """
 
     @abc.abstractmethod
+    async def get(self, *, tenant_id: UUID, user_id: UUID) -> UserWorkspace | None:
+        """Read-only lookup for ``(tenant_id, user_id)`` — ``None`` if absent.
+
+        Unlike :meth:`resolve` this never creates a row and never bumps
+        ``last_accessed_at``. Used by read surfaces (e.g. the playground
+        workspace inspector) that must observe whether a workspace really
+        exists without provisioning one as a side effect.
+        """
+
+    @abc.abstractmethod
     async def update_size(self, *, workspace_id: UUID, size_bytes: int) -> None:
         """Set ``size_bytes`` to the latest measurement (Mini-ADR J-29 第 1 项).
 

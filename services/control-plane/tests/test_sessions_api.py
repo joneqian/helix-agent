@@ -225,6 +225,30 @@ async def test_get_single_session(session_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_session_workspace_read_only_null(session_client: AsyncClient) -> None:
+    # Playground-Uplift D4 — read-only inspector. A fresh thread has no
+    # provisioned workspace, so it truthfully reports null (no VM started yet).
+    create = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+    )
+    thread_id = create.json()["data"]["thread_id"]
+    response = await session_client.get(f"/v1/sessions/{thread_id}/workspace")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["workspace"] is None
+    assert data["artifacts"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_session_workspace_404_for_unknown(session_client: AsyncClient) -> None:
+    response = await session_client.get(
+        "/v1/sessions/00000000-0000-0000-0000-000000000099/workspace"
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_get_returns_404_for_unknown(session_client: AsyncClient) -> None:
     response = await session_client.get("/v1/sessions/00000000-0000-0000-0000-000000000099")
     assert response.status_code == 404

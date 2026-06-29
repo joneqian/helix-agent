@@ -390,6 +390,11 @@ from helix_agent.persistence.webhook import (
     WebhookDeliveryStore,
     WebhookEndpointStore,
 )
+from helix_agent.persistence.workspace import (
+    InMemoryUserWorkspaceStore,
+    SqlUserWorkspaceStore,
+    UserWorkspaceStore,
+)
 from helix_agent.protocol import (
     PROVIDER_CATALOG,
     AgentSpec,
@@ -532,6 +537,11 @@ def create_app(
     # shared with the agent tool env.
     resolved_artifact_store: ArtifactStore = artifact_repo or (
         sql_stores.artifact if sql_stores else InMemoryArtifactStore()
+    )
+    # Stream Playground-Uplift (D4) — read-only per-user workspace registry,
+    # backing the playground workspace inspector (verify a user's VM/persistence).
+    resolved_user_workspace_store: UserWorkspaceStore = (
+        sql_stores.user_workspace if sql_stores else InMemoryUserWorkspaceStore()
     )
     # Stream J.5 — knowledge bases (RAG) backing the knowledge API + the
     # knowledge_search tool.
@@ -1604,6 +1614,7 @@ def create_app(
     app.state.feedback_store = resolved_feedback
     app.state.token_usage_store = resolved_token_usage
     app.state.artifact_store = resolved_artifact_store
+    app.state.user_workspace_store = resolved_user_workspace_store
     app.state.approval_store = resolved_approval_store
     app.state.run_store = resolved_run_store
     app.state.run_event_store = resolved_run_event_store
@@ -1874,6 +1885,7 @@ class _SqlStores:
     feedback: FeedbackStore
     token_usage: TokenUsageStore
     audit_log: AuditLogStore
+    user_workspace: UserWorkspaceStore  # Stream Playground-Uplift (D4 inspector)
 
 
 def _validate_platform_catalog(settings: Settings) -> None:
@@ -2087,6 +2099,7 @@ def _build_sql_stores(settings: Settings) -> _SqlStores:
         feedback=DbFeedbackStore(session_factory),
         token_usage=DbTokenUsageStore(session_factory),
         audit_log=SqlAuditLogStore(session_factory),
+        user_workspace=SqlUserWorkspaceStore(session_factory),
     )
 
 

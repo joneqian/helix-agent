@@ -536,6 +536,13 @@ export interface TranslationKeys {
     usage_reasoning: string;
     reasoning_label: string;
     events_label: string;
+    workspace_label: string;
+    workspace_refresh: string;
+    workspace_volume: string;
+    workspace_size: string;
+    workspace_deleted: string;
+    workspace_none: string;
+    workspace_artifacts: string;
   };
   event_stream: {
     title: string;
@@ -2555,6 +2562,13 @@ const en: TranslationKeys = {
     usage_reasoning: "reasoning",
     reasoning_label: "Reasoning",
     events_label: "Events",
+    workspace_label: "Workspace",
+    workspace_refresh: "Refresh workspace",
+    workspace_volume: "Volume",
+    workspace_size: "Size",
+    workspace_deleted: "deleted",
+    workspace_none: "No workspace yet — runs that write files create it.",
+    workspace_artifacts: "Artifacts",
   },
   event_stream: {
     title: "Event stream",
