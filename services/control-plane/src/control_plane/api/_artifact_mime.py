@@ -58,6 +58,7 @@ def content_disposition_header(filename: str, *, disposition: ContentDisposition
     encoded = urllib.parse.quote(filename, safe="")
     return f"{disposition}; filename=\"{ascii_safe}\"; filename*=UTF-8''{encoded}"
 
+
 ContentDisposition = Literal["inline", "attachment"]
 
 
