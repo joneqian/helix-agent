@@ -121,20 +121,34 @@ export function parseToolCalls(events: readonly SseEvent[]): ToolCallEntry[] {
           entry.args = args;
         }
       }
-      // Result side — a ToolMessage linked by tool_call_id.
+      // Result side — a ToolMessage linked by tool_call_id. The orchestrator
+      // now stamps ``name`` on the result too; use it as a fallback when the
+      // call frame was missed (truncated stream), and to seed the entry.
       if (m.type === "tool" && typeof m.tool_call_id === "string" && m.tool_call_id !== "") {
         const status: ToolCallStatus = m.status === "error" ? "error" : "success";
         const preview = typeof m.content === "string" ? stripFence(m.content) : "";
-        const entry = ensure(m.tool_call_id, () => ({
-          id: m.tool_call_id as string,
-          rawName: "",
-          isMcp: false,
-          server: null,
-          toolName: m.tool_call_id as string,
-          args: {},
-          status,
-          resultPreview: preview,
-        }));
+        const resultName = typeof m.name === "string" ? m.name : "";
+        const entry = ensure(m.tool_call_id, () => {
+          const parsed = parseName(resultName);
+          return {
+            id: m.tool_call_id as string,
+            rawName: resultName,
+            isMcp: parsed.isMcp,
+            server: parsed.server,
+            toolName: resultName === "" ? (m.tool_call_id as string) : parsed.toolName,
+            args: {},
+            status,
+            resultPreview: preview,
+          };
+        });
+        // Fill the name from the result only if the call side didn't provide it.
+        if (entry.rawName === "" && resultName !== "") {
+          const parsed = parseName(resultName);
+          entry.rawName = resultName;
+          entry.isMcp = parsed.isMcp;
+          entry.server = parsed.server;
+          entry.toolName = parsed.toolName;
+        }
         entry.status = status;
         entry.resultPreview = preview;
       }

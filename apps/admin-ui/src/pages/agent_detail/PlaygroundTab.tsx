@@ -33,6 +33,7 @@ import {
   type ThreadMeta,
 } from "../../api/sessions";
 import { uploadDocument, uploadImage } from "../../api/uploads";
+import { CopyButton } from "../../components/CopyButton";
 import { ToolTimeline } from "../../components/ToolTimeline";
 import type { AgentDetailResponse } from "../../api/agents";
 import {
@@ -572,6 +573,9 @@ function EventCard({ evt }: { evt: SseEvent }) {
         <Text type="secondary" style={{ fontSize: 11 }} className="mono">
           {new Date(evt.receivedAt).toLocaleTimeString()}
         </Text>
+        <span style={{ marginLeft: "auto" }}>
+          <CopyButton text={display} testId="playground-event-copy" />
+        </span>
       </div>
       <pre
         style={{

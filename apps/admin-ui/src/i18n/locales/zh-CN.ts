@@ -25,6 +25,8 @@ const zhCN: TranslationKeys = {
     user_menu: "用户菜单",
     anonymous: "匿名用户",
     field_help: "字段说明",
+    copy: "复制",
+    copied: "已复制",
   },
   theme: {
     switch_to_light: "切到 Light",

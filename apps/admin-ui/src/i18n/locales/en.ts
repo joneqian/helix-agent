@@ -23,6 +23,8 @@ export interface TranslationKeys {
     user_menu: string;
     anonymous: string;
     field_help: string;
+    copy: string;
+    copied: string;
   };
   theme: {
     switch_to_light: string;
@@ -1956,6 +1958,8 @@ const en: TranslationKeys = {
     user_menu: "User menu",
     anonymous: "anonymous",
     field_help: "Field help",
+    copy: "Copy",
+    copied: "Copied",
   },
   theme: {
     switch_to_light: "Switch to Light",

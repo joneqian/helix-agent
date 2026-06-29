@@ -77,4 +77,19 @@ describe("parseToolCalls", () => {
     expect(out[0].id).toBe("orphan");
     expect(out[0].status).toBe("success");
   });
+
+  it("uses the result-side name when the call frame was missed", () => {
+    // Orchestrator now stamps name on the ToolMessage too.
+    const named = {
+      type: "tool",
+      tool_call_id: "orphan",
+      name: "mcp:amap-maps.geo",
+      content: "{}",
+      status: "success",
+    };
+    const [entry] = parseToolCalls([updates("tools", [named])]);
+    expect(entry.isMcp).toBe(true);
+    expect(entry.server).toBe("amap-maps");
+    expect(entry.toolName).toBe("geo");
+  });
 });

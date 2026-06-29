@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 
 import { streamRunEvents } from "../../api/runs";
 import type { SseEvent } from "../../api/sessions";
+import { CopyButton } from "../../components/CopyButton";
 import { ToolTimeline } from "../../components/ToolTimeline";
 
 const { Text } = Typography;
@@ -215,6 +216,9 @@ function EventCard({ evt }: { evt: SseEvent }) {
             {evt.id}
           </Text>
         )}
+        <span style={{ marginLeft: "auto" }}>
+          <CopyButton text={display} testId="event-stream-copy" />
+        </span>
       </div>
       <pre
         style={{

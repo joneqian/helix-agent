@@ -1494,6 +1494,7 @@ async def _dispatch_tool(
                 content=content,
                 tool_call_id=call_id,
                 status="error",
+                name=name,
             ),
             {},
             0,
@@ -1529,6 +1530,7 @@ async def _dispatch_tool(
                 content=_format_error(exc),
                 tool_call_id=call_id,
                 status="error",
+                name=name,
             ),
             {},
             0,
@@ -1888,6 +1890,7 @@ async def _invoke_tool(
                 content=f"[invalid args] {schema_error}",
                 tool_call_id=call_id,
                 status="error",
+                name=tool.spec.name,
             ),
             {},
             0,
@@ -1911,6 +1914,7 @@ async def _invoke_tool(
                 content=_format_error(exc),
                 tool_call_id=call_id,
                 status="error",
+                name=tool.spec.name,
             ),
             {},
             0,
@@ -1931,7 +1935,10 @@ async def _invoke_tool(
     )
     content = tool_content + footer if footer is not None else tool_content
     return (
-        ToolMessage(content=content, tool_call_id=call_id),
+        # ``name`` records which tool produced this result (for MCP tools,
+        # ``mcp:server.tool``). LangChain leaves it null unless set, so the raw
+        # ToolMessage, audit, and trace all lose the attribution otherwise.
+        ToolMessage(content=content, tool_call_id=call_id, name=tool.spec.name),
         result.state_updates,
         result.refund_iterations,
         None,

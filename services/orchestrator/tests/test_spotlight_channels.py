@@ -108,6 +108,9 @@ async def test_tool_result_is_spotlighted() -> None:
         )
     tool_msgs = [m for m in final["messages"] if isinstance(m, ToolMessage)]
     assert tool_msgs, "expected a tool result"
+    # The result message carries the tool name (attribution for raw view /
+    # audit / trace), not just the tool_call_id.
+    assert tool_msgs[0].name == "echo"
     content = str(tool_msgs[0].content)
     assert f"{_FENCE}abc»" in content
     # the untrusted tool output's embedded instruction is datamarked
