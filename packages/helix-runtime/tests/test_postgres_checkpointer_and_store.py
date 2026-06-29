@@ -9,6 +9,10 @@ couple us tightly to their internal TypedDict shapes.
 
 from __future__ import annotations
 
+import asyncio
+import re
+
+import psycopg
 import pytest
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
@@ -37,6 +41,32 @@ async def test_postgres_checkpointer_setup_and_api(
         assert callable(cp.aput)
         assert callable(cp.aget_tuple)
         assert callable(cp.alist)
+
+
+@pytest.mark.asyncio
+async def test_postgres_checkpointer_concurrent_setup_no_race(
+    postgres_container: PostgresContainer,
+) -> None:
+    """Concurrent first-run ``setup()`` must not race ``CREATE TYPE``.
+
+    The blue/green control-plane pair (and rolling deploys) start replicas
+    that all call ``make_checkpointer`` at once. On a fresh database the
+    first setup runs ``CREATE TYPE`` — without the advisory lock two of them
+    collide with ``duplicate key ... "pg_type_typname_nsp_index"``. We
+    reproduce by pointing N concurrent factories at a brand-new database.
+    """
+    base = _sync_dsn(postgres_container)
+    async with await psycopg.AsyncConnection.connect(base, autocommit=True) as admin:
+        await admin.execute("DROP DATABASE IF EXISTS ckp_race")
+        await admin.execute("CREATE DATABASE ckp_race")
+    race_dsn = re.sub(r"/[^/?]+(\?|$)", r"/ckp_race\1", base)
+
+    async def _setup_once() -> bool:
+        async with make_checkpointer("postgres", race_dsn) as cp:
+            return callable(cp.aput)
+
+    results = await asyncio.gather(*[_setup_once() for _ in range(5)])
+    assert all(results)
 
 
 @pytest.mark.asyncio
