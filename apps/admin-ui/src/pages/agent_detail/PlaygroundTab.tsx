@@ -539,7 +539,10 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           display: "flex",
           flexDirection: "column",
           gap: 12,
-          minHeight: "calc(100vh - 360px)",
+          // Bounded height so the column scrolls internally instead of growing
+          // the page (which would defeat the transcript's own scrollbar).
+          height: "calc(100vh - 360px)",
+          overflowY: "auto",
         }}
       >
         <div
@@ -900,7 +903,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           padding: 0,
           display: "flex",
           flexDirection: "column",
-          minHeight: "calc(100vh - 360px)",
+          // Fixed height + hidden overflow so the flex:1 transcript below owns
+          // the scroll (internal scrollbar) instead of the page growing.
+          height: "calc(100vh - 360px)",
           overflow: "hidden",
         }}
       >
@@ -927,6 +932,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           ref={transcriptRef}
           style={{
             flex: 1,
+            // minHeight:0 lets this flex child shrink below its content so its
+            // own overflow scrollbar engages (otherwise the column would grow).
+            minHeight: 0,
             padding: 12,
             overflow: "auto",
             display: "flex",
