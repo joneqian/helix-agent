@@ -21,13 +21,15 @@ logged server-side.
 from __future__ import annotations
 
 import logging
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from control_plane.api._artifact_mime import content_disposition_header, infer_content_type
 from control_plane.api._quota_admission import check_admission
 from control_plane.api._user_scope import (
     caller_owns_thread,
@@ -53,6 +55,7 @@ from helix_agent.persistence.thread_meta import ThreadMetaStore
 from helix_agent.persistence.workspace import UserWorkspaceStore
 from helix_agent.protocol import AgentSpecStatus, AuditAction, AuditResult, ThreadStatus
 from helix_agent.runtime.audit.logger import AuditLogger
+from orchestrator.tools import SandboxSupervisorError, SupervisorClient
 
 logger = logging.getLogger("helix.control_plane.sessions")
 
@@ -125,6 +128,24 @@ def _get_workspace_store(request: Request) -> UserWorkspaceStore:
 
 def _get_artifact_store(request: Request) -> ArtifactStore:
     return request.app.state.artifact_store  # type: ignore[no-any-return]
+
+
+def _get_supervisor_client(request: Request) -> SupervisorClient | None:
+    return request.app.state.supervisor_client  # type: ignore[no-any-return]
+
+
+def _safe_workspace_relpath(path: str) -> str | None:
+    """Return the cleaned relative path, or ``None`` if it escapes the workspace.
+
+    The ``path`` query param round-trips through the client untrusted, so the
+    download endpoint re-checks it here (the supervisor re-validates again at
+    its own boundary — defence in depth). Rejects absolute paths and any
+    ``..`` segment that would climb out of ``/workspace``.
+    """
+    cleaned = path.strip()
+    if not cleaned or cleaned.startswith("/") or ".." in PurePosixPath(cleaned).parts:
+        return None
+    return cleaned
 
 
 async def _resolve_agent_selection(
@@ -387,6 +408,89 @@ def build_sessions_router() -> APIRouter:
                 },
             }
         )
+
+    @router.get("/{thread_id}/workspace/files")
+    async def list_session_workspace_files(
+        thread_id: UUID,
+        request: Request,
+        threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        supervisor: Annotated[SupervisorClient | None, Depends(_get_supervisor_client)],
+    ) -> JSONResponse:
+        """Workspace browse — the files in the thread user's persistent volume.
+
+        Read-only inventory for the playground inspector. Same ownership gate
+        as the workspace endpoint; keyed on the thread's ``user_id`` (the
+        impersonated user when an admin ran as another). A machine/unowned
+        thread, an absent supervisor, or an empty volume all return ``[]``.
+        """
+        tenant_id: UUID = request.state.tenant_id
+        meta = await threads.get(thread_id, tenant_id=tenant_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
+            raise HTTPException(status_code=404, detail="session not found")
+        if meta.user_id is None or supervisor is None:
+            return JSONResponse({"success": True, "data": {"files": []}})
+        try:
+            entries = await supervisor.list_workspace_files(
+                tenant_id=tenant_id, user_id=meta.user_id
+            )
+        except SandboxSupervisorError:
+            logger.warning("session_workspace.list_failed", exc_info=True)
+            return JSONResponse({"success": True, "data": {"files": []}})
+        files = [{"path": e.path, "size": e.size} for e in entries]
+        return JSONResponse({"success": True, "data": {"files": files}})
+
+    @router.get("/{thread_id}/workspace/file", response_model=None)
+    async def download_session_workspace_file(
+        thread_id: UUID,
+        request: Request,
+        threads: Annotated[ThreadMetaStore, Depends(_get_thread_repo)],
+        users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        supervisor: Annotated[SupervisorClient | None, Depends(_get_supervisor_client)],
+        path: Annotated[str, Query()],
+    ) -> Response:
+        """Download one file from the thread user's persistent workspace volume.
+
+        MIME-aware + XSS-safe (active content always ``attachment`` +
+        ``nosniff``), mirroring the artifact download. ``path`` is validated
+        here and again at the supervisor boundary. 404 hides cross-user /
+        missing-file / no-supervisor behind one opaque response.
+        """
+        tenant_id: UUID = request.state.tenant_id
+        meta = await threads.get(thread_id, tenant_id=tenant_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        caller_user_id = await resolve_caller_user_id(request, users)
+        if not caller_owns_thread(
+            meta=meta, caller_user_id=caller_user_id, principal=request.state.principal
+        ):
+            raise HTTPException(status_code=404, detail="session not found")
+        safe_path = _safe_workspace_relpath(path)
+        if safe_path is None:
+            raise HTTPException(status_code=400, detail="invalid workspace path")
+        if meta.user_id is None or supervisor is None:
+            raise HTTPException(status_code=404, detail="file not found")
+        try:
+            data = await supervisor.read_workspace_file(
+                tenant_id=tenant_id, user_id=meta.user_id, path=safe_path
+            )
+        except SandboxSupervisorError as exc:
+            logger.warning("session_workspace.read_failed", exc_info=True)
+            raise HTTPException(status_code=404, detail="file not found") from exc
+        filename = PurePosixPath(safe_path).name or "download"
+        inferred = infer_content_type(kind="other", path=safe_path)
+        headers = {
+            "Content-Disposition": content_disposition_header(
+                filename, disposition=inferred.disposition
+            ),
+            "X-Content-Type-Options": "nosniff",
+        }
+        return Response(content=data, media_type=inferred.content_type, headers=headers)
 
     @router.get("")
     async def list_sessions(

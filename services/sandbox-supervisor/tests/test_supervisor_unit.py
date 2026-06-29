@@ -108,6 +108,8 @@ class RecordingDockerClient:
         link: FakeRunnerLink | None = None,
         volume_file: bytes = b"",
         volume_file_error: DockerError | None = None,
+        volume_files: list[tuple[int, str]] | None = None,
+        volume_list_error: DockerError | None = None,
         measured_size: int = 0,
         measure_error: DockerError | None = None,
         update_error: DockerError | None = None,
@@ -124,6 +126,9 @@ class RecordingDockerClient:
         self._volume_file = volume_file
         self._volume_file_error = volume_file_error
         self.volume_reads: list[tuple[str, str]] = []
+        self._volume_files = volume_files if volume_files is not None else []
+        self._volume_list_error = volume_list_error
+        self.volume_lists: list[str] = []
         self._volume_write_error: DockerError | None = None
         self.volume_writes: list[tuple[str, str, bytes]] = []
         self._measured_size = measured_size
@@ -164,6 +169,15 @@ class RecordingDockerClient:
         if self._volume_file_error is not None:
             raise self._volume_file_error
         return self._volume_file
+
+    async def list_volume_files(
+        self, *, volume: str, image: str, max_entries: int
+    ) -> list[tuple[int, str]]:
+        del image, max_entries
+        self.volume_lists.append(volume)
+        if self._volume_list_error is not None:
+            raise self._volume_list_error
+        return self._volume_files
 
     async def write_volume_file(self, *, volume: str, path: str, data: bytes, image: str) -> None:
         del image
@@ -910,6 +924,34 @@ async def test_read_workspace_file_too_large_raises() -> None:
     h = _harness(docker=RecordingDockerClient(volume_file=oversize))
     with pytest.raises(WorkspaceFileTooLargeError):
         await h.supervisor.read_workspace_file(tenant_id=uuid4(), user_id=uuid4(), path="big.bin")
+
+
+@pytest.mark.asyncio
+async def test_list_workspace_files_returns_entries() -> None:
+    h = _harness(
+        docker=RecordingDockerClient(volume_files=[(2048, "report.pdf"), (12, "notes.txt")])
+    )
+    entries = await h.supervisor.list_workspace_files(tenant_id=uuid4(), user_id=uuid4())
+    assert entries == [(2048, "report.pdf"), (12, "notes.txt")]
+    assert len(h.docker.volume_lists) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspace_files_missing_volume_is_empty() -> None:
+    # A volume that has never been created surfaces as an empty inventory,
+    # not an error — the inspector renders "no files" the same as "no volume".
+    h = _harness(docker=RecordingDockerClient(volume_list_error=DockerError("no such volume")))
+    entries = await h.supervisor.list_workspace_files(tenant_id=uuid4(), user_id=uuid4())
+    assert entries == []
+
+
+def test_list_workspace_files_route_returns_files() -> None:
+    h = _harness(docker=RecordingDockerClient(volume_files=[(2048, "report.pdf")]))
+    app = create_app(SandboxSupervisorSettings(), supervisor=h.supervisor, enable_reaper=False)
+    with TestClient(app) as client:
+        resp = client.get(f"/v1/workspaces/{uuid4()}/{uuid4()}/files")
+    assert resp.status_code == 200
+    assert resp.json() == {"files": [{"path": "report.pdf", "size": 2048}]}
 
 
 def test_read_workspace_file_route_returns_content() -> None:

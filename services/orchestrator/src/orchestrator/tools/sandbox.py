@@ -76,6 +76,14 @@ class EgressContext:
     allowlist: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class WorkspaceFileEntry:
+    """One file in a user's persistent workspace volume (browse listing)."""
+
+    path: str
+    size: int
+
+
 def _traced_headers() -> dict[str, str]:
     """Outbound headers carrying the active W3C trace context (A.8).
 
@@ -135,6 +143,11 @@ class SupervisorClient(Protocol):
 
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         """Read a file from a user's persistent workspace volume (J.9 artifact download)."""
+
+    async def list_workspace_files(
+        self, *, tenant_id: UUID, user_id: UUID
+    ) -> list[WorkspaceFileEntry]:
+        """List the files in a user's persistent workspace volume (browse)."""
 
     async def write_workspace_file(
         self, *, tenant_id: UUID, user_id: UUID, path: str, data: bytes
@@ -239,6 +252,27 @@ class HTTPSupervisorClient:
             raise SandboxSupervisorError(msg)
         return response.content
 
+    async def list_workspace_files(
+        self, *, tenant_id: UUID, user_id: UUID
+    ) -> list[WorkspaceFileEntry]:
+        url = f"{self.base_url}/v1/workspaces/{tenant_id}/{user_id}/files"
+        async with self._make_client() as client:
+            try:
+                response = await client.get(url, headers=_traced_headers())
+            except httpx.HTTPError as exc:
+                msg = f"sandbox supervisor unreachable ({url}): {exc}"
+                raise SandboxSupervisorError(msg) from exc
+        if response.is_error:
+            msg = (
+                f"sandbox supervisor workspace list failed: {response.status_code} {response.text}"
+            )
+            raise SandboxSupervisorError(msg)
+        body = response.json()
+        return [
+            WorkspaceFileEntry(path=str(f["path"]), size=int(f["size"]))
+            for f in body.get("files", [])
+        ]
+
     async def write_workspace_file(
         self, *, tenant_id: UUID, user_id: UUID, path: str, data: bytes
     ) -> None:
@@ -304,6 +338,8 @@ class RecordingSupervisorClient:
     destroy_error: Exception | None = None
     workspace_file: bytes = b""
     workspace_file_error: Exception | None = None
+    workspace_files: list[WorkspaceFileEntry] = field(default_factory=list)
+    workspace_list_error: Exception | None = None
     acquired: list[tuple[UUID, str, UUID | None, tuple[tuple[str, bytes], ...]]] = field(
         default_factory=list
     )
@@ -354,6 +390,14 @@ class RecordingSupervisorClient:
         if self.workspace_file_error is not None:
             raise self.workspace_file_error
         return self.workspace_file
+
+    async def list_workspace_files(
+        self, *, tenant_id: UUID, user_id: UUID
+    ) -> list[WorkspaceFileEntry]:
+        self.workspace_reads.append((tenant_id, user_id, ""))
+        if self.workspace_list_error is not None:
+            raise self.workspace_list_error
+        return self.workspace_files
 
     async def write_workspace_file(
         self, *, tenant_id: UUID, user_id: UUID, path: str, data: bytes
@@ -410,6 +454,11 @@ class _EgressBindingClient:
 
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         return await self.inner.read_workspace_file(tenant_id=tenant_id, user_id=user_id, path=path)
+
+    async def list_workspace_files(
+        self, *, tenant_id: UUID, user_id: UUID
+    ) -> list[WorkspaceFileEntry]:
+        return await self.inner.list_workspace_files(tenant_id=tenant_id, user_id=user_id)
 
     async def write_workspace_file(
         self, *, tenant_id: UUID, user_id: UUID, path: str, data: bytes

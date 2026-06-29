@@ -249,6 +249,98 @@ async def test_get_session_workspace_404_for_unknown(session_client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_workspace_files_empty_without_supervisor(session_client: AsyncClient) -> None:
+    # No supervisor wired in the test app → the browse endpoint degrades to an
+    # empty list rather than erroring the inspector.
+    create = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+    )
+    thread_id = create.json()["data"]["thread_id"]
+    response = await session_client.get(f"/v1/sessions/{thread_id}/workspace/files")
+    assert response.status_code == 200
+    assert response.json()["data"]["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_workspace_file_download_rejects_path_traversal(session_client: AsyncClient) -> None:
+    create = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+    )
+    thread_id = create.json()["data"]["thread_id"]
+    response = await session_client.get(
+        f"/v1/sessions/{thread_id}/workspace/file",
+        params={"path": "../../etc/passwd"},
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_workspace_file_download_404_without_supervisor(session_client: AsyncClient) -> None:
+    create = await session_client.post(
+        "/v1/sessions",
+        json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+    )
+    thread_id = create.json()["data"]["thread_id"]
+    response = await session_client.get(
+        f"/v1/sessions/{thread_id}/workspace/file", params={"path": "report.pdf"}
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workspace_files_and_download_with_supervisor(
+    audit_store: InMemoryAuditLogStore,
+) -> None:
+    # Inject a recording supervisor so the browse + download paths run end to end.
+    from orchestrator.tools import RecordingSupervisorClient, WorkspaceFileEntry
+
+    settings = Settings(
+        env="dev",
+        auth_mode="dev",
+        rate_limit_burst=10_000,
+        rate_limit_per_second=10_000.0,
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
+    )
+    app = create_app(
+        settings=settings,
+        audit_logger=build_default_audit_logger(audit_store),
+        jwt_verifier=build_test_jwt_verifier(),
+    )
+    transport = ASGITransport(app=app)
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_DEFAULT_TENANT)}"}
+    async with AsyncClient(
+        transport=transport, base_url="http://control-plane.test", headers=headers
+    ) as client:
+        await client.post("/v1/agents", json={"manifest_yaml": _AGENT_YAML})
+        # Override the lifespan-set (None) client with a recording one.
+        app.state.supervisor_client = RecordingSupervisorClient(
+            workspace_files=[WorkspaceFileEntry(path="report.pdf", size=2048)],
+            workspace_file=b"%PDF-1.4 hello",
+        )
+        create = await client.post(
+            "/v1/sessions",
+            json={"agent_name": "code-reviewer", "agent_version": "1.0.0"},
+        )
+        thread_id = create.json()["data"]["thread_id"]
+
+        listing = await client.get(f"/v1/sessions/{thread_id}/workspace/files")
+        assert listing.status_code == 200
+        files = listing.json()["data"]["files"]
+        assert files == [{"path": "report.pdf", "size": 2048}]
+
+        download = await client.get(
+            f"/v1/sessions/{thread_id}/workspace/file", params={"path": "report.pdf"}
+        )
+        assert download.status_code == 200
+        assert download.content == b"%PDF-1.4 hello"
+        assert "attachment" in download.headers["content-disposition"]
+        assert "report.pdf" in download.headers["content-disposition"]
+
+
+@pytest.mark.asyncio
 async def test_get_returns_404_for_unknown(session_client: AsyncClient) -> None:
     response = await session_client.get("/v1/sessions/00000000-0000-0000-0000-000000000099")
     assert response.status_code == 404

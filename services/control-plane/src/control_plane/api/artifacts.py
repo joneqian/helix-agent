@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import urllib.parse
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -32,7 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict
 
-from control_plane.api._artifact_mime import infer_content_type
+from control_plane.api._artifact_mime import content_disposition_header, infer_content_type
 from control_plane.api._quota_admission import check_admission
 from control_plane.api._user_scope import get_user_repo, resolve_caller_user_id
 from control_plane.audit import emit as audit_emit
@@ -84,21 +83,6 @@ def _get_quota(request: Request) -> QuotaService:
 
 def _get_audit(request: Request) -> AuditLogger:
     return request.app.state.audit_logger  # type: ignore[no-any-return]
-
-
-def _content_disposition_header(filename: str, *, disposition: str) -> str:
-    """RFC 6266 ``Content-Disposition`` with both ASCII fallback + utf-8.
-
-    ``filename=`` carries an ASCII-safe approximation (replacing
-    anything outside printable ASCII with ``_``) for legacy clients;
-    ``filename*=UTF-8''…`` carries the percent-encoded original.
-    Quoting the ASCII fallback escapes embedded quotes (defence
-    against a CR/LF / quote in the artifact name leaking into the
-    header).
-    """
-    ascii_safe = "".join(c if 32 <= ord(c) < 127 and c != '"' else "_" for c in filename)
-    encoded = urllib.parse.quote(filename, safe="")
-    return f"{disposition}; filename=\"{ascii_safe}\"; filename*=UTF-8''{encoded}"
 
 
 def build_artifacts_router() -> APIRouter:
@@ -231,7 +215,7 @@ def build_artifacts_router() -> APIRouter:
         # ``application/octet-stream`` + attachment.
         inferred = infer_content_type(kind=artifact.kind, path=version.path_in_workspace)
         headers = {
-            "Content-Disposition": _content_disposition_header(
+            "Content-Disposition": content_disposition_header(
                 artifact.name, disposition=inferred.disposition
             ),
             "X-Content-Type-Options": "nosniff",

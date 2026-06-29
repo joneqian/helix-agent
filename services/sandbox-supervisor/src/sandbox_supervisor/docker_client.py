@@ -73,6 +73,11 @@ class DockerClient(Protocol):
     ) -> bytes:
         """Read a file from a named volume; return up to ``max_bytes + 1`` bytes."""
 
+    async def list_volume_files(
+        self, *, volume: str, image: str, max_entries: int
+    ) -> list[tuple[int, str]]:
+        """List regular files under ``/workspace``; return ``(size, relpath)`` pairs."""
+
     async def write_volume_file(self, *, volume: str, path: str, data: bytes, image: str) -> None:
         """Write ``data`` to ``path`` in a named volume (document upload)."""
 
@@ -235,6 +240,81 @@ class CliDockerClient:
             msg = f"workspace file read failed for {path!r}: {detail}"
             raise DockerError(msg)
         return stdout
+
+    async def list_volume_files(
+        self, *, volume: str, image: str, max_entries: int
+    ) -> list[tuple[int, str]]:
+        """List regular files under ``/ws`` in a docker named volume (browse).
+
+        Runs a throwaway ``--rm`` container — read-only rootfs, no network,
+        all capabilities dropped — that mounts ``volume`` read-only and walks
+        it with Python (portable across the image's interpreters; the runner
+        always ships python3), emitting ``<size>\\t<relpath>`` per regular
+        file, capped at ``max_entries``. Symlinks are skipped so a dangling /
+        escaping link can't perturb the listing. Returns the parsed pairs;
+        raises :class:`DockerError` on a non-zero exit.
+
+        ``--entrypoint python3`` overrides the sandbox image's runner so the
+        walk script runs instead of the readiness line.
+        """
+        script = (
+            "import os,sys\n"
+            f"root='/ws'; n=0; lim={int(max_entries)}\n"
+            "for dp,ds,fs in os.walk(root):\n"
+            "    for f in sorted(fs):\n"
+            "        p=os.path.join(dp,f)\n"
+            "        if os.path.islink(p):\n"
+            "            continue\n"
+            "        try:\n"
+            "            s=os.path.getsize(p)\n"
+            "        except OSError:\n"
+            "            continue\n"
+            "        sys.stdout.write(str(s)+chr(9)+os.path.relpath(p,root)+chr(10))\n"
+            "        n+=1\n"
+            "        if n>=lim:\n"
+            "            sys.exit(0)\n"
+        )
+        argv = [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--volume",
+            f"{volume}:/ws:ro",
+            "--entrypoint",
+            "python3",
+            image,
+            "-c",
+            script,
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=int(max_entries) * 4096 + 4096,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            msg = f"workspace listing failed: {detail}"
+            raise DockerError(msg)
+        out: list[tuple[int, str]] = []
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            size_str, _, rel = line.partition("\t")
+            if not rel:
+                continue
+            try:
+                size = int(size_str)
+            except ValueError:
+                continue
+            out.append((size, rel))
+        return out
 
     async def write_volume_file(self, *, volume: str, path: str, data: bytes, image: str) -> None:
         """Write ``data`` to ``path`` in a docker named volume (document upload).
