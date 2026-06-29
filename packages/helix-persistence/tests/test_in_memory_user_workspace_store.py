@@ -32,6 +32,20 @@ async def test_resolve_creates_then_returns_same_row() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_returns_none_without_provisioning() -> None:
+    # Read-only get — never creates a row (Playground-Uplift D4: a null result
+    # truthfully means "no workspace has ever started for this user").
+    store = InMemoryUserWorkspaceStore()
+    tenant_id, user_id = uuid4(), uuid4()
+
+    assert await store.get(tenant_id=tenant_id, user_id=user_id) is None
+    created = await store.resolve(tenant_id=tenant_id, user_id=user_id)
+    fetched = await store.get(tenant_id=tenant_id, user_id=user_id)
+    assert fetched is not None
+    assert fetched.id == created.id
+
+
+@pytest.mark.asyncio
 async def test_resolve_volume_name_is_deterministic() -> None:
     store = InMemoryUserWorkspaceStore()
     tenant_id, user_id = uuid4(), uuid4()

@@ -40,6 +40,9 @@ class InMemoryUserWorkspaceStore(UserWorkspaceStore):
         self._rows[key] = workspace
         return workspace
 
+    async def get(self, *, tenant_id: UUID, user_id: UUID) -> UserWorkspace | None:
+        return self._rows.get((tenant_id, user_id))
+
     def _find_by_id(self, workspace_id: UUID) -> tuple[UUID, UUID] | None:
         for key, row in self._rows.items():
             if row.id == workspace_id:
