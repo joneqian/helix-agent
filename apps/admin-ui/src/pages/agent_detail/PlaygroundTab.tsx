@@ -60,9 +60,11 @@ import { listRateCards, type RateCardRecord } from "../../api/rate_card";
 import { streamRunEvents } from "../../api/runs";
 import {
   createSession,
+  getSessionMessages,
   getSessionWorkspace,
   listSessions,
   streamRun,
+  type HistoryMessage,
   type RunRequest,
   type SessionWorkspace,
   type SseEvent,
@@ -165,6 +167,8 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   const [rate, setRate] = useState<RateCardRecord | null>(null);
   const [pastSessions, setPastSessions] = useState<ThreadMeta[]>([]);
   const [resumed, setResumed] = useState(false);
+  // #6 — prior conversation loaded when resuming an existing thread.
+  const [history, setHistory] = useState<HistoryMessage[]>([]);
 
   const abortRef = useRef<AbortController | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -226,6 +230,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     setCreatingThread(true);
     setThreadError(null);
     setResumed(false);
+    setHistory([]);
     setTurns([]);
     setAttachments([]);
     setUploadError(null);
@@ -262,7 +267,12 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
       setAttachments([]);
       setThreadError(null);
       setResumed(true);
+      setHistory([]);
       setThread(picked);
+      // Load the thread's prior conversation from the checkpoint.
+      void getSessionMessages(threadId)
+        .then(setHistory)
+        .catch(() => setHistory([]));
     },
     [pastSessions],
   );
@@ -539,10 +549,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           display: "flex",
           flexDirection: "column",
           gap: 12,
-          // Bounded height so the column scrolls internally instead of growing
-          // the page (which would defeat the transcript's own scrollbar).
-          height: "calc(100vh - 360px)",
-          overflowY: "auto",
+          minHeight: "calc(100vh - 360px)",
         }}
       >
         <div
@@ -903,9 +910,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           padding: 0,
           display: "flex",
           flexDirection: "column",
-          // Fixed height + hidden overflow so the flex:1 transcript below owns
-          // the scroll (internal scrollbar) instead of the page growing.
-          height: "calc(100vh - 360px)",
+          minHeight: "calc(100vh - 360px)",
           overflow: "hidden",
         }}
       >
@@ -932,9 +937,10 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           ref={transcriptRef}
           style={{
             flex: 1,
-            // minHeight:0 lets this flex child shrink below its content so its
-            // own overflow scrollbar engages (otherwise the column would grow).
-            minHeight: 0,
+            // Cap (not fixed height) so the transcript scrolls internally when
+            // tall but never forces the column past the viewport — if the offset
+            // is off it degrades to the Shell's page scroll, never a dead lock.
+            maxHeight: "calc(100vh - 400px)",
             padding: 12,
             overflow: "auto",
             display: "flex",
@@ -943,12 +949,56 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           }}
           data-testid="playground-transcript"
         >
-          {turns.length === 0 && (
+          {turns.length === 0 && history.length === 0 && (
             <Empty
               description={t("playground.empty_log")}
               style={{ marginTop: 64 }}
               data-testid="playground-empty-log"
             />
+          )}
+          {/* #6 — prior conversation (read-only) when resuming a thread. */}
+          {history.length > 0 && (
+            <div
+              data-testid="playground-history"
+              style={{ display: "flex", flexDirection: "column", gap: 8 }}
+            >
+              {history.map((m, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                    maxWidth: "85%",
+                    padding: "6px 10px",
+                    borderRadius: 8,
+                    fontSize: 13,
+                    whiteSpace: "pre-wrap",
+                    background:
+                      m.role === "user"
+                        ? "var(--hx-surface-raised)"
+                        : "transparent",
+                    border:
+                      m.role === "user"
+                        ? "1px solid var(--hx-border-subtle)"
+                        : "none",
+                    opacity: 0.75,
+                  }}
+                >
+                  {m.content}
+                </div>
+              ))}
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: 11,
+                  color: "var(--hx-text-tertiary)",
+                  borderTop: "1px dashed var(--hx-border-subtle)",
+                  paddingTop: 6,
+                  marginTop: 2,
+                }}
+              >
+                {t("playground.history_divider")}
+              </div>
+            </div>
           )}
           {turns.map((turn) => (
             <TurnCard

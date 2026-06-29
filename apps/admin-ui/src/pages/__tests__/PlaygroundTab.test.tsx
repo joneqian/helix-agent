@@ -58,6 +58,7 @@ const uploadDocumentMock = vi.spyOn(uploadsSdk, "uploadDocument");
 const listMembersMock = vi.spyOn(membersSdk, "listMembers");
 const getWorkspaceMock = vi.spyOn(sessionsSdk, "getSessionWorkspace");
 const listSessionsMock = vi.spyOn(sessionsSdk, "listSessions");
+const getMessagesMock = vi.spyOn(sessionsSdk, "getSessionMessages");
 const listRateCardsMock = vi.spyOn(rateCardSdk, "listRateCards");
 const listApprovalsMock = vi.spyOn(approvalsSdk, "listApprovals");
 const decideApprovalsMock = vi.spyOn(approvalsSdk, "decideApprovals");
@@ -74,6 +75,8 @@ beforeEach(() => {
   getWorkspaceMock.mockResolvedValue({ workspace: null, artifacts: [] });
   listSessionsMock.mockReset();
   listSessionsMock.mockResolvedValue([]);
+  getMessagesMock.mockReset();
+  getMessagesMock.mockResolvedValue([]);
   listRateCardsMock.mockReset();
   listRateCardsMock.mockResolvedValue([]);
   listApprovalsMock.mockReset();
@@ -496,6 +499,10 @@ describe("PlaygroundTab", () => {
       created_at: "2026-05-20T00:00:00Z",
     };
     listSessionsMock.mockResolvedValue([past]);
+    getMessagesMock.mockResolvedValue([
+      { role: "user", content: "earlier question" },
+      { role: "assistant", content: "earlier answer" },
+    ]);
     renderPg();
     await screen.findByText(/33333333-3333-3333/);
 
@@ -507,6 +514,11 @@ describe("PlaygroundTab", () => {
     expect(
       await screen.findByTestId("playground-resumed-notice"),
     ).toBeInTheDocument();
+    // Prior conversation loaded from the checkpoint and rendered read-only.
+    const hist = await screen.findByTestId("playground-history");
+    expect(hist).toHaveTextContent("earlier question");
+    expect(hist).toHaveTextContent("earlier answer");
+    expect(getMessagesMock).toHaveBeenCalledWith(past.thread_id);
   });
 
   it("shows the workspace inspector with the volume + artifacts", async () => {
