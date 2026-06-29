@@ -310,6 +310,15 @@ def _register_routes(app: FastAPI) -> None:
             timed_out=result.timed_out,
         )
 
+    @app.get("/v1/workspaces/{tenant_id}/{user_id}/files")
+    async def list_workspace_files(
+        tenant_id: UUID, user_id: UUID, supervisor: SupervisorDep
+    ) -> JSONResponse:
+        # Workspace browse — only the supervisor can inspect a per-user docker
+        # volume; the control-plane proxies here for the playground inspector.
+        entries = await supervisor.list_workspace_files(tenant_id=tenant_id, user_id=user_id)
+        return JSONResponse({"files": [{"path": rel, "size": size} for size, rel in entries]})
+
     @app.get("/v1/workspaces/{tenant_id}/{user_id}/file")
     async def read_workspace_file(
         tenant_id: UUID, user_id: UUID, path: str, supervisor: SupervisorDep

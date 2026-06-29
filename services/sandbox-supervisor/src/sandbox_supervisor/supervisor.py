@@ -102,6 +102,10 @@ _MAX_SEED_FILES = 256
 #: control-plane already bounds it, but the request round-trips untrusted).
 _MAX_WORKSPACE_WRITE_BYTES = 25 * 1024 * 1024
 
+#: Workspace-browse listing cap. Bounds the inspector's file list (and the
+#: supervisor's buffer) against a volume with a pathological number of files.
+_MAX_WORKSPACE_LIST_ENTRIES = 2000
+
 
 def _validate_workspace_path(path: str) -> str:
     """Reject a non-relative or ``..``-bearing workspace path (J.9).
@@ -466,6 +470,26 @@ class SandboxSupervisor:
             resource_type="user_workspace",
             resource_id=str(workspace.id),
         )
+
+    async def list_workspace_files(
+        self, *, tenant_id: UUID, user_id: UUID
+    ) -> list[tuple[int, str]]:
+        """List the files in a user's persistent workspace volume (browse).
+
+        Read-only inventory for the playground workspace inspector. Returns
+        ``(size_bytes, relpath)`` pairs. A volume that has never been created
+        (the user hasn't run anything yet) yields an empty list rather than
+        an error — the inspector renders "no files" the same as "no volume".
+        """
+        volume = workspace_volume_name(tenant_id, user_id)
+        try:
+            return await self._docker.list_volume_files(
+                volume=volume,
+                image=self._settings.sandbox_image,
+                max_entries=_MAX_WORKSPACE_LIST_ENTRIES,
+            )
+        except DockerError:
+            return []
 
     async def read_workspace_file(self, *, tenant_id: UUID, user_id: UUID, path: str) -> bytes:
         """Read a file from a user's persistent workspace volume (Stream J.9).

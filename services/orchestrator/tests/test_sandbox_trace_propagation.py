@@ -127,6 +127,33 @@ async def test_workspace_put_raises_on_error_response(tracing_setup: None) -> No
         )
 
 
+async def test_workspace_list_parses_files_and_traces(tracing_setup: None) -> None:
+    from orchestrator.tools.sandbox import WorkspaceFileEntry
+
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        seen["headers"] = request.headers
+        return httpx.Response(200, json={"files": [{"path": "report.pdf", "size": 2048}]})
+
+    client = HTTPSupervisorClient(
+        base_url="http://supervisor", transport=httpx.MockTransport(handler)
+    )
+    with helix_span(HelixComponent.ORCHESTRATOR, "tool_call"):
+        active_trace_id = current_trace_id_hex()
+        entries = await client.list_workspace_files(tenant_id=uuid4(), user_id=uuid4())
+
+    assert entries == [WorkspaceFileEntry(path="report.pdf", size=2048)]
+    assert seen["method"] == "GET"
+    assert str(seen["path"]).endswith("/files")
+    headers = seen["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert active_trace_id is not None
+    assert headers.get(TRACEPARENT_HEADER, "").split("-")[1] == active_trace_id
+
+
 async def test_no_active_span_omits_traceparent(tracing_setup: None) -> None:
     # No surrounding span (OTel active but no span) → nothing to propagate;
     # external egress and uninstrumented call sites stay header-free.

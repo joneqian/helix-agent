@@ -30,6 +30,7 @@ The module is a pure function — no FastAPI / state. Tested directly.
 
 from __future__ import annotations
 
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Literal
@@ -39,8 +40,24 @@ from helix_agent.protocol import ArtifactKind
 __all__ = [
     "ContentDisposition",
     "InferredContentType",
+    "content_disposition_header",
     "infer_content_type",
 ]
+
+
+def content_disposition_header(filename: str, *, disposition: ContentDisposition) -> str:
+    """RFC 6266 ``Content-Disposition`` with both ASCII fallback + utf-8.
+
+    ``filename=`` carries an ASCII-safe approximation (replacing anything
+    outside printable ASCII with ``_``) for legacy clients; ``filename*=UTF-8''…``
+    carries the percent-encoded original. Quoting the ASCII fallback escapes
+    embedded quotes — defence against a CR/LF / quote in the name leaking into
+    the header.
+    """
+    ascii_safe = "".join(c if 32 <= ord(c) < 127 and c != '"' else "_" for c in filename)
+    encoded = urllib.parse.quote(filename, safe="")
+    return f"{disposition}; filename=\"{ascii_safe}\"; filename*=UTF-8''{encoded}"
+
 
 ContentDisposition = Literal["inline", "attachment"]
 

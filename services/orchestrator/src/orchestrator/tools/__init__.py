@@ -165,6 +165,9 @@ from orchestrator.tools.sandbox import (
 from orchestrator.tools.sandbox import (
     SupervisorClient as SupervisorClient,
 )
+from orchestrator.tools.sandbox import (
+    WorkspaceFileEntry as WorkspaceFileEntry,
+)
 from orchestrator.tools.subagent import (
     MAX_SUBAGENT_DEPTH as MAX_SUBAGENT_DEPTH,
 )
@@ -254,6 +257,7 @@ __all__ = [
     "ToolResult",
     "ToolSpec",
     "WebSearchTool",
+    "WorkspaceFileEntry",
     "WorkspaceLock",
     "WriteFileTool",
     "build_tool_registry",
