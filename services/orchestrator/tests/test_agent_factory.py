@@ -882,6 +882,17 @@ def test_off_catalog_model_is_not_gated() -> None:
     assert provider.effort == "max"
 
 
+def test_build_provider_threads_timeout_to_client() -> None:
+    # No timeout_s → shared 60s default; an explicit value (VL path) overrides
+    # the provider client's httpx wall-clock timeout (Stream L.L3).
+    default = _build_provider(_anthropic_model(name="claude-sonnet-4-6"), "k")
+    assert isinstance(default, AnthropicProvider)
+    assert default.client.timeout_s == 60.0  # type: ignore[union-attr]
+    raised = _build_provider(_anthropic_model(name="claude-sonnet-4-6"), "k", timeout_s=180.0)
+    assert isinstance(raised, AnthropicProvider)
+    assert raised.client.timeout_s == 180.0  # type: ignore[union-attr]
+
+
 # ---------------------------------------------------------------------------
 # Stream CM-10 — vendor thinking translation (_thinking_payload)
 # ---------------------------------------------------------------------------

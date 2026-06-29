@@ -57,6 +57,7 @@ def sanitize_dangling_tool_calls(
                     content=PLACEHOLDER_CONTENT,
                     tool_call_id=tc_id,
                     status="error",
+                    name=tool_call.get("name"),
                 )
             )
     return placeholders

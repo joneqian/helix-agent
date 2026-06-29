@@ -122,6 +122,18 @@ from orchestrator.tools.update_plan import UpdatePlanTool
 
 logger = logging.getLogger("helix.orchestrator.agent_factory")
 
+#: Floor for the VL (``ask_image``) router's wall-clock deadline. Reasoning
+#: vision models (e.g. doubao-seed VL) are far slower than chat — a detailed
+#: image description routinely runs tens of seconds — so the chat default
+#: (``stream_deadline_s`` = 90s) is too tight and gets compounded by the
+#: provider httpx timeout firing first + a wasted retry. The VL deadline is
+#: floored here and the provider httpx timeout is aligned to it (Stream L.L3).
+_VL_STREAM_DEADLINE_FLOOR_S = 180
+
+#: Default provider-client httpx wall-clock timeout (matches the per-vendor
+#: factory defaults). Used when no explicit ``timeout_s`` is threaded in.
+_PROVIDER_HTTP_TIMEOUT_DEFAULT_S = 60.0
+
 
 def _make_workspace_writer_factory(
     client: SupervisorClient,
@@ -490,13 +502,23 @@ async def build_agent(
     # outlive an otherwise-cancelled run.
     vl_caller: LLMCaller | None = None
     if spec.spec.vision is not None:
-        vl_deadline_s = spec.spec.stream_deadline_s
+        # Vision (esp. reasoning VL) is far slower than chat, so floor the VL
+        # deadline above the chat default and align the provider httpx timeout
+        # to it — otherwise the 60s httpx default fires first on a legitimately
+        # slow image call, the error-handling middleware retries, and the run
+        # burns its whole budget before the deadline even applies (Stream L.L3).
+        # ``stream_deadline_s == 0`` (deadline disabled) is honoured as-is.
+        manifest_dl = spec.spec.stream_deadline_s
+        vl_deadline_s = (
+            float(max(manifest_dl, _VL_STREAM_DEADLINE_FLOOR_S)) if manifest_dl > 0 else None
+        )
         vl_caller = await build_llm_router(
             spec.spec.vision.model,
             secret_store=secret_store,
             around_llm_chain=chains.around_llm_call,
             image_resolver=env.image_resolver,
-            stream_deadline_s=float(vl_deadline_s) if vl_deadline_s > 0 else None,
+            stream_deadline_s=vl_deadline_s,
+            provider_timeout_s=vl_deadline_s,
             # Mini-ADR J-33 — VL fallback chain (J.6.补强-4).
             extra_fallbacks=list(spec.spec.vision.fallbacks),
             provider_key_resolver=provider_key_resolver,
@@ -1332,6 +1354,7 @@ async def build_llm_router(
     around_llm_chain: MiddlewareChain | None = None,
     image_resolver: ImageResolver | None = None,
     stream_deadline_s: float | None = None,
+    provider_timeout_s: float | None = None,
     extra_fallbacks: list[ModelSpec] | None = None,
     provider_key_resolver: ProviderKeyResolver | None = None,
     ignore_api_key_ref: bool = False,
@@ -1412,7 +1435,9 @@ async def build_llm_router(
         multikey = len(secret_refs) > 1
         for idx, secret_ref in enumerate(secret_refs):
             api_key = await secret_store.get(parse_secret_ref(secret_ref))
-            provider = _build_provider(entry, api_key, image_resolver=image_resolver)
+            provider = _build_provider(
+                entry, api_key, image_resolver=image_resolver, timeout_s=provider_timeout_s
+            )
             rate_limited = RateLimitedProvider.with_rpm(
                 provider, rate_limit_rpm=entry.rate_limit_rpm
             )
@@ -1565,7 +1590,11 @@ def _flatten_chain(model: ModelSpec) -> list[ModelSpec]:
 
 
 def _build_provider(
-    model: ModelSpec, api_key: str, *, image_resolver: ImageResolver | None = None
+    model: ModelSpec,
+    api_key: str,
+    *,
+    image_resolver: ImageResolver | None = None,
+    timeout_s: float | None = None,
 ) -> LLMProvider:
     """Map a ``ModelSpec`` to a concrete :class:`LLMProvider` adapter.
 
@@ -1581,6 +1610,10 @@ def _build_provider(
     # Widen to ``str`` so the exhaustive Literal still leaves the
     # trailing "unsupported" raise reachable to mypy.
     provider: str = model.provider
+    # Provider client httpx wall-clock timeout. ``None`` keeps the shared 60s
+    # default; the VL router passes a larger value so a slow image call isn't
+    # killed by httpx before the router deadline applies (Stream L.L3).
+    timeout_eff: float = _PROVIDER_HTTP_TIMEOUT_DEFAULT_S if timeout_s is None else timeout_s
     if provider == "anthropic":
         # Stream CM-9 (Mini-ADR CM-J3) — gate compute-control params on
         # the catalog capability bits. Off-catalog models (custom
@@ -1601,7 +1634,7 @@ def _build_provider(
                 )
             temperature = None
         return AnthropicProvider(
-            client=HTTPAnthropicClient(api_key=api_key),
+            client=HTTPAnthropicClient(api_key=api_key, timeout_s=timeout_eff),
             model=model.name,
             max_tokens=model.max_tokens,
             temperature=temperature,
@@ -1633,7 +1666,7 @@ def _build_provider(
 
     if provider == "openai":
         return OpenAIProvider(
-            client=HTTPOpenAIClient(api_key=api_key),
+            client=HTTPOpenAIClient(api_key=api_key, timeout_s=timeout_eff),
             model=model.name,
             temperature=model.temperature,
             image_resolver=image_resolver,
@@ -1650,7 +1683,7 @@ def _build_provider(
     make_client = openai_compatible.get(provider)
     if make_client is not None:
         return OpenAIProvider(
-            client=make_client(api_key=api_key),
+            client=make_client(api_key=api_key, timeout_s=timeout_eff),
             model=model.name,
             temperature=model.temperature,
             image_resolver=image_resolver,
@@ -1661,7 +1694,7 @@ def _build_provider(
         if not model.base_url:
             raise AgentFactoryError(f"self-hosted model {model.name!r} requires a base_url")
         return OpenAIProvider(
-            client=make_self_hosted_client(api_key, base_url=model.base_url),
+            client=make_self_hosted_client(api_key, base_url=model.base_url, timeout_s=timeout_eff),
             model=model.name,
             temperature=model.temperature,
             image_resolver=image_resolver,
@@ -1680,6 +1713,7 @@ def _build_provider(
                 endpoint=model.base_url,
                 deployment=model.azure_deployment,
                 api_version=model.azure_api_version,
+                timeout_s=timeout_eff,
             ),
             model=model.name,
             temperature=model.temperature,

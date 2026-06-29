@@ -76,7 +76,13 @@ from orchestrator.agent_factory import (
     detect_subagent_cycle,
 )
 from orchestrator.errors import AgentFactoryError
-from orchestrator.llm import Embedder, HTTPEmbeddingClient, OpenAICompatibleEmbedder
+from orchestrator.llm import (
+    DashScopeReranker,
+    Embedder,
+    HTTPDashScopeRerankClient,
+    HTTPEmbeddingClient,
+    OpenAICompatibleEmbedder,
+)
 from orchestrator.multimodal import ImageResolver, ObjectStoreImageResolver
 from orchestrator.tools import (
     AllowlistProvider,
@@ -718,6 +724,14 @@ class ResolvingEmbedder:
         return await delegate.embed(texts, tenant_id=tenant_id)
 
 
+def _is_dashscope_rerank_model(provider: str, model: str) -> bool:
+    """DashScope (``qwen``) dedicated rerank models (``qwen3-vl-rerank``,
+    ``gte-rerank``, ``text-rerank-*``) are NOT served over the OpenAI-compat
+    chat endpoint, so the chat-prompt ``LLMReranker`` 404s on them. Route those
+    to the native rerank API (:class:`DashScopeReranker`) instead."""
+    return provider == "qwen" and "rerank" in model.lower()
+
+
 @dataclass(frozen=True)
 class ResolvingReranker:
     """Per-tenant credential-resolving :class:`Reranker` (Mini-ADR O-9).
@@ -747,6 +761,11 @@ class ResolvingReranker:
                 tenant_id,
             )
             return list(range(len(documents)))[:top_k]
+        if _is_dashscope_rerank_model(self.provider, self.model):
+            api_key = await self.secret_store.get(parse_secret_ref(secret_ref))
+            return await DashScopeReranker(
+                client=HTTPDashScopeRerankClient(api_key=api_key), model=self.model
+            ).rerank(query=query, documents=documents, top_k=top_k, tenant_id=tenant_id)
         model_spec = ModelSpec.model_validate(
             {"provider": self.provider, "name": self.model, "api_key_ref": secret_ref}
         )
@@ -811,6 +830,11 @@ class DynamicResolvingReranker:
                 tenant_id,
             )
             return list(range(len(documents)))[:top_k]
+        if _is_dashscope_rerank_model(provider, model):
+            api_key = await self.secret_store.get(parse_secret_ref(secret_ref))
+            return await DashScopeReranker(
+                client=HTTPDashScopeRerankClient(api_key=api_key), model=model
+            ).rerank(query=query, documents=documents, top_k=top_k, tenant_id=tenant_id)
         model_spec = ModelSpec.model_validate(
             {"provider": provider, "name": model, "api_key_ref": secret_ref}
         )

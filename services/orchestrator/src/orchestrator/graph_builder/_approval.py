@@ -207,6 +207,7 @@ def apply_resume_decision(
                 content=f"[approval rejected] {reason}",
                 tool_call_id=str(call.get("id") or ""),
                 status="error",
+                name=call.get("name"),
             )
             for call in tool_calls
         ]
