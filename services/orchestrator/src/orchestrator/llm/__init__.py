@@ -101,6 +101,18 @@ from orchestrator.llm.rate_limit import (
 from orchestrator.llm.rate_limit import (
     RateLimitedProvider as RateLimitedProvider,
 )
+from orchestrator.llm.rerank import (
+    DASHSCOPE_RERANK_URL as DASHSCOPE_RERANK_URL,
+)
+from orchestrator.llm.rerank import (
+    DashScopeReranker as DashScopeReranker,
+)
+from orchestrator.llm.rerank import (
+    HTTPDashScopeRerankClient as HTTPDashScopeRerankClient,
+)
+from orchestrator.llm.rerank import (
+    RerankClient as RerankClient,
+)
 from orchestrator.llm.router import (
     AllProvidersExhaustedError as AllProvidersExhaustedError,
 )
@@ -115,6 +127,7 @@ from orchestrator.llm.router import (
 )
 
 __all__ = [
+    "DASHSCOPE_RERANK_URL",
     "DEEPSEEK_BASE_URL",
     "DEFAULT_CHAT_COMPLETIONS_PATH",
     "DEFAULT_EMBEDDINGS_PATH",
@@ -130,10 +143,12 @@ __all__ = [
     "AllProvidersExhaustedError",
     "AnthropicClient",
     "AnthropicProvider",
+    "DashScopeReranker",
     "Embedder",
     "EmbeddingClient",
     "FakeEmbedder",
     "HTTPAnthropicClient",
+    "HTTPDashScopeRerankClient",
     "HTTPEmbeddingClient",
     "HTTPOpenAIClient",
     "LLMCaller",
@@ -147,6 +162,7 @@ __all__ = [
     "RateLimitedProvider",
     "RecordingAnthropicClient",
     "RecordingOpenAIClient",
+    "RerankClient",
     "make_azure_client",
     "make_deepseek_client",
     "make_doubao_client",

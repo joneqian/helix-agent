@@ -6,7 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from control_plane.runtime import DynamicResolvingEmbedder, DynamicResolvingReranker
+from control_plane.runtime import (
+    DynamicResolvingEmbedder,
+    DynamicResolvingReranker,
+    _is_dashscope_rerank_model,
+)
 from helix_agent.common.credentials import CredentialsResolverError
 from orchestrator.errors import AgentFactoryError
 
@@ -81,6 +85,41 @@ async def test_reranker_degrades_to_identity_when_unconfigured():
     )
     out = await rr.rerank(query="q", documents=["a", "b", "c"], top_k=2, tenant_id=uuid4())
     assert out == [0, 1]  # identity order, no error
+
+
+def test_is_dashscope_rerank_model() -> None:
+    assert _is_dashscope_rerank_model("qwen", "qwen3-vl-rerank")
+    assert _is_dashscope_rerank_model("qwen", "gte-rerank-v2")
+    assert not _is_dashscope_rerank_model("qwen", "qwen-plus")  # chat model
+    assert not _is_dashscope_rerank_model("doubao", "doubao-rerank")  # only qwen/DashScope
+
+
+@pytest.mark.asyncio
+async def test_reranker_routes_dashscope_rerank_model_to_native_api(monkeypatch):
+    """A DashScope dedicated rerank model goes to the native rerank API, NOT the
+    chat-prompt LLMReranker (which 404s on it)."""
+
+    class _FakeRerankClient:
+        def __init__(self, **_kw):
+            pass
+
+        async def rerank(self, *, model, query, documents, top_n):
+            return {"output": {"results": [{"index": 1}, {"index": 0}]}}
+
+    monkeypatch.setattr("control_plane.runtime.HTTPDashScopeRerankClient", _FakeRerankClient)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("LLM router (chat) path used for a native rerank model")
+
+    monkeypatch.setattr("control_plane.runtime.build_llm_router", _boom)
+
+    cfg = _Cfg()
+    cfg.rerank = ("qwen", "qwen3-vl-rerank")
+    rr = DynamicResolvingReranker(
+        config_service=cfg, resolver=_Resolver(), secret_store=_SecretStore()
+    )
+    out = await rr.rerank(query="q", documents=["a", "b"], top_k=2, tenant_id=uuid4())
+    assert out == [1, 0]  # native rerank order
 
 
 class _RaisingResolver:
