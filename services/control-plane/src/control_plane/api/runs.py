@@ -999,15 +999,18 @@ def build_runs_router() -> APIRouter:
         request: Request,
         threads: Annotated[object, Depends(_get_thread_repo)],
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
-        agent_repo: Annotated[AgentSpecStore, Depends(_get_agent_repo)],
         runtime: Annotated[AgentRuntime, Depends(_get_agent_runtime)],
     ) -> JSONResponse:
         """Playground resume (#6) — the thread's conversation history.
 
-        Reads the durable LangGraph checkpoint (keyed by ``thread_id``) so
-        resuming a session can show what was said before. Returns only the
-        user/assistant text turns; tool/system messages are omitted. Best-effort:
-        any failure degrades to an empty list rather than erroring the page.
+        Reads the thread's durable LangGraph checkpoint (keyed by ``thread_id``)
+        DIRECTLY off the checkpointer — no agent rebuild. The previous version
+        called ``runtime.get_agent(...).graph.aget_state(...)``, which coupled a
+        read-only history view to a full (slow, fragile) agent build whose graph
+        could end up bound to a different checkpointer than the durable one —
+        silently returning an empty list. Returns only user/assistant text
+        turns; tool/system messages are omitted. Best-effort: any failure
+        degrades to an empty list rather than erroring the page.
         """
         tenant_id: UUID = request.state.tenant_id
         meta = await threads.get(thread_id, tenant_id=tenant_id)  # type: ignore[attr-defined]
@@ -1020,29 +1023,20 @@ def build_runs_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="session not found")
 
         empty = JSONResponse({"success": True, "data": {"messages": []}})
-        if meta.agent_name is None or meta.agent_version is None:
-            return empty
-        spec_record = await agent_repo.get(
-            tenant_id=tenant_id, name=meta.agent_name, version=meta.agent_version
-        )
-        if spec_record is None:
+        checkpointer = runtime.durable_checkpointer
+        if checkpointer is None:
             return empty
         try:
-            built = await runtime.get_agent(
-                tenant_id=tenant_id,
-                name=meta.agent_name,
-                version=meta.agent_version,
-                spec=spec_record.spec,
-                user_id=meta.user_id,
-            )
             config: RunnableConfig = {
-                "configurable": {"thread_id": str(thread_id), "tenant_id": str(tenant_id)}
+                "configurable": {"thread_id": str(thread_id), "checkpoint_ns": ""}
             }
-            snapshot = await built.graph.aget_state(config)  # type: ignore[attr-defined]
+            tup = await checkpointer.aget_tuple(config)
         except Exception:
             logger.warning("thread_messages.read_failed", exc_info=True)
             return empty
-        raw = snapshot.values.get("messages", []) if snapshot is not None else []
+        if tup is None:
+            return empty
+        raw = (tup.checkpoint.get("channel_values") or {}).get("messages", [])
         out: list[dict[str, str]] = []
         for m in raw:
             mtype = getattr(m, "type", None)

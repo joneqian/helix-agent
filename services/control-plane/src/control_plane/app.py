@@ -946,6 +946,10 @@ def create_app(
                     logger.info("control_plane.checkpointer.postgres_ready")
                 else:
                     checkpointer = InMemorySaver()
+                # Expose the durable checkpointer so the ``/messages`` resume
+                # endpoint can read a thread's checkpoint directly (no agent
+                # rebuild). Same instance bound into ``agent_builder`` below.
+                resolved_agent_runtime.durable_checkpointer = checkpointer
                 # Stream O Mini-ADR O-9/O-10 — one CredentialsResolver over
                 # the effective (legacy-derived) catalog. The web_search /
                 # embedder / reranker callers and the consolidator aux model

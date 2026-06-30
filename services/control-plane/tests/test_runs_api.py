@@ -13,10 +13,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Annotated, TypedDict
 from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph
+from langgraph.graph.message import add_messages
 
 from control_plane.app import create_app
 from control_plane.audit import build_default_audit_logger
@@ -57,6 +68,29 @@ spec:
       readonly_root: true
       writable: ["/workspace"]
 """
+
+
+class _SeedState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+
+
+async def _seed_thread_messages(
+    checkpointer: InMemorySaver, thread_id: str, messages: list[BaseMessage]
+) -> None:
+    """Write one checkpoint holding ``messages`` for ``thread_id``.
+
+    Mirrors how a real run leaves a thread's durable checkpoint, so the resume
+    ``/messages`` endpoint (which reads the checkpointer directly) has something
+    to surface.
+    """
+    graph = StateGraph(_SeedState)
+    graph.add_node("n", lambda _state: {"messages": []})
+    graph.add_edge(START, "n")
+    seeded = graph.compile(checkpointer=checkpointer)
+    await seeded.ainvoke(
+        {"messages": messages},
+        config={"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}},
+    )
 
 
 @pytest.fixture
@@ -152,6 +186,64 @@ async def test_thread_messages_empty_for_fresh_thread(runs_client: AsyncClient) 
     response = await runs_client.get(f"/v1/sessions/{thread_id}/messages")
     assert response.status_code == 200
     assert response.json()["data"]["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_thread_messages_reads_durable_checkpoint_directly() -> None:
+    """Regression — resume history reads the durable checkpointer DIRECTLY.
+
+    The old endpoint rebuilt the agent and called ``built.graph.aget_state``; if
+    that build bound a different (empty) checkpointer than the durable one, the
+    history came back empty even though the checkpoint held the turns. Seed a
+    checkpointer, point the runtime at it, and assert the user/assistant turns
+    surface while system/tool/empty-AI messages are filtered out.
+    """
+    settings = Settings(
+        env="dev",
+        auth_mode="dev",
+        rate_limit_burst=10_000,
+        rate_limit_per_second=10_000.0,
+        oidc_issuer=TEST_ISSUER,
+        oidc_audience=[TEST_AUDIENCE],
+    )
+    run_store = InMemoryRunStore()
+    checkpointer = InMemorySaver()
+    runtime = stub_agent_runtime(run_store=run_store)
+    runtime.durable_checkpointer = checkpointer
+    app = create_app(
+        settings=settings,
+        audit_logger=build_default_audit_logger(InMemoryAuditLogStore()),
+        jwt_verifier=build_test_jwt_verifier(),
+        agent_runtime=runtime,
+        run_repo=run_store,
+    )
+    transport = ASGITransport(app=app)
+    headers = {"Authorization": f"Bearer {make_test_jwt(tenant_id=_DEFAULT_TENANT)}"}
+    async with AsyncClient(
+        transport=transport, base_url="http://control-plane.test", headers=headers
+    ) as client:
+        await client.post("/v1/agents", json={"manifest_yaml": _AGENT_YAML})
+        thread_id = await _create_session(client)
+
+        # Seed the durable checkpoint for this thread with a mixed transcript.
+        await _seed_thread_messages(
+            checkpointer,
+            thread_id,
+            [
+                SystemMessage(content="sys prompt"),
+                HumanMessage(content="今天几号"),
+                AIMessage(content=""),  # tool-call-only turn, no text
+                ToolMessage(content="2026-06-30", tool_call_id="t1"),
+                AIMessage(content="今天是 2026年6月30日"),
+            ],
+        )
+
+        response = await client.get(f"/v1/sessions/{thread_id}/messages")
+        assert response.status_code == 200
+        assert response.json()["data"]["messages"] == [
+            {"role": "user", "content": "今天几号"},
+            {"role": "assistant", "content": "今天是 2026年6月30日"},
+        ]
 
 
 # ---------------------------------------------------------------------------
