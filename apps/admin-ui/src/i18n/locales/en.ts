@@ -466,6 +466,8 @@ export interface TranslationKeys {
     approval_timeout_help: string;
     trajectory_recording: string;
     trajectory_recording_help: string;
+    tool_budget: string;
+    tool_budget_help: string;
     section_knowledge: string;
     section_knowledge_help: string;
     knowledge_hint: string;
@@ -1130,6 +1132,17 @@ export interface TranslationKeys {
     billing_hint: string;
     billing_saved: string;
     billing_save_failed: string;
+    tool_budget_heading: string;
+    tool_budget_help_title: string;
+    tool_budget_help_body: string;
+    tool_budget_title: string;
+    tool_budget_enabled: string;
+    tool_budget_disabled: string;
+    tool_budget_hint: string;
+    tool_budget_env_default: string;
+    tool_budget_toggle_label: string;
+    tool_budget_saved: string;
+    tool_budget_save_failed: string;
   };
   settings_iam: {
     sa_page_title: string;
@@ -2496,6 +2509,9 @@ const en: TranslationKeys = {
     trajectory_recording: "Keep a record of conversations",
     trajectory_recording_help:
       "When on, each completed conversation is saved, used for quality evaluation and model improvement.\nTurn off if conversation content must not be retained.\nOn by default.\nExample: on",
+    tool_budget: "Tool-output budget",
+    tool_budget_help:
+      "When on, large/accumulated tool results are externalized to the workspace and pruned from context so long runs stay within the model window.\nTurn off to keep every tool result verbatim in context for this agent.\nOn by default; the platform switch can override it off (effective = platform AND agent).\nExample: on",
     section_knowledge: "Knowledge bases (RAG)",
     section_knowledge_help:
       "Knowledge bases the agent can search to back up its answers.\nPick existing bases, or type a name.\nExample: hr-policies, eng-handbook",
@@ -3236,6 +3252,19 @@ const en: TranslationKeys = {
       "While paused, the chargeback / usage cost figures stop updating; raw token metering is unaffected.",
     billing_saved: "Cost rollup setting saved.",
     billing_save_failed: "Failed to save cost rollup setting",
+    tool_budget_heading: "Tool-output budget",
+    tool_budget_help_title: "What is the tool-output budget?",
+    tool_budget_help_body:
+      "Large or accumulated tool results (e.g. web search) are externalized to the workspace and pruned from context so long runs stay within the model window. This is the platform master switch — turning it off reverts the whole feature (externalization + prune) for every agent.",
+    tool_budget_title: "Tool-output budget",
+    tool_budget_enabled: "Tool-output budget enabled",
+    tool_budget_disabled: "Tool-output budget disabled",
+    tool_budget_hint:
+      "Off reverts platform-wide on the next agent build (no redeploy). Per-agent switches can only narrow this further (effective = platform AND agent).",
+    tool_budget_env_default: "env default",
+    tool_budget_toggle_label: "Platform tool-output budget",
+    tool_budget_saved: "Tool-output budget setting saved.",
+    tool_budget_save_failed: "Failed to save tool-output budget setting",
   },
   settings_iam: {
     sa_page_title: "Service Accounts",

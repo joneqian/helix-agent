@@ -48,6 +48,7 @@ import {
   readSystemPrompt,
   readTools,
   readTopK,
+  readToolBudgetOn,
   readTrajectoryRecording,
   readVerifyReads,
   readVisionModel,
@@ -69,6 +70,7 @@ import {
   setSystemPrompt,
   setTool,
   setTopK,
+  setToolBudgetOn,
   setTrajectoryRecording,
   setVerifyReads,
   setVisionModel,
@@ -683,6 +685,25 @@ export function FormView({
                       <FieldHelp
                         text={t("agent_form.trajectory_recording_help")}
                         testId="af-trajectory-recording"
+                      />
+                    </Text>
+                  </label>
+                  <label
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <Switch
+                      checked={readToolBudgetOn(formData)}
+                      data-testid="af-tool-budget"
+                      aria-label={t("agent_form.tool_budget")}
+                      onChange={(on) =>
+                        onChange(setToolBudgetOn(formData, on))
+                      }
+                    />
+                    <Text type="secondary">
+                      {t("agent_form.tool_budget")}
+                      <FieldHelp
+                        text={t("agent_form.tool_budget_help")}
+                        testId="af-tool-budget"
                       />
                     </Text>
                   </label>

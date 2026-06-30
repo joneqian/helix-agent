@@ -501,6 +501,9 @@ const zhCN: TranslationKeys = {
     trajectory_recording: "记录对话留档",
     trajectory_recording_help:
       "开启后,每次完整对话会被保存下来,用于质量评测和模型优化。\n如果对话内容不能留存,就关掉。\n默认开启。\n示例:开启",
+    tool_budget: "工具结果预算",
+    tool_budget_help:
+      "开启后,过大或累积的工具结果会被外化到工作区并从上下文剪枝,使长任务保持在模型窗口内。\n关掉则该 Agent 的每条工具结果都原样留在上下文。\n默认开启;平台开关可将其强制关闭(生效 = 平台 AND Agent)。\n示例:开启",
     section_knowledge: "知识库(RAG)",
     section_knowledge_help:
       "Agent 可以检索的知识库,用来给回答找依据。\n选已有的库,或输入名称。\n示例:hr-policies、eng-handbook",
@@ -1208,6 +1211,19 @@ const zhCN: TranslationKeys = {
       "暂停期间，chargeback / 用量成本数字停止更新；原始 token 计量不受影响。",
     billing_saved: "成本归集设置已保存。",
     billing_save_failed: "保存成本归集设置失败",
+    tool_budget_heading: "工具结果预算",
+    tool_budget_help_title: "什么是工具结果预算?",
+    tool_budget_help_body:
+      "过大或累积的工具结果(如网络搜索)会被外化到工作区并从上下文剪枝,使长任务保持在模型窗口内。这是平台总开关——关闭即对所有 Agent 回退整套特性(外化 + 剪枝)。",
+    tool_budget_title: "工具结果预算",
+    tool_budget_enabled: "工具结果预算已启用",
+    tool_budget_disabled: "工具结果预算已关闭",
+    tool_budget_hint:
+      "关闭后下次 Agent 构建即全平台回退(无需重新部署)。Agent 级开关只能在此基础上进一步收窄(生效 = 平台 AND Agent)。",
+    tool_budget_env_default: "环境默认",
+    tool_budget_toggle_label: "平台工具结果预算",
+    tool_budget_saved: "工具结果预算设置已保存。",
+    tool_budget_save_failed: "保存工具结果预算设置失败",
   },
   settings_iam: {
     sa_page_title: "服务账号",
