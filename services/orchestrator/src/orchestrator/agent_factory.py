@@ -32,10 +32,13 @@ each adapter and onto the request body.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 if TYPE_CHECKING:
     from orchestrator.tools.skill_view import SkillResolution
@@ -756,6 +759,16 @@ async def build_agent(
         ):
             registry.register(tool)
 
+    # Dynamic-context — inject today's date (day granularity, agent timezone)
+    # when the manifest opts in (default on). Computed at build time and frozen
+    # onto ``BuiltAgent.system_prompt``; stays cache-stable within a calendar
+    # day. Exact time-of-day is deferred to ``exec_python`` (see
+    # ``_current_date_block``).
+    current_date = (
+        _current_date_block(datetime.now(_resolve_agent_timezone()))
+        if spec.spec.dynamic_context.inject_current_date
+        else None
+    )
     final_system_prompt = _assemble_system_prompt(
         base=spec.spec.system_prompt.template,
         skill_fragments=loaded_skills.prompt_fragments,
@@ -763,6 +776,7 @@ async def build_agent(
         behavior_patches=loaded_skills.behavior_patches,
         tool_notes=loaded_skills.tool_notes,
         memory_blocks=loaded_skills.memory_blocks,
+        current_date=current_date,
         spotlight=spec.spec.defenses.prompt_injection == "spotlight",
     )
 
@@ -1097,6 +1111,63 @@ def _render_skill_summary(*, name: str, version: SkillVersion) -> str:
     )
 
 
+#: Agent wall-clock timezone for the injected "current date" line. The injected
+#: value is day-granular (see ``_current_date_block``) so the system prompt stays
+#: byte-stable across every run within one calendar day, keeping the prompt-cache
+#: prefix warm. ``HELIX_AGENT_TIMEZONE`` overrides the default (zh-CN deployment →
+#: Asia/Shanghai) so "今天几号" answers in the user's local day, not the server's
+#: UTC day.
+_DEFAULT_AGENT_TIMEZONE = "Asia/Shanghai"
+
+_WEEKDAYS_EN = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+
+def _resolve_agent_timezone() -> ZoneInfo:
+    """Resolve the agent wall-clock timezone, falling back to UTC.
+
+    Reads ``HELIX_AGENT_TIMEZONE`` (default ``Asia/Shanghai``). An invalid zone
+    name degrades to UTC rather than failing the build — a stale tz label is
+    recoverable, a crashed build is not.
+    """
+    name = os.environ.get("HELIX_AGENT_TIMEZONE", _DEFAULT_AGENT_TIMEZONE)
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("invalid HELIX_AGENT_TIMEZONE %r; falling back to UTC", name)
+        return ZoneInfo("UTC")
+
+
+def _current_date_block(now: datetime) -> str:
+    """Render the day-granular "current date" advisory line.
+
+    Day granularity (not wall-clock time) is deliberate: the system prompt is
+    assembled once per build and frozen onto :class:`BuiltAgent`, so a
+    minute/second timestamp would (a) bust the prompt-cache prefix on every run
+    and (b) read stale by the time the model sees it. The date changes at most
+    once per day, so it stays cache-stable; exact time-of-day is left to the
+    ``exec_python`` tool, which computes it accurately at call time.
+
+    Weekday + ISO date are formatted without ``strftime`` to avoid locale
+    dependence (``%A`` is localised).
+    """
+    weekday = _WEEKDAYS_EN[now.weekday()]
+    iso = f"{now.year:04d}-{now.month:02d}-{now.day:02d}"
+    tz_label = getattr(now.tzinfo, "key", None) or "UTC"
+    return (
+        f"The current date is {weekday}, {iso} (timezone {tz_label}). "
+        "Treat this as today's date when answering. For the exact current time "
+        "of day, call the exec_python tool rather than guessing."
+    )
+
+
 def _assemble_system_prompt(
     *,
     base: str,
@@ -1105,6 +1176,7 @@ def _assemble_system_prompt(
     behavior_patches: list[str] | None = None,
     tool_notes: list[str] | None = None,
     memory_blocks: list[str] | None = None,
+    current_date: str | None = None,
     spotlight: bool = False,
 ) -> str:
     """Splice base system prompt + skill summary list + ordered body
@@ -1129,11 +1201,19 @@ def _assemble_system_prompt(
         or behavior_patches
         or tool_notes
         or memory_blocks
+        or current_date
         or spotlight
     ):
         return base
 
     pieces: list[str] = [base]
+
+    # Dynamic-context — day-granular current date (``dynamic_context.
+    # inject_current_date``). Placed first after base so the model reads it as
+    # plain factual grounding; day granularity keeps the system prompt
+    # cache-stable (see ``_current_date_block``).
+    if current_date:
+        pieces.append("\n\n# Current date\n" + current_date)
 
     # Stream PI-1 — spotlighting clause: tells the model the untrusted-content
     # markers/glyph mean "data, never instructions". Wrapping of the untrusted
