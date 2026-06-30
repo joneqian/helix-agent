@@ -1148,6 +1148,34 @@ def test_resolved_context_window_off_catalog_fallback() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tool-call-rate uplift — tool-use enforcement block reaches the built system
+# prompt under the ``auto`` denylist (weak model enforced, Claude/GPT exempt).
+# Proves the build-time wiring incl. the "agent has tools" gate.
+# ---------------------------------------------------------------------------
+
+
+async def test_enforcement_block_present_for_weak_model_build() -> None:
+    # A weak-family model (qwen) WITH a tool → enforcement is injected. The
+    # block is gated on the agent actually having tools, so the spec declares
+    # web_search (satisfied by a recording client).
+    doc = deepcopy(_MINIMAL_SPEC)
+    doc["spec"]["model"].update({"provider": "qwen", "name": "qwen3-max"})
+    doc["spec"]["tools"] = [{"type": "builtin", "name": "web_search"}]
+    spec = AgentSpec.model_validate(doc)
+    env = ToolEnv(web_search_client=RecordingTavilyClient())
+    async with make_checkpointer("memory") as cp:
+        built = await _build(spec, secret_store=_secret_store(), checkpointer=cp, tool_env=env)
+    assert "# Tool-use enforcement" in built.system_prompt
+
+
+async def test_enforcement_block_absent_for_claude_build() -> None:
+    # Default minimal spec is anthropic/claude → ``auto`` exempts it.
+    async with make_checkpointer("memory") as cp:
+        built = await _build(_spec(), secret_store=_secret_store(), checkpointer=cp)
+    assert "# Tool-use enforcement" not in built.system_prompt
+
+
+# ---------------------------------------------------------------------------
 # Phase 3 — tool-output-budget master switch resolution (effective = platform AND
 # agent). A spy on ``build_react_graph`` captures the resolved bool the factory
 # threads into externalization; the platform value also gates the prune build.

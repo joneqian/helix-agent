@@ -791,6 +791,21 @@ class PolicySpec(BaseModel):
             "slot forever (resource leak)."
         ),
     )
+    tool_use_enforcement: Literal["auto", "on", "off"] = Field(
+        default="auto",
+        description=(
+            "Tool-call-rate uplift — whether to append the tool-use "
+            "enforcement block to the system prompt (it tells the model it "
+            "MUST call a tool for real / current facts instead of answering "
+            "from training knowledge, act immediately rather than promise a "
+            "future action, and never fabricate tool output). ``auto`` "
+            "(default) enables it for every model EXCEPT the families that "
+            "reliably self-initiate tool calls (Claude, GPT) — a denylist, "
+            "so a newly added weaker model gets enforcement without a "
+            "manifest edit. ``on`` / ``off`` force the block regardless of "
+            "model."
+        ),
+    )
 
 
 class CodePackageSpec(BaseModel):

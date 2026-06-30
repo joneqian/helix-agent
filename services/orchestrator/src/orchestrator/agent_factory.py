@@ -769,6 +769,16 @@ async def build_agent(
         if spec.spec.dynamic_context.inject_current_date
         else None
     )
+    # Tool-call-rate uplift — only meaningful when the agent actually has tools;
+    # a pure-LLM agent gets no enforcement block. ``auto`` exempts Claude / GPT.
+    tool_use_enforcement = (
+        _TOOL_USE_ENFORCEMENT_BLOCK
+        if _tool_use_enforcement_active(
+            mode=spec.spec.policies.tool_use_enforcement, model=spec.spec.model
+        )
+        and len(registry) > 0
+        else None
+    )
     final_system_prompt = _assemble_system_prompt(
         base=spec.spec.system_prompt.template,
         skill_fragments=loaded_skills.prompt_fragments,
@@ -777,6 +787,7 @@ async def build_agent(
         tool_notes=loaded_skills.tool_notes,
         memory_blocks=loaded_skills.memory_blocks,
         current_date=current_date,
+        tool_use_enforcement=tool_use_enforcement,
         spotlight=spec.spec.defenses.prompt_injection == "spotlight",
     )
 
@@ -1168,6 +1179,55 @@ def _current_date_block(now: datetime) -> str:
     )
 
 
+#: Tool-call-rate uplift — appended to the system prompt when enforcement is
+#: active (see ``_tool_use_enforcement_active``). Tells the model to call a tool
+#: for real / current facts instead of answering from (cutoff-bounded) training
+#: knowledge, to act in the same turn rather than promise a future action, and
+#: to never fabricate tool output. Aligns with hermes-agent's
+#: ``TOOL_USE_ENFORCEMENT`` + ``TASK_COMPLETION`` guidance.
+_TOOL_USE_ENFORCEMENT_BLOCK = (
+    "You have tools that fetch real, current information and take real actions "
+    "(web search, code execution, file and system access, and more). When the "
+    "answer depends on anything you cannot be certain of from memory — today's "
+    "date or time, recent events, prices, live or external data, the contents "
+    "of a file or system — you MUST call the relevant tool and answer from its "
+    "output. Do NOT answer from training knowledge and do NOT guess: your "
+    "training data has a cutoff, your tools do not.\n"
+    'When you say you will do something ("I\'ll search…", "let me check…"), '
+    "make the tool call in the same response — never end your turn with a "
+    "promise of future action.\n"
+    "The deliverable is a result backed by real tool output, not a description "
+    "of one. If a tool call fails, say so and try an alternative — never "
+    "fabricate output you could not actually produce."
+)
+
+#: Model families that reliably self-initiate tool calls — exempted from the
+#: ``tool_use_enforcement="auto"`` block. A DENYLIST: every other model
+#: (including any newly added one) gets enforcement, so we never chase a growing
+#: allowlist of weaker models. Matched by ``provider`` first, then by a name
+#: fragment (catches Claude-on-Bedrock / GPT-via-gateway whose provider field is
+#: a generic OpenAI-compatible one).
+_TOOL_USE_ENFORCEMENT_EXEMPT_PROVIDERS = frozenset({"anthropic", "openai", "azure"})
+_TOOL_USE_ENFORCEMENT_EXEMPT_NAME_FRAGMENTS = ("claude", "gpt")
+
+
+def _tool_use_enforcement_active(*, mode: str, model: ModelSpec) -> bool:
+    """Resolve whether the tool-use enforcement block is injected.
+
+    ``on`` / ``off`` force it; ``auto`` (default) enables it for every model
+    EXCEPT the Claude / GPT families that already call tools well — a denylist
+    so a newly added weaker model is enforced without a manifest edit.
+    """
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    if model.provider in _TOOL_USE_ENFORCEMENT_EXEMPT_PROVIDERS:
+        return False
+    name = (model.name or "").lower()
+    return not any(frag in name for frag in _TOOL_USE_ENFORCEMENT_EXEMPT_NAME_FRAGMENTS)
+
+
 def _assemble_system_prompt(
     *,
     base: str,
@@ -1177,6 +1237,7 @@ def _assemble_system_prompt(
     tool_notes: list[str] | None = None,
     memory_blocks: list[str] | None = None,
     current_date: str | None = None,
+    tool_use_enforcement: str | None = None,
     spotlight: bool = False,
 ) -> str:
     """Splice base system prompt + skill summary list + ordered body
@@ -1202,11 +1263,18 @@ def _assemble_system_prompt(
         or tool_notes
         or memory_blocks
         or current_date
+        or tool_use_enforcement
         or spotlight
     ):
         return base
 
     pieces: list[str] = [base]
+
+    # Tool-call-rate uplift — enforcement block (``policies.tool_use_
+    # enforcement``). Placed high so the behavioural directive precedes the
+    # advisory skill / memory blocks below.
+    if tool_use_enforcement:
+        pieces.append("\n\n# Tool-use enforcement\n" + tool_use_enforcement)
 
     # Dynamic-context — day-granular current date (``dynamic_context.
     # inject_current_date``). Placed first after base so the model reads it as
