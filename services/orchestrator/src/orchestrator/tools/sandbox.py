@@ -84,6 +84,9 @@ class EgressContext:
     #: Optional per-agent host allowlist (sandbox-egress Phase 2). Empty → any
     #: public host (audited); non-empty → only these hosts pass at the proxy.
     allowlist: tuple[str, ...] = ()
+    #: Optional per-agent host denylist. Blocks these hosts even under the
+    #: default allow-all (takes precedence over the allowlist).
+    denylist: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -218,6 +221,8 @@ class HTTPSupervisorClient:
             payload["agent_version"] = egress.agent_version
             if egress.allowlist:
                 payload["egress_allowlist"] = list(egress.allowlist)
+            if egress.denylist:
+                payload["egress_denylist"] = list(egress.denylist)
         body = await self._post("/v1/sandboxes:acquire", json=payload)
         return UUID(str(body["sandbox_id"]))
 

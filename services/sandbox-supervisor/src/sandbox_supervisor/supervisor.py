@@ -733,6 +733,7 @@ class SandboxSupervisor:
             agent_name=request.agent_name,
             agent_version=request.agent_version,
             egress_allowlist=tuple(request.egress_allowlist),
+            egress_denylist=tuple(request.egress_denylist),
         )
 
     def _run_argv(self, record: SandboxRecord, *, workspace_volume: str | None) -> list[str]:
@@ -775,6 +776,7 @@ class SandboxSupervisor:
             sandbox_id=str(record.id),
             expires_at=time.time() + s.egress_token_ttl_s,
             allowlist=record.egress_allowlist,
+            denylist=record.egress_denylist,
         )
         proxy_url = f"http://{token}:@{s.egress_proxy_host}:{s.egress_proxy_port}"
         # NO_PROXY keeps the credential-proxy /forward call + loopback direct.

@@ -271,7 +271,13 @@ class NetworkSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     egress: Literal["none", "direct", "proxy"] = "proxy"
+    #: Empty → any public host allowed (SSRF/private-net still blocked, all
+    #: audited). Non-empty → strict allow-only-these mode.
     allowlist: list[str] = Field(default_factory=list)
+    #: Hosts blocked even under the default allow-all (or an allowlist) — block
+    #: a few bad destinations without enumerating every permitted one. Takes
+    #: precedence over ``allowlist``. Exact host or subdomain match.
+    denylist: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _no_wildcard(self) -> NetworkSpec:

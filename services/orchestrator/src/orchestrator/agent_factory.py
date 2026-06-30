@@ -596,6 +596,7 @@ async def build_agent(
                     agent_name=spec.metadata.name,
                     agent_version=spec.metadata.version,
                     allowlist=tuple(spec.spec.sandbox.network.allowlist),
+                    denylist=tuple(spec.spec.sandbox.network.denylist),
                 ),
             ),
         )
