@@ -170,12 +170,41 @@ single-result case rarely trips Phase 2 at all (each big result is already a ~3 
 preview); Phase 2's niche is the **cumulative** case — many medium results summing
 over the window.
 
-**Out of scope for this pass** (was in the original Phase 2 sketch, now redundant or
-deferred): dedup of identical results and stale-arg truncation (low value once
-tool-output bulk is collapsed); externalize-on-prune for *small* non-externalized
-results (would make the stub recoverable too, but couples the prune path to the
-workspace writer — defer until a need appears). The LLM-summary fallback is **already
-shipped** (L.L2) and unchanged.
+The LLM-summary fallback is **already shipped** (L.L2) and unchanged. Stale tool-call
+arg truncation stays out of scope (low value once tool-output bulk is collapsed).
+
+### Phase 2.1 — prune follow-ups (dedup, persist floor, kill switch)
+
+Three additive refinements on top of CM-12, all behind the same token gate / kill
+switch:
+
+1. **Dedup (item 1)** — within the prune pass, a `ToolMessage` whose *exact* content
+   recurs in a *later* `ToolMessage` is collapsed to a reference (latest copy kept).
+   Overrides the recent-window protection (an exact duplicate is redundant even when
+   recent). Pure, no I/O — reclaims a repeated identical search/fetch. Lossless when
+   the result has an on-disk copy (footer/artifact path), else a `(duplicate of a
+   later identical result)` stub.
+
+2. **Persist floor + externalize-on-prune (item 2)** — make pruning lossless for
+   *medium* results too. A result between `PERSIST_MIN_CHARS` (4k) and
+   `EXTERNALIZE_MIN_CHARS` (12k) is written to the workspace **at tool time** (full
+   copy, kept full in-context — no preview, no footer) and its path recorded in
+   `ToolMessage.artifact[TOOL_RESULT_PATH_ARTIFACT_KEY]` (metadata, never sent to the
+   LLM). When the prune gate later collapses it, it renders a lossless footer
+   reference from the artifact path instead of a lossy stub. **Tool-time, not
+   prune-time:** prune is prompt-view-only and re-runs every over-threshold turn, so
+   externalizing there would re-write the same file every turn; writing once at tool
+   time keeps it write-once and the pruner pure (it only *reads* the artifact). Cost:
+   medium results write to disk even on runs that never overflow — acceptable
+   (best-effort async, gated by the kill switch). Results below 4k stay lossy stubs
+   (too small to be worth a file).
+
+3. **Kill switch (item 3)** — `HELIX_TOOL_OUTPUT_BUDGET` env (default on; falsey
+   reverts), mirroring `run_retry`'s flag. Off ⇒ the factory builds no pruner **and**
+   `_externalize_tool_overflow` skips the generalized (#859) + persist (item 2)
+   branches. The older CM-5 `full_content` externalization is **not** gated (separate,
+   proven mechanism). One env flip reverts the whole feature platform-wide without a
+   manifest edit or redeploy.
 
 ## Decisions
 
@@ -243,4 +272,6 @@ shipped** (L.L2) and unchanged.
 1. Phase 1 behind `tool_output_budget.enabled` (default on; flip off to revert). ✅ #859
 2. Ship + live-verify the research task.
 3. Phase 2 = CM-12 mechanical prune gate (`policies.tool_result_prune`, default on,
-   token-gated). Per-agent `enabled: false` reverts. Ships after Phase 1 is in main.
+   token-gated). Per-agent `enabled: false` reverts. ✅ #860
+4. Phase 2.1 = dedup + persist floor + `HELIX_TOOL_OUTPUT_BUDGET` kill switch (one
+   env flip reverts the whole tool-output-budget feature platform-wide).
