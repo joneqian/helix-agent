@@ -520,7 +520,12 @@ class WorkflowSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["react", "plan_execute", "custom"] = "react"
-    max_iterations: int = Field(default=12, gt=0)
+    # ReAct loop step budget. 12 was an outlier vs comparable agents (deer-flow
+    # lead ≈50 agent turns, hermes-agent 90) and starved multi-step research +
+    # document-generation tasks (one search/synthesis/PDF run hit the wall mid-
+    # task). 30 gives headroom while the orthogonal run_deadline_s + token budget
+    # still bound cost. Per-agent override via the YAML manifest.
+    max_iterations: int = Field(default=30, gt=0)
     early_stop: dict[str, Any] = Field(default_factory=dict)
     builder: str | None = None
 

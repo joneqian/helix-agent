@@ -408,7 +408,7 @@ async def test_build_agent_returns_built_agent() -> None:
     assert built.system_prompt.startswith("you are a test agent")
     assert "## Untrusted content" in built.system_prompt
     # Default WorkflowSpec.max_iterations.
-    assert built.max_steps == 12
+    assert built.max_steps == 30
 
 
 @pytest.mark.asyncio
