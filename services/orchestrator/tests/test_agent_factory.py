@@ -1155,15 +1155,13 @@ def test_resolved_context_window_off_catalog_fallback() -> None:
 
 
 def _spy_budget(monkeypatch: Any, captured: dict[str, Any]) -> None:
-    import orchestrator.agent_factory as af
-
-    real = af.build_react_graph
+    from orchestrator.agent_factory import build_react_graph as real
 
     def _spy(**kwargs: Any) -> Any:
         captured["enabled"] = kwargs.get("tool_output_budget_enabled")
         return real(**kwargs)
 
-    monkeypatch.setattr(af, "build_react_graph", _spy)
+    monkeypatch.setattr("orchestrator.agent_factory.build_react_graph", _spy)
 
 
 async def test_tool_budget_effective_is_platform_and_agent(monkeypatch: Any) -> None:
