@@ -76,6 +76,9 @@ export interface AgentManifest {
       run_deadline_s?: number;
       // Stream L.L7 — record completed runs to ObjectStore (privacy toggle).
       trajectory_recording?: boolean;
+      // Phase 3 — per-agent master switch for the tool-output-budget feature
+      // (externalization + persist + prune). Block absent = enabled.
+      tool_output_budget?: { enabled?: boolean; [k: string]: unknown };
       [k: string]: unknown;
     } | null;
     // Orchestrator-Worker — whether the agent may spawn ephemeral workers at
@@ -423,6 +426,27 @@ export const readTrajectoryRecording = (m: unknown): boolean =>
   specOf(m).policies?.trajectory_recording ?? true;
 export const setTrajectoryRecording = (m: unknown, on: boolean): AgentManifest =>
   patchPolicies(m, { trajectory_recording: on });
+
+// ---- tool-output budget (policies.tool_output_budget.enabled) ----
+// Per-agent master switch for the whole tool-output-budget feature
+// (externalization + persist + prune). Block absent = enabled (the platform
+// switch governs the ceiling: effective = platform AND agent). ``on`` drops the
+// block (back to default-on, clean YAML); ``off`` writes ``{enabled:false}``.
+export const readToolBudgetOn = (m: unknown): boolean =>
+  (specOf(m).policies?.tool_output_budget?.enabled ?? true) !== false;
+
+export function setToolBudgetOn(m: unknown, on: boolean): AgentManifest {
+  const policies = specOf(m).policies ?? {};
+  if (on) {
+    const { tool_output_budget: _dropped, ...rest } = policies;
+    return patchSpec(m, {
+      policies: Object.keys(rest).length > 0 ? rest : undefined,
+    });
+  }
+  return patchSpec(m, {
+    policies: { ...policies, tool_output_budget: { enabled: false } },
+  });
+}
 
 // ---- dynamic workers (spawn_worker) ----
 // Whether the agent's LLM may spawn ephemeral workers at run time. The block is
