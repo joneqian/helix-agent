@@ -574,6 +574,7 @@ export interface TranslationKeys {
     status_pending: string;
     status_success: string;
     status_error: string;
+    status_pending_approval: string;
     args_label: string;
     result_label: string;
   };
@@ -2626,6 +2627,7 @@ const en: TranslationKeys = {
     status_pending: "running",
     status_success: "ok",
     status_error: "failed",
+    status_pending_approval: "awaiting approval",
     args_label: "Arguments",
     result_label: "Result",
   },

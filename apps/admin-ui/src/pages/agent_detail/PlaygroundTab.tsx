@@ -116,6 +116,7 @@ interface PlaygroundTabProps {
 const EVENT_COLOR: Record<string, string> = {
   metadata: "blue",
   updates: "geekblue",
+  approval: "gold",
   error: "red",
   end: "green",
 };
@@ -413,9 +414,19 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     try {
       for await (const frame of streamRun(threadId, body, { signal: ac.signal })) {
         frames.push(frame);
+        // #5 — a dedicated ``approval`` event surfaces the gate deterministically
+        // (no dependence on the terminal ``end`` frame or a post-stream poll).
+        const approvalFromFrame =
+          frame.event === "approval" ? approvalItemFromEvent(frame.data) : null;
         setTurns((prev) =>
           prev.map((tn) =>
-            tn.id === turnId ? { ...tn, events: [...tn.events, frame] } : tn,
+            tn.id === turnId
+              ? {
+                  ...tn,
+                  events: [...tn.events, frame],
+                  approval: approvalFromFrame ?? tn.approval,
+                }
+              : tn,
           ),
         );
         if (frame.event === "end") break;
@@ -1111,6 +1122,38 @@ function runIdOf(events: readonly SseEvent[]): string | null {
   return null;
 }
 
+/** #5 — build an ``ApprovalItem`` from a backend ``approval`` SSE frame so the
+ *  gate renders the instant the run pauses, without waiting for the terminal
+ *  ``end`` frame + a ``/v1/approvals`` poll (which never fires when the client
+ *  misses ``end``). The decide call only needs ``thread_id`` + ``run_id``; the
+ *  rest feeds the gate card. Fields absent from the stream default safely. */
+function approvalItemFromEvent(data: unknown): ApprovalItem | null {
+  if (data === null || typeof data !== "object") return null;
+  const d = data as Record<string, unknown>;
+  if (typeof d.run_id !== "string" || typeof d.thread_id !== "string") return null;
+  const str = (v: unknown): string => (typeof v === "string" ? v : "");
+  return {
+    id: str(d.request_id) || d.run_id,
+    tenant_id: str(d.tenant_id),
+    user_id: null,
+    run_id: d.run_id,
+    thread_id: d.thread_id,
+    request_id: str(d.request_id),
+    node: str(d.node),
+    reason_kind: str(d.reason_kind),
+    action_summary: str(d.action_summary),
+    proposed_args:
+      d.proposed_args !== null && typeof d.proposed_args === "object"
+        ? (d.proposed_args as Record<string, unknown>)
+        : {},
+    requested_at: str(d.requested_at),
+    timeout_at: str(d.timeout_at),
+    status: "pending",
+    decided_by: null,
+    decided_at: null,
+  };
+}
+
 function ApprovalGate({
   approval,
   busy,
@@ -1428,7 +1471,10 @@ function TurnCard({
                   {t("playground.empty_log")}
                 </Text>
               ) : eventView === "timeline" ? (
-                <ToolTimeline events={turn.events} />
+                <ToolTimeline
+                  events={turn.events}
+                  awaitingApproval={turn.approval !== null}
+                />
               ) : (
                 <div
                   style={{ display: "flex", flexDirection: "column", gap: 8 }}

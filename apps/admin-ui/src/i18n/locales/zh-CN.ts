@@ -616,6 +616,7 @@ const zhCN: TranslationKeys = {
     status_pending: "进行中",
     status_success: "成功",
     status_error: "失败",
+    status_pending_approval: "待审批",
     args_label: "入参",
     result_label: "结果",
   },
