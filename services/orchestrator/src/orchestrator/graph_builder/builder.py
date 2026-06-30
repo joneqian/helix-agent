@@ -409,22 +409,15 @@ def build_react_graph(
     at construction time.
     """
 
-    # Stream TE-4 — side-effect-driven approval gating. Tools that declare
-    # ``side_effect="irreversible"`` (resolved via ToolSpec) are auto-gated:
-    # union them into the manifest's ``approval_required_tools`` so the
-    # approval gate fires on them without each manifest having to list them.
-    # Computed once at build time (the registry is fixed for the agent's
-    # life). Zero behaviour change until a tool actually declares
-    # irreversible — no builtin does yet; ``bash`` (TE-5) is the first.
-    # Stream TE-6 — classify over ``all_specs()`` (active + deferred) so a
-    # deferred irreversible tool stays gated once ``find_tools`` promotes it.
-    # Equals ``specs()`` when nothing is deferred.
-    _irreversible_tools = frozenset(
-        spec.name
-        for spec in tool_registry.all_specs()
-        if spec.resolved_side_effect == "irreversible"
-    )
-    _gated_tools = approval_required_tools | _irreversible_tools
+    # Approval gating is config-driven: only tools the operator lists in the
+    # manifest's ``approval_required_tools`` pause for human approval. A tool's
+    # ``side_effect="irreversible"`` (resolved via ToolSpec) still drives serial
+    # scheduling (L.L6/TE-8) and audit (TE-2), but it no longer force-gates the
+    # tool — sandbox isolation + serialisation + audit are the safety floor, and
+    # the approval gate is the operator's explicit opt-in. (Earlier TE-4 auto-
+    # unioned irreversible tools into the gate; that forced ``bash`` to require
+    # approval regardless of config, which the governance UI could not turn off.)
+    _gated_tools = approval_required_tools
 
     async def agent_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         token = cancellation_token(config)
