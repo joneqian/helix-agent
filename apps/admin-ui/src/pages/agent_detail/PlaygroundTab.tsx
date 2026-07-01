@@ -83,6 +83,7 @@ import { artifactsFromTools } from "../../api/tool_timeline";
 import { summarizeTurn } from "../../api/turn_summary";
 import { uploadDocument, uploadImage } from "../../api/uploads";
 import { CopyButton } from "../../components/CopyButton";
+import { MarkdownView } from "../../components/MarkdownView";
 import { ToolTimeline } from "../../components/ToolTimeline";
 import type { AgentDetailResponse } from "../../api/agents";
 import {
@@ -1343,7 +1344,11 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                     opacity: 0.75,
                   }}
                 >
-                  {m.content}
+                  {m.role === "user" ? (
+                    m.content
+                  ) : (
+                    <MarkdownView>{m.content}</MarkdownView>
+                  )}
                 </div>
               ))}
               <div
@@ -1645,7 +1650,16 @@ function TurnCard({
             data-testid="playground-turn-error"
           />
         ) : answer !== null ? (
-          <Text style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{answer}</Text>
+          // While streaming, render raw text (markdown reflow on every token is
+          // janky + partial fences render oddly); render markdown once the turn
+          // settles.
+          turn.status === "running" ? (
+            <Text style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>
+              {answer}
+            </Text>
+          ) : (
+            <MarkdownView>{answer}</MarkdownView>
+          )
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>
             {t("playground.turn_no_text")}
