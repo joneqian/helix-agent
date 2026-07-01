@@ -263,55 +263,59 @@ export function SessionHistoryDrawer({
                 onClick={() => handleResume(s)}
                 data-testid={`session-history-item-${s.thread_id}`}
                 actions={[
-                  <Button
-                    key="rename"
-                    type="text"
-                    size="small"
-                    icon={<Pencil size={13} strokeWidth={1.75} />}
-                    aria-label={`${t("session_history.rename")}：${titleOf(s)}`}
-                    loading={rowBusy}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRenameValue(s.title ?? "");
-                      setRenaming(s);
-                    }}
-                    data-testid={`session-history-rename-${s.thread_id}`}
-                  />,
-                  <Popconfirm
-                    key="archive"
-                    title={t("session_history.archive_confirm")}
-                    okText={t("session_history.archive")}
-                    cancelText={t("session_history.cancel")}
-                    onConfirm={() => handleArchive(s.thread_id)}
-                  >
+                  // Each action sits in a stopPropagation span so a click on it
+                  // (or its Popconfirm trigger) never bubbles to the row's
+                  // resume handler — antd's Popconfirm swallows the child's own
+                  // stopPropagation, so guard at the wrapper.
+                  <span key="rename" onClick={(e) => e.stopPropagation()}>
                     <Button
                       type="text"
                       size="small"
-                      icon={<X size={13} strokeWidth={1.75} />}
-                      aria-label={`${t("session_history.archive")}：${titleOf(s)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      data-testid={`session-history-archive-${s.thread_id}`}
+                      icon={<Pencil size={13} strokeWidth={1.75} />}
+                      aria-label={`${t("session_history.rename")}：${titleOf(s)}`}
+                      loading={rowBusy}
+                      onClick={() => {
+                        setRenameValue(s.title ?? "");
+                        setRenaming(s);
+                      }}
+                      data-testid={`session-history-rename-${s.thread_id}`}
                     />
-                  </Popconfirm>,
-                  <Popconfirm
-                    key="purge"
-                    title={t("session_history.purge_confirm")}
-                    description={t("session_history.purge_warning")}
-                    okText={t("session_history.purge")}
-                    okButtonProps={{ danger: true }}
-                    cancelText={t("session_history.cancel")}
-                    onConfirm={() => handlePurge(s.thread_id)}
-                  >
-                    <Button
-                      type="text"
-                      size="small"
-                      danger
-                      icon={<Trash2 size={13} strokeWidth={1.75} />}
-                      aria-label={`${t("session_history.purge")}：${titleOf(s)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      data-testid={`session-history-purge-${s.thread_id}`}
-                    />
-                  </Popconfirm>,
+                  </span>,
+                  <span key="archive" onClick={(e) => e.stopPropagation()}>
+                    <Popconfirm
+                      title={t("session_history.archive_confirm")}
+                      okText={t("session_history.archive")}
+                      cancelText={t("session_history.cancel")}
+                      onConfirm={() => handleArchive(s.thread_id)}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<X size={13} strokeWidth={1.75} />}
+                        aria-label={`${t("session_history.archive")}：${titleOf(s)}`}
+                        data-testid={`session-history-archive-${s.thread_id}`}
+                      />
+                    </Popconfirm>
+                  </span>,
+                  <span key="purge" onClick={(e) => e.stopPropagation()}>
+                    <Popconfirm
+                      title={t("session_history.purge_confirm")}
+                      description={t("session_history.purge_warning")}
+                      okText={t("session_history.purge")}
+                      okButtonProps={{ danger: true }}
+                      cancelText={t("session_history.cancel")}
+                      onConfirm={() => handlePurge(s.thread_id)}
+                    >
+                      <Button
+                        type="text"
+                        size="small"
+                        danger
+                        icon={<Trash2 size={13} strokeWidth={1.75} />}
+                        aria-label={`${t("session_history.purge")}：${titleOf(s)}`}
+                        data-testid={`session-history-purge-${s.thread_id}`}
+                      />
+                    </Popconfirm>
+                  </span>,
                 ]}
               >
                 <List.Item.Meta
