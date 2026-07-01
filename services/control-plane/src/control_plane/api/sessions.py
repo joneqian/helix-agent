@@ -654,7 +654,9 @@ def build_sessions_router() -> APIRouter:
                 # Platform-admin view aggregates every user's sessions
                 # across every tenant — per-user filter is intentionally
                 # dropped (system_admin sees the whole picture).
-                items = await threads.list_all_tenants(status=status, limit=limit, offset=offset)
+                items = await threads.list_all_tenants(
+                    status=status, nonempty=True, limit=limit, offset=offset
+                )
             else:
                 # Stream J.14 — a plain user lists only their own threads;
                 # admins / machine principals list the whole tenant.
@@ -666,6 +668,7 @@ def build_sessions_router() -> APIRouter:
                     scope.tenant_id,
                     status=status,
                     user_id=user_filter,
+                    nonempty=True,
                     limit=limit,
                     offset=offset,
                 )

@@ -72,6 +72,7 @@ class ThreadMetaStore(abc.ABC):
         user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -81,6 +82,11 @@ class ThreadMetaStore(abc.ABC):
         (Stream J.14 per-user scoping). ``agent_name`` / ``agent_version``
         narrow to threads bound to that agent (Stream H.6 Mini-ADR H-10 —
         feeds the per-agent Runs tab's thread-window resolve step).
+
+        ``nonempty`` filters out threads that never had a run — the empty
+        throwaway sessions eager thread-creation used to leave behind. Applied
+        in the query so pagination counts only real threads. (An in-memory
+        backend with no run store treats it as a no-op.)
         """
 
     @abc.abstractmethod
@@ -90,6 +96,7 @@ class ThreadMetaStore(abc.ABC):
         status: ThreadStatus | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -99,6 +106,7 @@ class ThreadMetaStore(abc.ABC):
         filter — the platform admin view aggregates every user's
         sessions across every tenant. Newest first. ``agent_name`` /
         ``agent_version`` as in :meth:`list_by_tenant` (Mini-ADR H-10).
+        ``nonempty`` as in :meth:`list_by_tenant`.
         """
 
     @abc.abstractmethod

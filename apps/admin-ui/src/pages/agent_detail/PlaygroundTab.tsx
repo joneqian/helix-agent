@@ -247,14 +247,27 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     void refreshPastSessions();
   }, [refreshPastSessions]);
 
-  const newThread = useCallback(async () => {
-    setCreatingThread(true);
+  // Reset to a fresh draft — no backend session is created here. The thread is
+  // created lazily on the first real action (see ``ensureThread``), so opening
+  // the Playground / switching agent no longer POSTs an empty throwaway session.
+  const resetDraft = useCallback(() => {
     setThreadError(null);
     setResumed(false);
     setHistory([]);
     setTurns([]);
     setAttachments([]);
     setUploadError(null);
+    setThread(null);
+  }, []);
+
+  // Lazy session creation — avoids the empty-thread spam that eager creation on
+  // mount produced (each mount/rebind POSTed a session before the user did
+  // anything; StrictMode doubled it in dev). Returns the existing thread, the
+  // freshly created one, or ``null`` on failure.
+  const ensureThread = useCallback(async (): Promise<ThreadMeta | null> => {
+    if (thread) return thread;
+    setCreatingThread(true);
+    setThreadError(null);
     try {
       const created = await createSession({
         agent_name: r.name,
@@ -262,6 +275,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
         ...(runAsUser.trim() ? { run_as_user_id: runAsUser.trim() } : {}),
       });
       setThread(created);
+      return created;
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -271,10 +285,11 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             : "unknown error";
       setThreadError(message);
       setThread(null);
+      return null;
     } finally {
       setCreatingThread(false);
     }
-  }, [r.name, r.version, runAsUser]);
+  }, [thread, r.name, r.version, runAsUser]);
 
   // #6 — resume an existing thread: switch to it + continue chatting (the
   // backend keeps the context). Past turns aren't replayed in the transcript;
@@ -314,12 +329,12 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     if (skipRebindRef.current) {
       skipRebindRef.current = false;
     } else {
-      void newThread();
+      resetDraft();
     }
     return () => {
       abortRef.current?.abort();
     };
-  }, [newThread]);
+  }, [r.name, r.version, runAsUser, resetDraft]);
 
   // Auto-scroll the transcript as turns/frames arrive.
   useEffect(() => {
@@ -332,14 +347,16 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
       async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         event.target.value = "";
-        if (!file || !thread) return;
+        if (!file) return;
+        const active = thread ?? (await ensureThread());
+        if (!active) return;
         setUploading(true);
         setUploadError(null);
         try {
           const value =
             kind === "image"
-              ? await uploadImage(thread.thread_id, file)
-              : await uploadDocument(thread.thread_id, file);
+              ? await uploadImage(active.thread_id, file)
+              : await uploadDocument(active.thread_id, file);
           setAttachments((prev) => [
             ...prev,
             { id: `${kind}:${value}`, name: file.name, kind, value },
@@ -356,7 +373,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           setUploading(false);
         }
       },
-    [thread],
+    [thread, ensureThread],
   );
 
   const handleRemoveAttachment = useCallback((id: string) => {
@@ -364,7 +381,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   }, []);
 
   const patchTurn = useCallback((id: string, patch: Partial<Turn>) => {
-    setTurns((prev) => prev.map((tn) => (tn.id === id ? { ...tn, ...patch } : tn)));
+    setTurns((prev) =>
+      prev.map((tn) => (tn.id === id ? { ...tn, ...patch } : tn)),
+    );
   }, []);
 
   // #5 — a paused run registers its agent_approval row just after the stream's
@@ -375,7 +394,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
         try {
           const list = await listApprovals({ status: "pending" });
           const match = list.items.find(
-            (a) => a.thread_id === threadId && (runId === null || a.run_id === runId),
+            (a) =>
+              a.thread_id === threadId &&
+              (runId === null || a.run_id === runId),
           );
           if (match) {
             patchTurn(turnId, { approval: match });
@@ -391,7 +412,10 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   );
 
   const handleRun = useCallback(async () => {
-    if (!thread || running) return;
+    if (running) return;
+    // Lazy — create the backend thread on this first send if it doesn't exist.
+    const active = thread ?? (await ensureThread());
+    if (!active) return;
     setRunning(true);
     const turnAttachments = attachments;
     const turnInput = input;
@@ -439,9 +463,11 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     const ac = new AbortController();
     abortRef.current = ac;
     const frames: SseEvent[] = [];
-    const threadId = thread.thread_id;
+    const threadId = active.thread_id;
     try {
-      for await (const frame of streamRun(threadId, body, { signal: ac.signal })) {
+      for await (const frame of streamRun(threadId, body, {
+        signal: ac.signal,
+      })) {
         frames.push(frame);
         // #5 — a dedicated ``approval`` event surfaces the gate deterministically
         // (no dependence on the terminal ``end`` frame or a post-stream poll).
@@ -475,11 +501,15 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
     // #5 — a paused run yields no final answer; look for its approval gate.
     // Fire-and-forget so the run UI (Stop button) frees immediately; a found
     // gate patches the turn asynchronously.
-    if (frames.at(-1)?.event === "end" && summarizeTurn(frames).finalText === null) {
+    if (
+      frames.at(-1)?.event === "end" &&
+      summarizeTurn(frames).finalText === null
+    ) {
       void detectApproval(turnId, threadId, runIdOf(frames));
     }
   }, [
     thread,
+    ensureThread,
     input,
     running,
     attachments,
@@ -493,7 +523,11 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
   // #5 — decide a turn's pending approval, then stream the continuation run
   // (the decision spawns it) into the SAME turn, then re-check for a next gate.
   const handleDecide = useCallback(
-    async (turnId: string, approval: ApprovalItem, decision: "approve" | "reject") => {
+    async (
+      turnId: string,
+      approval: ApprovalItem,
+      decision: "approve" | "reject",
+    ) => {
       if (!thread) return;
       const threadId = thread.thread_id;
       setRunning(true);
@@ -543,7 +577,10 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
         abortRef.current = null;
       }
       // Chained gate — re-check after the continuation, fire-and-forget.
-      if (frames.at(-1)?.event === "end" && summarizeTurn(frames).finalText === null) {
+      if (
+        frames.at(-1)?.event === "end" &&
+        summarizeTurn(frames).finalText === null
+      ) {
         void detectApproval(turnId, threadId, continuationRunId);
       }
     },
@@ -734,7 +771,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             <Button
               size="small"
               icon={<RotateCcw size={12} strokeWidth={1.75} />}
-              onClick={newThread}
+              onClick={resetDraft}
               loading={creatingThread}
               disabled={running}
               data-testid="playground-new-session"
@@ -835,7 +872,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                   placeholder={v.description ?? v.name}
                   aria-label={`${t("playground.prompt_vars_label")}: ${v.name}`}
                   data-testid={`playground-var-${v.name}`}
-                  disabled={running || !thread}
+                  disabled={running}
                   onChange={(e) =>
                     setVarValues((prev) => ({
                       ...prev,
@@ -853,7 +890,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           onChange={(e) => setInput(e.target.value)}
           placeholder={t("playground.input_placeholder")}
           autoSize={{ minRows: 6, maxRows: 14 }}
-          disabled={running || !thread}
+          disabled={running}
           maxLength={8192}
           showCount
           data-testid="playground-input"
@@ -937,7 +974,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             }
             onClick={handleRun}
             loading={running}
-            disabled={!thread || (!running && input.trim().length === 0)}
+            disabled={!running && input.trim().length === 0}
             data-testid="playground-run"
           >
             {running ? t("playground.running") : t("playground.run")}
@@ -946,7 +983,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             icon={<ImagePlus size={14} strokeWidth={1.75} />}
             onClick={() => fileInputRef.current?.click()}
             loading={uploading}
-            disabled={!thread || running}
+            disabled={running}
             data-testid="playground-attach"
           >
             {uploading
@@ -957,7 +994,7 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             icon={<FileText size={14} strokeWidth={1.75} />}
             onClick={() => docInputRef.current?.click()}
             loading={uploading}
-            disabled={!thread || running}
+            disabled={running}
             data-testid="playground-attach-doc"
           >
             {uploading
@@ -1036,16 +1073,31 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                 (soft-)delete each. A list, not chips, since they're the things
                 you actually take away. */}
             {workspace && workspace.artifacts.length > 0 && (
-              <div style={{ marginTop: 6 }} data-testid="playground-workspace-artifacts">
+              <div
+                style={{ marginTop: 6 }}
+                data-testid="playground-workspace-artifacts"
+              >
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {t("playground.workspace_artifacts")}:
                 </Text>
-                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                <div
+                  style={{
+                    marginTop: 4,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                  }}
+                >
                   {workspace.artifacts.map((a) => (
                     <div
                       key={a.name}
                       data-testid="playground-workspace-artifact"
-                      style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 11,
+                      }}
                     >
                       <span
                         className="mono"
@@ -1069,9 +1121,12 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                         loading={busyWorkspaceKey === `artifact:${a.name}`}
                         disabled={!thread || busyWorkspaceKey !== null}
                         onClick={() =>
-                          thread && void handleDownloadArtifact(thread.thread_id, a.name)
+                          thread &&
+                          void handleDownloadArtifact(thread.thread_id, a.name)
                         }
-                        aria-label={t("playground.artifact_download", { name: a.name })}
+                        aria-label={t("playground.artifact_download", {
+                          name: a.name,
+                        })}
                         data-testid="playground-workspace-artifact-download"
                       />
                       <Popconfirm
@@ -1080,7 +1135,8 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                         cancelText={t("playground.delete_cancel")}
                         okButtonProps={{ danger: true }}
                         onConfirm={() =>
-                          thread && void handleDeleteArtifact(thread.thread_id, a.name)
+                          thread &&
+                          void handleDeleteArtifact(thread.thread_id, a.name)
                         }
                       >
                         <Button
@@ -1089,7 +1145,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                           danger
                           icon={<Trash2 size={11} strokeWidth={1.75} />}
                           disabled={!thread || busyWorkspaceKey !== null}
-                          aria-label={t("playground.artifact_delete", { name: a.name })}
+                          aria-label={t("playground.artifact_delete", {
+                            name: a.name,
+                          })}
                           data-testid="playground-workspace-artifact-delete"
                         />
                       </Popconfirm>
@@ -1101,11 +1159,21 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
             {/* Browse + download + delete the raw files the agent wrote. Hidden
                 files (.npm/.cache/.mplconfig …) are filtered — runtime noise. */}
             {workspaceFiles.some((f) => !isHiddenWorkspacePath(f.path)) && (
-              <div style={{ marginTop: 8 }} data-testid="playground-workspace-files">
+              <div
+                style={{ marginTop: 8 }}
+                data-testid="playground-workspace-files"
+              >
                 <Text type="secondary" style={{ fontSize: 11 }}>
                   {t("playground.workspace_files")}:
                 </Text>
-                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                <div
+                  style={{
+                    marginTop: 4,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                  }}
+                >
                   {workspaceFiles
                     .filter((f) => !isHiddenWorkspacePath(f.path))
                     .map((f) => (
@@ -1139,9 +1207,14 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                           type="text"
                           icon={<Download size={11} strokeWidth={1.75} />}
                           loading={downloadingPath === f.path}
-                          disabled={!thread || downloadingPath !== null || busyWorkspaceKey !== null}
+                          disabled={
+                            !thread ||
+                            downloadingPath !== null ||
+                            busyWorkspaceKey !== null
+                          }
                           onClick={() =>
-                            thread && void handleDownloadFile(thread.thread_id, f.path)
+                            thread &&
+                            void handleDownloadFile(thread.thread_id, f.path)
                           }
                           aria-label={t("playground.workspace_file_download", {
                             name: f.path,
@@ -1154,7 +1227,8 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                           cancelText={t("playground.delete_cancel")}
                           okButtonProps={{ danger: true }}
                           onConfirm={() =>
-                            thread && void handleDeleteFile(thread.thread_id, f.path)
+                            thread &&
+                            void handleDeleteFile(thread.thread_id, f.path)
                           }
                         >
                           <Button
@@ -1164,7 +1238,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
                             icon={<Trash2 size={11} strokeWidth={1.75} />}
                             loading={busyWorkspaceKey === f.path}
                             disabled={!thread || busyWorkspaceKey !== null}
-                            aria-label={t("playground.file_delete", { name: f.path })}
+                            aria-label={t("playground.file_delete", {
+                              name: f.path,
+                            })}
                             data-testid="playground-workspace-file-delete"
                           />
                         </Popconfirm>
@@ -1239,7 +1315,12 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
           {history.length > 0 && (
             <div
               data-testid="playground-history"
-              style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                flexShrink: 0,
+              }}
             >
               {history.map((m, idx) => (
                 <div
@@ -1302,7 +1383,9 @@ export function PlaygroundTab({ detail }: PlaygroundTabProps) {
 
 /** Trigger a client-side download of ``data`` as a pretty-printed JSON file. */
 function downloadJson(filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json",
+  });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1321,7 +1404,11 @@ function isHiddenWorkspacePath(path: string): boolean {
 
 function runIdOf(events: readonly SseEvent[]): string | null {
   for (const e of events) {
-    if (e.event === "metadata" && e.data !== null && typeof e.data === "object") {
+    if (
+      e.event === "metadata" &&
+      e.data !== null &&
+      typeof e.data === "object"
+    ) {
       const rid = (e.data as Record<string, unknown>).run_id;
       if (typeof rid === "string" && rid) return rid;
     }
@@ -1337,7 +1424,8 @@ function runIdOf(events: readonly SseEvent[]): string | null {
 function approvalItemFromEvent(data: unknown): ApprovalItem | null {
   if (data === null || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
-  if (typeof d.run_id !== "string" || typeof d.thread_id !== "string") return null;
+  if (typeof d.run_id !== "string" || typeof d.thread_id !== "string")
+    return null;
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   return {
     id: str(d.request_id) || d.run_id,
@@ -1382,7 +1470,14 @@ function ApprovalGate({
         background: "var(--hx-surface-raised)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: 4,
+        }}
+      >
         <AlertTriangle size={14} strokeWidth={1.75} />
         <Text strong style={{ fontSize: 12 }}>
           {approval.node} — {t("playground.approval_awaiting")}
@@ -1453,7 +1548,11 @@ function TurnCard({
   threadId: string | null;
   onDownloadArtifact: (threadId: string, name: string) => Promise<void>;
   rate: RateCardRecord | null;
-  onDecide: (turnId: string, approval: ApprovalItem, decision: "approve" | "reject") => void;
+  onDecide: (
+    turnId: string,
+    approval: ApprovalItem,
+    decision: "approve" | "reject",
+  ) => void;
   deciding: boolean;
   onExport: (turn: Turn) => void;
   exporting: boolean;
@@ -1463,8 +1562,13 @@ function TurnCard({
   // A+B — artifacts the agent registered this turn (``save_artifact``). The
   // agent can't emit a download link itself (the endpoint is thread-scoped +
   // auth'd), so surface them as an inline download row — deer-flow's pattern.
-  const turnArtifacts = useMemo(() => artifactsFromTools(turn.events), [turn.events]);
-  const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(null);
+  const turnArtifacts = useMemo(
+    () => artifactsFromTools(turn.events),
+    [turn.events],
+  );
+  const [downloadingArtifact, setDownloadingArtifact] = useState<string | null>(
+    null,
+  );
   const downloadArtifact = useCallback(
     async (name: string) => {
       if (threadId === null) return;
@@ -1485,7 +1589,10 @@ function TurnCard({
   // (micro-元 per 1M tokens). null when no usage or no rate for the model.
   const costCny =
     summary.usage && rate
-      ? (Math.max(0, summary.usage.inputTokens - summary.usage.cacheReadTokens) *
+      ? (Math.max(
+          0,
+          summary.usage.inputTokens - summary.usage.cacheReadTokens,
+        ) *
           rate.input_per_mtok_micros +
           summary.usage.cacheReadTokens * rate.cache_read_per_mtok_micros +
           summary.usage.outputTokens * rate.output_per_mtok_micros) /
@@ -1641,7 +1748,11 @@ function TurnCard({
               </Tag>
             )}
             {costCny !== null && (
-              <Tag bordered={false} color="gold" data-testid="playground-turn-cost">
+              <Tag
+                bordered={false}
+                color="gold"
+                data-testid="playground-turn-cost"
+              >
                 ≈ ¥{costCny.toFixed(4)}
               </Tag>
             )}
@@ -1712,14 +1823,21 @@ function TurnCard({
                 <span
                   onClick={(e) => e.stopPropagation()}
                   role="presentation"
-                  style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
                 >
                   <Segmented<"timeline" | "raw">
                     size="small"
                     value={eventView}
                     onChange={onViewChange}
                     options={[
-                      { value: "timeline", label: t("event_stream.view_timeline") },
+                      {
+                        value: "timeline",
+                        label: t("event_stream.view_timeline"),
+                      },
                       { value: "raw", label: t("event_stream.view_raw") },
                     ]}
                     data-testid="playground-event-view-toggle"

@@ -211,3 +211,43 @@ async def test_list_by_tenant_agent_filters(sql_store: SqlStoreFixture) -> None:
         assert len(await store.list_by_tenant(tenant_id)) == 3
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_nonempty_filters_threads_without_runs(sql_store: SqlStoreFixture) -> None:
+    """``nonempty=True`` drops threads that never had a run — the empty
+    throwaway sessions eager thread-creation left behind."""
+    from datetime import UTC, datetime
+
+    from helix_agent.persistence.models.agent_run import AgentRunRow
+
+    store, engine = sql_store
+    try:
+        tenant_id = uuid4()
+        with_run = await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="u")
+        await store.create(thread_id=uuid4(), tenant_id=tenant_id, created_by="u")  # never ran
+
+        # Seed one run so ``with_run`` counts as a real (non-empty) thread.
+        session_factory = create_async_session_factory(engine)
+        now = datetime.now(UTC)
+        async with session_factory() as session:
+            session.add(
+                AgentRunRow(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    thread_id=with_run.thread_id,
+                    status="success",
+                    on_disconnect="cancel",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            await session.commit()
+
+        # No filter → both threads (regression).
+        assert len(await store.list_by_tenant(tenant_id)) == 2
+        # nonempty → only the thread that has a run.
+        filtered = await store.list_by_tenant(tenant_id, nonempty=True)
+        assert [t.thread_id for t in filtered] == [with_run.thread_id]
+    finally:
+        await engine.dispose()
