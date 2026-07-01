@@ -1,8 +1,9 @@
 /**
  * AgentDetail per-agent tabs E2E — Stream H.6 PR 2.
  *
- * Smoke: each of the four new tabs (Runs / Skills / Triggers / Memory)
- * is wired in the AgentDetail Tabs bar and renders its real component
+ * Smoke: each of the four per-agent tabs (Conversations / Skills /
+ * Triggers / Memory) is wired in the AgentDetail Tabs bar and renders
+ * its real component
  * (no more ``agent-detail-tab-placeholder``). Per-tab routes are
  * registered *after* the fixture defaults so they win (Playwright runs
  * the most-recently-added handler first).
@@ -114,9 +115,10 @@ test("the four per-agent tabs render real content, not the placeholder", async (
   await page.getByTestId("login-submit").click();
   await expect(page).toHaveURL(/\/agents$/);
 
-  // Runs — fixture default /v1/runs* response renders the run row.
-  await page.goto(`/agents/${AGENT_NAME}/${AGENT_VERSION}/runs`);
-  await expect(page.getByTestId("runs-tab-root")).toBeVisible();
+  // Conversations — fixture default /v1/conversations* renders the row.
+  await page.goto(`/agents/${AGENT_NAME}/${AGENT_VERSION}/conversations`);
+  await expect(page.getByTestId("conversations-tab-root")).toBeVisible();
+  await expect(page.getByText("refund question")).toBeVisible();
   await expect(page.getByTestId("agent-detail-tab-placeholder")).toHaveCount(0);
 
   // Skills — the agent-authored row renders.
