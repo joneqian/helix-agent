@@ -1067,9 +1067,7 @@ async def test_first_run_auto_titles_thread(runs_client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_run_does_not_clobber_manual_title(runs_client: AsyncClient) -> None:
     thread_id = await _create_session(runs_client)
-    renamed = await runs_client.patch(
-        f"/v1/sessions/{thread_id}", json={"title": "my custom name"}
-    )
+    renamed = await runs_client.patch(f"/v1/sessions/{thread_id}", json={"title": "my custom name"})
     assert renamed.status_code == 200
 
     await runs_client.post(f"/v1/sessions/{thread_id}/runs", json={"input": "review the PR"})
