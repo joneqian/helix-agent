@@ -100,6 +100,43 @@ const RUNS_RESPONSE = {
   error: null,
 };
 
+// Conversation-centric IA — one conversation so the AgentDetail
+// Conversations tab has a row (envelope shape, matches GET /v1/conversations).
+const CONVERSATIONS_RESPONSE = {
+  success: true,
+  error: null,
+  data: {
+    items: [
+      {
+        thread_id: "55555555-5555-5555-5555-555555555555",
+        tenant_id: "22222222-2222-2222-2222-222222222222",
+        user_id: "88888888-8888-8888-8888-888888888888",
+        agent_name: "customer-support-bot",
+        agent_version: "3.4.2",
+        title: "refund question",
+        status: "active",
+        created_at: "2026-05-26T08:00:00Z",
+        updated_at: "2026-05-26T08:00:32Z",
+        run_count: 2,
+        error_count: 0,
+        pending_count: 0,
+        last_run_at: "2026-05-26T08:00:32Z",
+        tokens: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_creation_tokens: 0,
+          cache_read_tokens: 0,
+          total_tokens: 120,
+          llm_calls: 2,
+          models: ["claude-sonnet-4-5"],
+        },
+      },
+    ],
+    total: 1,
+    cross_tenant: false,
+  },
+};
+
 // P1-S2.5 — eval-runs list is raw ``{ items, total }`` (no envelope).
 const EVAL_RUNS_RESPONSE = {
   items: [
@@ -180,6 +217,9 @@ export async function installControlPlaneStub(page: Page): Promise<void> {
   });
   await page.route("**/v1/runs*", async (route) => {
     await route.fulfill({ json: RUNS_RESPONSE });
+  });
+  await page.route("**/v1/conversations*", async (route) => {
+    await route.fulfill({ json: CONVERSATIONS_RESPONSE });
   });
   // P1-S2.5 — eval runs (raw, un-enveloped). One passed run so the
   // /eval-runs E2E has a row to assert.
