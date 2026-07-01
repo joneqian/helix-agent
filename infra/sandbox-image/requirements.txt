@@ -15,7 +15,7 @@ pdfplumber==0.11.4     # PDF text + table extraction
 # the baked noto-cjk fonts (needs the libpango/cairo apt libs added in the
 # Dockerfile). This closes the gap that made md→PDF tasks thrash on the missing
 # installer.
-markdown==3.7          # Markdown → HTML
+markdown==3.8.1          # Markdown → HTML
 weasyprint==68.0       # HTML+CSS → PDF (report generation)
 # Pin pydyf: weasyprint 62.3 declares ``pydyf>=0.10.0`` with no upper bound, but
 # pydyf 0.12.x reworked the Stream API (``super().transform`` AttributeError at
