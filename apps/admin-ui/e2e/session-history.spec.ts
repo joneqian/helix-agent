@@ -114,14 +114,21 @@ test("browse, rename, archive, purge, resume + axe", async ({ page }) => {
   await page.getByRole("button", { name: /save|保存/i }).click();
   await expect.poll(() => calls.patch).toEqual({ title: "Renamed thread" });
 
-  // Archive → DELETE after confirmation.
+  // Archive → DELETE after confirmation. Scope the OK to the open popconfirm
+  // (its label collides with the rows' archive icon-button aria-labels).
   await page.getByTestId(`session-history-archive-${A_ID}`).click();
-  await page.getByRole("button", { name: /^(archive|归档)$/i }).click();
+  await page
+    .locator(".ant-popconfirm-buttons")
+    .getByRole("button", { name: /^(archive|归档)$/i })
+    .click();
   await expect.poll(() => calls.deleted).toContain(`/v1/sessions/${A_ID}`);
 
-  // Purge → POST :purge after the danger confirmation.
+  // Purge → POST :purge after the danger confirmation (same scoping).
   await page.getByTestId(`session-history-purge-${A_ID}`).click();
-  await page.getByRole("button", { name: /delete forever|彻底删除/i }).click();
+  await page
+    .locator(".ant-popconfirm-buttons")
+    .getByRole("button", { name: /delete forever|彻底删除/i })
+    .click();
   await expect.poll(() => calls.purged).toContain(`${A_ID}:purge`);
 
   // Resume → click a row → drawer closes + the thread id shows in the header.

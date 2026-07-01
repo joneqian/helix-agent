@@ -268,7 +268,7 @@ export function SessionHistoryDrawer({
                     type="text"
                     size="small"
                     icon={<Pencil size={13} strokeWidth={1.75} />}
-                    aria-label={t("session_history.rename")}
+                    aria-label={`${t("session_history.rename")}：${titleOf(s)}`}
                     loading={rowBusy}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -288,7 +288,7 @@ export function SessionHistoryDrawer({
                       type="text"
                       size="small"
                       icon={<X size={13} strokeWidth={1.75} />}
-                      aria-label={t("session_history.archive")}
+                      aria-label={`${t("session_history.archive")}：${titleOf(s)}`}
                       onClick={(e) => e.stopPropagation()}
                       data-testid={`session-history-archive-${s.thread_id}`}
                     />
@@ -307,7 +307,7 @@ export function SessionHistoryDrawer({
                       size="small"
                       danger
                       icon={<Trash2 size={13} strokeWidth={1.75} />}
-                      aria-label={t("session_history.purge")}
+                      aria-label={`${t("session_history.purge")}：${titleOf(s)}`}
                       onClick={(e) => e.stopPropagation()}
                       data-testid={`session-history-purge-${s.thread_id}`}
                     />
