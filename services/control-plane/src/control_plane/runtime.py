@@ -181,6 +181,13 @@ class AgentRuntime:
     dynamic_workers_enabled: bool = False
     dynamic_worker_max_concurrent: int = 3
     dynamic_worker_max_per_run: int = 16
+    #: The durable checkpointer the app lifespan binds into ``agent_builder``.
+    #: Exposed here so read-only history surfaces (Playground resume — the
+    #: ``/messages`` endpoint) can read a thread's checkpoint DIRECTLY instead of
+    #: rebuilding the whole agent just to call ``aget_state``. ``None`` until the
+    #: lifespan sets it (tests / pre-swap), in which case those surfaces degrade
+    #: to an empty history rather than erroring.
+    durable_checkpointer: BaseCheckpointSaver[Any] | None = None
     _cache: dict[_CacheKey, BuiltAgent] = field(default_factory=dict, repr=False)
     #: Extra per-tenant cache invalidators fanned out by ``invalidate_tenant``
     #: — the sub-agent builder registers its own cache here (Stream V-D, audit

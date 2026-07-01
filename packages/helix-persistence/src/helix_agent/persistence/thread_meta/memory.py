@@ -65,9 +65,13 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
+        # ``nonempty`` is a no-op here: the in-memory backend has no run store
+        # to correlate against. The SQL backend does the real filter.
+        del nonempty
         rows = [r for r in self._rows.values() if r.tenant_id == tenant_id]
         if status is not None:
             rows = [r for r in rows if r.status == status]
@@ -86,9 +90,11 @@ class InMemoryThreadMetaStore(ThreadMetaStore):
         status: ThreadStatus | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
+        del nonempty  # no-op in-memory (no run store) — see ``list_by_tenant``.
         rows = list(self._rows.values())
         if status is not None:
             rows = [r for r in rows if r.status == status]

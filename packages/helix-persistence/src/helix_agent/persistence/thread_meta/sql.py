@@ -17,11 +17,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from helix_agent.persistence.models import ThreadMetaRow
+from helix_agent.persistence.models.agent_run import AgentRunRow
 from helix_agent.persistence.thread_meta.base import ThreadMetaStore
 from helix_agent.protocol import ThreadMeta, ThreadStatus
 
@@ -93,6 +94,7 @@ class SqlThreadMetaStore(ThreadMetaStore):
         user_id: UUID | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -105,6 +107,8 @@ class SqlThreadMetaStore(ThreadMetaStore):
             stmt = stmt.where(ThreadMetaRow.agent_name == agent_name)
         if agent_version is not None:
             stmt = stmt.where(ThreadMetaRow.agent_version == agent_version)
+        if nonempty:
+            stmt = stmt.where(exists().where(AgentRunRow.thread_id == ThreadMetaRow.thread_id))
         stmt = stmt.order_by(ThreadMetaRow.created_at.desc()).limit(limit).offset(offset)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
@@ -116,6 +120,7 @@ class SqlThreadMetaStore(ThreadMetaStore):
         status: ThreadStatus | None = None,
         agent_name: str | None = None,
         agent_version: str | None = None,
+        nonempty: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> list[ThreadMeta]:
@@ -127,6 +132,8 @@ class SqlThreadMetaStore(ThreadMetaStore):
             stmt = stmt.where(ThreadMetaRow.agent_name == agent_name)
         if agent_version is not None:
             stmt = stmt.where(ThreadMetaRow.agent_version == agent_version)
+        if nonempty:
+            stmt = stmt.where(exists().where(AgentRunRow.thread_id == ThreadMetaRow.thread_id))
         stmt = stmt.order_by(ThreadMetaRow.created_at.desc()).limit(limit).offset(offset)
         async with self._sf() as session:
             rows = (await session.execute(stmt)).scalars().all()
