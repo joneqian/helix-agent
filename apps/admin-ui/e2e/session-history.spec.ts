@@ -67,8 +67,22 @@ test("browse, rename, archive, purge, resume + axe", async ({ page }) => {
     const req = route.request();
     const method = req.method();
     const url = req.url();
-    if (method === "GET" && url.includes("/messages")) {
+    // A thread subpath (workspace / files / messages / single get) must return
+    // its own shape — the greedy glob also matches these, and serving them the
+    // session-LIST envelope corrupts the Playground's state (crash on render).
+    if (method === "GET" && url.includes("/workspace/files")) {
+      await route.fulfill({ json: { success: true, data: { files: [] } } });
+    } else if (method === "GET" && url.includes("/workspace")) {
+      await route.fulfill({
+        json: { success: true, data: { workspace: null, artifacts: [] } },
+      });
+    } else if (method === "GET" && url.includes("/messages")) {
       await route.fulfill({ json: { success: true, data: { messages: [] } } });
+    } else if (method === "GET" && /\/v1\/sessions\/[^/?]+(\?|$)/.test(url)) {
+      // GET /v1/sessions/{id} — single session meta.
+      await route.fulfill({
+        json: { success: true, data: meta(B_ID, "今天天气", "paused") },
+      });
     } else if (method === "GET") {
       await route.fulfill({ json: LIST });
     } else if (method === "PATCH") {
