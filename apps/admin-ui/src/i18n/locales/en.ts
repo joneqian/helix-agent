@@ -38,7 +38,7 @@ export interface TranslationKeys {
     group_platform: string;
     members_all_tenants: string;
     agents: string;
-    runs: string;
+    conversations: string;
     approvals: string;
     curation: string;
     eval: string;
@@ -182,6 +182,7 @@ export interface TranslationKeys {
     subtitle: string;
     untitled: string;
     column_conversation: string;
+    column_agent: string;
     column_user: string;
     column_status: string;
     column_runs: string;
@@ -189,6 +190,11 @@ export interface TranslationKeys {
     column_last_active: string;
     filter_status: string;
     filter_status_all: string;
+    filter_user_tip: string;
+    filter_user_active: string;
+    search_placeholder: string;
+    cross_tenant_banner: string;
+    failed_to_load: string;
     error_count: string;
     pending_count: string;
     empty_home: string;
@@ -701,6 +707,7 @@ export interface TranslationKeys {
   };
   run_detail: {
     failed_to_load: string;
+    back_to_conversation: string;
     thread_label: string;
     awaiting_approval: string;
     reason_kind: string;
@@ -1907,29 +1914,12 @@ export interface TranslationKeys {
     modify_hint: string;
   };
   runs_page: {
-    page_title: string;
-    subtitle: string;
-    cross_tenant_banner: string;
-    failed_to_load: string;
-    empty_home: string;
-    empty_cross: string;
     column_run_id: string;
     column_status: string;
-    column_thread: string;
-    column_agent: string;
-    column_created: string;
     column_duration: string;
     column_tokens: string;
-    column_user: string;
     tokens_tip: string;
     duration_running: string;
-    search_placeholder: string;
-    filter_user_tip: string;
-    filter_user_active: string;
-    filter_status: string;
-    filter_status_all: string;
-    detail_hint: string;
-    detail_hint_link: string;
     summary_title: string;
     summary_duration: string;
     summary_tokens: string;
@@ -2034,7 +2024,7 @@ export interface TranslationKeys {
     group_agents: string;
     group_jump: string;
     group_action: string;
-    label_runs: string;
+    label_conversations: string;
     label_approvals: string;
     label_curation: string;
     label_eval: string;
@@ -2132,11 +2122,11 @@ const en: TranslationKeys = {
     group_platform: "Platform",
     members_all_tenants: "Members (all tenants)",
     agents: "Agents",
-    runs: "Runs",
+    conversations: "Conversations",
     approvals: "Approvals",
     curation: "Curation+Eval",
     eval: "Eval",
-    memory: "Memory",
+    memory: "Memory governance",
     artifacts: "Artifacts",
     knowledge: "Knowledge",
     skills: "Skills",
@@ -2287,9 +2277,10 @@ const en: TranslationKeys = {
   },
   conversations_page: {
     page_title: "Conversations",
-    subtitle: "Every user conversation with this agent, grouped by thread.",
+    subtitle: "User conversations across agents, grouped by thread.",
     untitled: "Untitled conversation",
     column_conversation: "Conversation",
+    column_agent: "Agent",
     column_user: "User",
     column_status: "Status",
     column_runs: "Runs",
@@ -2297,6 +2288,11 @@ const en: TranslationKeys = {
     column_last_active: "Last active",
     filter_status: "Filter by status",
     filter_status_all: "All statuses",
+    filter_user_tip: "Filter conversations by this user",
+    filter_user_active: "User: {{user}}…",
+    search_placeholder: "Search conversation title…",
+    cross_tenant_banner: "cross-tenant view",
+    failed_to_load: "Failed to load conversations",
     error_count: "{{count}} failed run(s)",
     pending_count: "{{count}} awaiting approval",
     empty_home: "No conversations yet.",
@@ -2873,6 +2869,7 @@ const en: TranslationKeys = {
   },
   run_detail: {
     failed_to_load: "Failed to load run",
+    back_to_conversation: "Conversation",
     thread_label: "Thread",
     awaiting_approval: "awaiting approval",
     reason_kind: "Reason",
@@ -4222,29 +4219,12 @@ const en: TranslationKeys = {
       "To approve with edited arguments, open the run and use the approval card there.",
   },
   runs_page: {
-    page_title: "Runs",
-    subtitle: "Cross-thread index of every agent run.",
-    cross_tenant_banner: "cross-tenant view",
-    failed_to_load: "Failed to load runs",
-    empty_home: "No runs in this tenant yet.",
-    empty_cross: "No runs across all tenants yet.",
     column_run_id: "Run ID",
     column_status: "Status",
-    column_thread: "Thread",
-    column_agent: "Agent",
-    column_created: "Created",
     column_duration: "Duration",
     column_tokens: "Tokens",
-    column_user: "User",
     tokens_tip: "{{input}} in / {{output}} out · {{calls}} LLM call(s)",
     duration_running: "running",
-    search_placeholder: "Search run / thread id…",
-    filter_user_tip: "Filter runs by this user",
-    filter_user_active: "User: {{user}}…",
-    filter_status: "Status filter",
-    filter_status_all: "All statuses",
-    detail_hint: "Need to start a new run?",
-    detail_hint_link: "Open the Playground tab on an agent.",
     summary_title: "This run",
     summary_duration: "Duration",
     summary_tokens: "Tokens",
@@ -4352,11 +4332,11 @@ const en: TranslationKeys = {
     group_agents: "Agents",
     group_jump: "Jump",
     group_action: "Actions",
-    label_runs: "Runs (across agents)",
+    label_conversations: "Conversations (across agents)",
     label_approvals: "Approvals (queue)",
     label_curation: "Curation review",
     label_eval: "Eval runs",
-    label_memory: "Memory",
+    label_memory: "Memory governance",
     label_artifacts: "Artifacts",
     label_knowledge: "Knowledge",
     label_skills: "Skills",

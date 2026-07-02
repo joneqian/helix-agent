@@ -1,14 +1,12 @@
 /**
- * Runs SDK — backed by ``/v1/sessions/{thread_id}/runs/*`` (per-thread)
- * and ``/v1/runs`` (Stream H.3 PR 1 — cross-thread index per Mini-ADR
- * H-6, resolves the Mini-ADR J-41 deferred ``GET .../runs`` item).
+ * Runs SDK — backed by ``/v1/sessions/{thread_id}/runs/*`` (per-thread).
+ * The cross-thread index moved to the conversations SDK
+ * (``api/conversations.ts`` — conversation-centric IA).
  *
  * ``GET /v1/sessions/{thread_id}/runs/{run_id}`` is one of the few
  * endpoints that returns the raw payload (no envelope) — see :func:`getRun`.
- * ``GET /v1/runs`` follows the standard envelope (matches agents /
- * triggers list endpoints).
  */
-import { apiClient, getJson, withTenantScope, type TenantScope } from "./client";
+import { apiClient } from "./client";
 
 export type RunStatus =
   // Server-side ``RunStatus`` enum (helix_agent.runtime.runs.RunStatus).
@@ -106,73 +104,6 @@ export async function resumeRun(
     body,
   );
   return response.data;
-}
-
-/** One row returned by ``GET /v1/runs``. The ``agent_name`` /
- *  ``agent_version`` come from a server-side JOIN against ``thread_meta``
- *  (Mini-ADR H-6 § 6.5.5 (b)); ``null`` when the thread was deleted. */
-export interface RunListItem {
-  run_id: string;
-  tenant_id: string;
-  thread_id: string;
-  user_id: string | null;
-  status: RunStatus;
-  is_resume: boolean;
-  error: string | null;
-  agent_name: string | null;
-  agent_version: string | null;
-  created_at: string;
-  updated_at: string;
-  finished_at: string | null;
-  /** Mini-ADR H-9.5 — see :ref:`RunDetail.trace_id`. */
-  trace_id: string | null;
-  /** Runs-enrichment — per-run token summary (``null`` = no usage). */
-  tokens?: RunTokens | null;
-}
-
-export interface RunList {
-  items: RunListItem[];
-  total: number;
-  cross_tenant: boolean;
-  /** Stream H.6 (Mini-ADR H-10) — true when the agent filter's thread
-   *  window hit the server cap (older threads' runs not included).
-   *  Optional so pre-H.6 mocks stay valid. */
-  thread_window_capped?: boolean;
-}
-
-export interface ListRunsParams {
-  tenantScope?: TenantScope;
-  status?: RunStatus;
-  /** Stream H.6 — narrow to one agent's runs (AgentDetail Runs tab).
-   *  ``agentVersion`` requires ``agentName`` (backend 422s otherwise). */
-  agentName?: string;
-  agentVersion?: string;
-  /** Free-text filter — substring match on run_id / thread_id. */
-  q?: string;
-  /** Narrow to one end-user's runs (member's-runs view). */
-  userId?: string;
-  limit?: number;
-  offset?: number;
-}
-
-/** GET /v1/runs — cross-thread index. ``tenantScope`` mirrors the
- *  agents-list shape (``"*"`` for cross-tenant, UUID for explicit, or
- *  ``undefined`` for the caller's home tenant). */
-export async function listRuns(params: ListRunsParams = {}): Promise<RunList> {
-  const { tenantScope, status, agentName, agentVersion, q, userId, limit, offset } = params;
-  const query = withTenantScope(
-    {
-      status,
-      agent_name: agentName,
-      agent_version: agentVersion,
-      q,
-      user_id: userId,
-      limit,
-      offset,
-    },
-    tenantScope,
-  );
-  return getJson<RunList>("/v1/runs", { params: query });
 }
 
 /** GET /v1/sessions/{thread}/runs/{run}/events — SSE stream.

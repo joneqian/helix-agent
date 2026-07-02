@@ -41,7 +41,12 @@ export const WORKSPACE_ITEMS: readonly NavEntry[] = [
     path: "/agents",
     group: "workspace",
   },
-  { key: "runs", labelKey: "nav.runs", path: "/runs", group: "workspace" },
+  {
+    key: "conversations",
+    labelKey: "nav.conversations",
+    path: "/conversations",
+    group: "workspace",
+  },
   {
     key: "approvals",
     labelKey: "nav.approvals",

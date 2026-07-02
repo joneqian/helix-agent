@@ -141,7 +141,11 @@ export function RunDetail() {
     <div data-testid="run-detail-root">
       <PageHeader
         title={`${run.run_id.slice(0, 12)}…`}
-        backTo={{ label: t("nav.runs"), to: "/runs" }}
+        backTo={{
+          // Up one level in the drill-down: run → its conversation.
+          label: t("run_detail.back_to_conversation"),
+          to: `/conversations/${encodeURIComponent(run.thread_id)}`,
+        }}
         subtitle={
           <Space size={8} align="center" wrap>
             <Tag color={STATUS_COLOR[run.status] ?? "default"} bordered={false}>
