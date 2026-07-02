@@ -22,9 +22,9 @@ import {
   type ConversationListItem,
 } from "../api/conversations";
 import { listMemories, type MemoryItem, type MemoryKind } from "../api/memory";
-import { listArtifacts, type ArtifactListItem } from "../api/artifacts";
 import { getUsageTokens } from "../api/usage";
 import { PageHeader } from "../components/PageHeader";
+import { ArtifactsPane } from "./user_detail/ArtifactsPane";
 import { formatCompact } from "../utils/runFormat";
 
 const { Text } = Typography;
@@ -221,51 +221,6 @@ function MemoryPane({ userId }: { userId: string }) {
         pagination={false}
         locale={{ emptyText: <Empty description={t("user_detail.memory_empty")} /> }}
         data-testid="user-memory-table"
-      />
-    </div>
-  );
-}
-
-function ArtifactsPane({ userId }: { userId: string }) {
-  const { t } = useTranslation();
-  const load = useCallback(() => listArtifacts({ userId }), [userId]);
-  const { data, loading, error } = useLoad(load);
-
-  const columns: TableColumnsType<ArtifactListItem> = useMemo(
-    () => [
-      { title: t("user_detail.artifact_name"), dataIndex: "name", key: "name" },
-      {
-        title: t("user_detail.artifact_kind"),
-        dataIndex: "kind",
-        key: "kind",
-        width: 120,
-        render: (kind: string) => <Tag bordered={false}>{kind}</Tag>,
-      },
-      {
-        title: t("user_detail.artifact_version"),
-        dataIndex: "latest_version",
-        key: "latest_version",
-        width: 100,
-        render: (v: number) => <Text type="secondary">v{v}</Text>,
-      },
-    ],
-    [t],
-  );
-
-  return (
-    <div data-testid="user-artifacts-pane">
-      {/* Artifacts are cross-agent per-user workspace assets. */}
-      <Alert type="info" showIcon message={t("user_detail.artifacts_scope_note")} style={{ marginBottom: 12 }} />
-      {error !== null && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
-      <Table<ArtifactListItem>
-        size="small"
-        columns={columns}
-        dataSource={data?.items ?? []}
-        rowKey="name"
-        loading={loading}
-        pagination={false}
-        locale={{ emptyText: <Empty description={t("user_detail.artifacts_empty")} /> }}
-        data-testid="user-artifacts-table"
       />
     </div>
   );

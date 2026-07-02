@@ -15,6 +15,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from control_plane.auth.rbac import is_admin
@@ -47,6 +48,37 @@ async def resolve_caller_user_id(request: Request, users: TenantUserStore) -> UU
         subject_id=principal.subject_id,
     )
     return user.id
+
+
+async def resolve_target_user_id(
+    request: Request,
+    users: TenantUserStore,
+    *,
+    requested: UUID | None,
+) -> UUID | None:
+    """The user whose per-user resources this request may act on.
+
+    Conversation-centric IA M2/M3 (H.8-F1) — the shared gate behind
+    ``?user_id=`` on per-user endpoints (memory / artifacts list +
+    actions): no ``requested`` (or asking for yourself) resolves to the
+    caller's own ``tenant_user.id``; a tenant admin may target any
+    member (same admin semantics as :func:`caller_owns_thread`); anyone
+    else asking for someone
+    else is a 403 — explicit, never silent narrowing. ``None`` means a
+    machine principal acting with no target (owns nothing itself).
+    """
+    caller_user_id = await resolve_caller_user_id(request, users)
+    if requested is None or requested == caller_user_id:
+        return caller_user_id
+    if not is_admin(request.state.principal):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "USER_SCOPE_FORBIDDEN",
+                "message": "only tenant admins may act on another user's resources",
+            },
+        )
+    return requested
 
 
 async def ensure_member_active(

@@ -67,12 +67,8 @@ export const WORKSPACE_ITEMS: readonly NavEntry[] = [
     path: "/memory",
     group: "workspace",
   },
-  {
-    key: "artifacts",
-    labelKey: "nav.artifacts",
-    path: "/artifacts",
-    group: "workspace",
-  },
+  // "artifacts" left the top level (conversation-centric IA M3) — the
+  // governance surface now lives on the user detail's Artifacts tab.
   {
     key: "knowledge",
     labelKey: "nav.knowledge",

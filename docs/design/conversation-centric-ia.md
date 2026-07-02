@@ -156,12 +156,12 @@ Agent 详情
 
 ### 实施切分(2026-07-02 拍板)
 
-| PR | 内容 | 依赖 |
-|----|------|------|
-| PR-1 | M1.5 消息面(纯前端)+ 本设计文档更新 | 无 |
-| PR-2 | M2 后端:两 store 聚合 + users 端点 + memory/artifacts/usage `user_id` 参数 + migration + 测试 | 无 |
-| PR-3 | M2 前端:UsersTab + UserDetail 四 tab + SDK + i18n/stories/e2e | PR-2 |
-| PR-4 | M3 收口:顶层 artifacts 删 + MemoryTab 删 + MemoryAdmin user 过滤 + 面包屑 | PR-3 |
+| PR | 内容 | 依赖 | 状态 |
+|----|------|------|------|
+| PR-1 | M1.5 消息面(纯前端)+ 本设计文档更新 | 无 | ✅ #883 |
+| PR-2 | M2 后端:两 store 聚合 + users 端点 + memory/artifacts/usage `user_id` 参数 + migration + 测试 | 无 | ✅ #884 |
+| PR-3 | M2 前端:UsersTab + UserDetail 四 tab + SDK + i18n/stories/e2e | PR-2 | ✅ #885 |
+| PR-4 | M3 收口 + **H.8-F1**(实施期发现:artifacts 动作端点全是 caller-only,直接删顶层会砍 download/delete 能力 → 拍板补全再删):四动作端点 `?user_id=` admin 目标(统一 `resolve_target_user_id` 闸,supervisor 读天然按 user 参数化零改动)+ 产物全动作面迁用户详情 + 顶层 artifacts 删 + MemoryTab 删 + MemoryAdmin user 过滤 | PR-3 | 本 PR |
 
 ## 7. 非目标(有意不做)
 

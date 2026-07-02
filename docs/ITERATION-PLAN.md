@@ -1627,11 +1627,12 @@ PR 链（main 上 9 个 squash commits）：#198（设计 L0）→ #199 L3 → #
 - [x] **运行记录按 user_id 过滤 + 用户列**（#878）：成员运行视图，`?user_id=` URL-owned filter
 - [x] **可观测性 hub 入口**（#879）：Langfuse/Grafana/Tempo 平台运维入口（system_admin 专属，跨租户红线不暴露给租户）
 - [x] **对话中心化 IA M1a+M1b-1**（#880，e2e 修 #881）：设计文档 + 后端 `GET /v1/conversations`（thread_meta + `agent_run` rollup + token totals）/`{thread_id}` 详情 + `ThreadRunAggregate` store 聚合（GROUP BY 非 N+1）+ agent 详情「对话」tab 替换运行 tab + 对话详情页（`/conversations/:threadId` 摘要 + run 列表）+「历史 → 配置历史」改名
-- [x] **对话中心化 IA M1b-2**（本 PR）：顶层 `/runs` → 全局对话浏览器 `/conversations`（thread 分组，agent/user/status/q 过滤，旧路径 redirect 兼容）+ nav「运行记录 → 对话」+ memory label →「记忆治理」+ RunDetail 返回链改指对话 + RunsList/`listRuns` SDK 死代码清退
-- [ ] **M1.5** 统一消息 transcript（跨 run 用户/助手轮存 LangGraph checkpoint，需评估读端点成本）
-- [ ] **M2** 用户层：`GET /v1/agents/{name}/{version}/users` rollup + 用户详情页（对话 + 记忆 + 产物 + 用量 tab 迁入；须核记忆端点 user_id 过滤缺口）
-- [ ] **M3** 顶层收口：`/artifacts` 删（迁用户层）+ `/memory` 语义明确为租户级治理聚合页 + 面包屑统一
-- [ ] fast-follow：对话/run 成本（人民币）列（现定价是月度 rollup，无干净 per-run cost 函数）
+- [x] **对话中心化 IA M1b-2**（#882）：顶层 `/runs` → 全局对话浏览器 `/conversations`（thread 分组，agent/user/status/q 过滤，旧路径 redirect 兼容）+ nav「运行记录 → 对话」+ memory label →「记忆治理」+ RunDetail 返回链改指对话 + RunsList/`listRuns` SDK 死代码清退
+- [x] **M1.5 统一消息 transcript**（#883）：盘点修正「无读 API」假设已过期——Playground 的 `GET /v1/sessions/{id}/messages`（checkpoint 最新 tuple + admin 放行）现成 → M1.5 纯前端：对话详情「消息记录」面（user/assistant 轮，失败只隐藏面板；tool/system 轮 by design 留 per-run 事件流）
+- [x] **M2 后端**（#884）：`GET /v1/agents/{name}/{version}/users` per-user rollup（thread 窗口 + aggregate_by_threads fold，token 走 token_usage 三列零 trace join）+ `TokenUsageStore.totals_by_users` + `TenantUserStore.get_many` + memory/artifacts/usage `?user_id=` 治理过滤（非 admin 403）+ migration 0105 thread_meta (tenant, agent, user) 索引
+- [x] **M2 前端**（#885）：agent 详情「用户」tab（rollup 列表）+ 用户详情页四 tab（对话/记忆/产物/用量，每 tab 独立降级）——三层下钻 UI 全通
+- [x] **M3 顶层收口 + H.8-F1**（本 PR）：artifacts download/versions/delete/patch 四端点补 `?user_id=` admin 治理目标（统一 `resolve_target_user_id` 闸；supervisor 读天然按 user 参数化零改动）→ 用户详情产物 tab 升级全动作面 → 顶层 `/artifacts` 删；agent 详情 MemoryTab 删（维度错位,记忆=per-user 跨 agent 资产）；`/memory` 治理页补 user 过滤
+- [ ] fast-follow：对话/run 成本（人民币）列（现定价是月度 rollup，无干净 per-run cost 函数）；messages 端点 `tenant_id` 参数（system_admin 跨租户下钻的 transcript）；用户详情单用户端点（display_name 现走 router state）
 
 ### 显式不做（理由在册，需求出现随时重议）
 

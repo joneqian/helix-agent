@@ -43,7 +43,6 @@ export interface TranslationKeys {
     curation: string;
     eval: string;
     memory: string;
-    artifacts: string;
     knowledge: string;
     skills: string;
     agent_template_marketplace: string;
@@ -143,7 +142,6 @@ export interface TranslationKeys {
     tab_conversations: string;
     tab_skills: string;
     tab_triggers: string;
-    tab_memory: string;
     tab_history: string;
     tab_coming_soon: string;
     config_summary: string;
@@ -269,15 +267,9 @@ export interface TranslationKeys {
     empty: string;
   };
   memory_tab: {
-    title: string;
-    user_scope_note: string;
-    filter_kind: string;
-    filter_kind_all: string;
     col_kind: string;
     col_content: string;
-    col_user: string;
     col_created: string;
-    empty: string;
   };
   knowledge_page: {
     page_title: string;
@@ -402,16 +394,9 @@ export interface TranslationKeys {
     identity_immutable: string;
   };
   artifacts_page: {
-    page_title: string;
-    subtitle_home: string;
-    subtitle_cross: string;
-    cross_tenant_banner: string;
-    failed_to_load: string;
     col_name: string;
     col_kind: string;
     col_latest: string;
-    col_tenant: string;
-    col_user: string;
     download: string;
     download_failed: string;
     versions: string;
@@ -426,8 +411,6 @@ export interface TranslationKeys {
     deleted: string;
     delete_confirm_title: string;
     delete_confirm_body: string;
-    empty_home: string;
-    empty_cross: string;
   };
   manifest_tab: {
     hint: string;
@@ -1794,6 +1777,7 @@ export interface TranslationKeys {
     filter_kind: string;
     filter_kind_all: string;
     search_placeholder: string;
+    filter_user_placeholder: string;
     edit_title: string;
     correct: string;
     correct_title: string;
@@ -2063,7 +2047,6 @@ export interface TranslationKeys {
     label_curation: string;
     label_eval: string;
     label_memory: string;
-    label_artifacts: string;
     label_knowledge: string;
     label_skills: string;
     label_agent_template_marketplace: string;
@@ -2161,7 +2144,6 @@ const en: TranslationKeys = {
     curation: "Curation+Eval",
     eval: "Eval",
     memory: "Memory governance",
-    artifacts: "Artifacts",
     knowledge: "Knowledge",
     skills: "Skills",
     agent_template_marketplace: "Template Marketplace",
@@ -2274,7 +2256,6 @@ const en: TranslationKeys = {
     tab_conversations: "Conversations",
     tab_skills: "Skills",
     tab_triggers: "Triggers",
-    tab_memory: "Memory",
     tab_history: "Config history",
     tab_coming_soon: 'Tab "{{tab}}" lands in Stream H.2.',
     config_summary: "Configuration",
@@ -2403,16 +2384,9 @@ const en: TranslationKeys = {
     empty: "No triggers bound to this agent version.",
   },
   memory_tab: {
-    title: "Long-term memory",
-    user_scope_note:
-      "Memory is a per-user asset — these are the per-user items this agent reads; there is no per-agent partition. Governance actions live on the Memory page.",
-    filter_kind: "Filter by kind",
-    filter_kind_all: "All kinds",
     col_kind: "Kind",
     col_content: "Content",
-    col_user: "User",
     col_created: "Created",
-    empty: "No memory items yet.",
   },
   knowledge_page: {
     page_title: "Knowledge",
@@ -2553,18 +2527,9 @@ const en: TranslationKeys = {
       "Provider / model are this row's identity and cannot change — edit the prices to reprice.",
   },
   artifacts_page: {
-    page_title: "Artifacts",
-    subtitle_home:
-      "Your run artifacts — artifacts are per-user assets; this account only sees and manages its own.",
-    subtitle_cross:
-      "Platform-wide read-only aggregate across every tenant and user.",
-    cross_tenant_banner: "All tenants",
-    failed_to_load: "Failed to load artifacts",
     col_name: "Name",
     col_kind: "Kind",
     col_latest: "Latest",
-    col_tenant: "Tenant",
-    col_user: "User",
     download: "Download",
     download_failed: "Download failed: {{detail}}",
     versions: "Versions",
@@ -2580,8 +2545,6 @@ const en: TranslationKeys = {
     delete_confirm_title: "Delete {{name}}?",
     delete_confirm_body:
       "Soft-delete: the artifact disappears from lists and downloads; bytes stay until the retention sweep, and re-saving the same name un-deletes it.",
-    empty_home: "This account has no run artifacts yet.",
-    empty_cross: "No artifacts anywhere on the platform yet.",
   },
   manifest_tab: {
     hint: "Visual config — edit the fields and Save. The YAML tab is a raw escape hatch.",
@@ -4125,6 +4088,7 @@ const en: TranslationKeys = {
     filter_kind: "Kind filter",
     filter_kind_all: "All kinds",
     search_placeholder: "Filter by content (client-side)",
+    filter_user_placeholder: "Filter by user id (UUID)",
     edit_title: "Edit memory",
     correct: "Correct",
     correct_title: "Correct memory",
@@ -4407,7 +4371,6 @@ const en: TranslationKeys = {
     label_curation: "Curation review",
     label_eval: "Eval runs",
     label_memory: "Memory governance",
-    label_artifacts: "Artifacts",
     label_knowledge: "Knowledge",
     label_skills: "Skills",
     label_agent_template_marketplace: "Template Marketplace",

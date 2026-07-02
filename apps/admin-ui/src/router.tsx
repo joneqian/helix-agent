@@ -2,7 +2,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AgentsList } from "./pages/AgentsList";
 import { ApprovalsList } from "./pages/ApprovalsList";
 import { AgentDetail } from "./pages/AgentDetail";
-import { ArtifactsList } from "./pages/ArtifactsList";
 import { ConversationDetail } from "./pages/ConversationDetail";
 import { ConversationsList } from "./pages/ConversationsList";
 import { Curation } from "./pages/Curation";
@@ -66,7 +65,6 @@ export function AppRouter() {
       <Route path="/eval-runs" element={<EvalRunsList />} />
       <Route path="/eval-runs/:runId" element={<EvalRunDetail />} />
       <Route path="/memory" element={<MemoryAdmin />} />
-      <Route path="/artifacts" element={<ArtifactsList />} />
       <Route path="/knowledge" element={<KnowledgeAdmin />} />
       <Route path="/knowledge/:name" element={<KnowledgeDetail />} />
       <Route path="/knowledge/:name/:tab" element={<KnowledgeDetail />} />

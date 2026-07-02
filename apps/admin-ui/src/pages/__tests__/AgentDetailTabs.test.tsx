@@ -13,10 +13,8 @@ import "../../i18n";
 import * as conversationsSdk from "../../api/conversations";
 import * as skillsSdk from "../../api/skills";
 import * as triggersSdk from "../../api/triggers";
-import * as memorySdk from "../../api/memory";
 import type { AgentDetailResponse } from "../../api/agents";
 import { ConversationsTab } from "../agent_detail/ConversationsTab";
-import { MemoryTab } from "../agent_detail/MemoryTab";
 import { SkillsTab } from "../agent_detail/SkillsTab";
 import { TriggersTab } from "../agent_detail/TriggersTab";
 
@@ -185,32 +183,5 @@ describe("TriggersTab", () => {
   });
 });
 
-describe("MemoryTab", () => {
-  it("lists per-user memory items and states the user-scope semantics", async () => {
-    const spy = vi.spyOn(memorySdk, "listMemories").mockResolvedValue({
-      items: [
-        {
-          id: "77777777-7777-7777-7777-777777777777",
-          tenant_id: detail.record.tenant_id,
-          user_id: "88888888-8888-8888-8888-888888888888",
-          kind: "fact",
-          content: "prefers terse answers",
-          created_at: "2026-06-12T00:00:00Z",
-          importance: 0.5,
-          confidence: 0.5,
-        },
-      ],
-      total: 1,
-      cross_tenant: false,
-    });
-
-    inRouter(<MemoryTab />);
-
-    await waitFor(() =>
-      expect(screen.getByText("prefers terse answers")).toBeInTheDocument(),
-    );
-    // Mini-ADR H-13 — the per-user scope is stated, not hidden.
-    expect(screen.getByTestId("memory-tab-scope-note")).toBeInTheDocument();
-    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ kind: undefined }));
-  });
-});
+// The per-agent MemoryTab is gone (conversation-centric IA M3): memory is a
+// per-user cross-agent asset — covered by UserDetail.test.tsx's MemoryPane.

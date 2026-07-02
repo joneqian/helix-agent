@@ -128,6 +128,50 @@ async def test_non_admin_user_id_for_someone_else_is_403(
 
 
 @pytest.mark.asyncio
+async def test_admin_downloads_another_users_artifact_via_user_id(
+    setup: tuple[AsyncClient, InMemoryArtifactStore, UUID],
+) -> None:
+    """H.8-F1 — the governance actions accept a ``user_id`` target: an
+    admin (user-b) downloads user-a's artifact; the supervisor read is
+    keyed to the target's workspace."""
+    client, _, user_id = setup
+    resp = await client.get(
+        "/v1/artifacts/download",
+        params={"name": "report.md", "user_id": str(user_id)},
+        headers=_headers("user-b"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.content == _CONTENT
+
+
+@pytest.mark.asyncio
+async def test_admin_deletes_another_users_artifact_via_user_id(
+    setup: tuple[AsyncClient, InMemoryArtifactStore, UUID],
+) -> None:
+    client, artifacts, user_id = setup
+    resp = await client.delete(
+        f"/v1/artifacts/report.md?user_id={user_id}", headers=_headers("user-b")
+    )
+    assert resp.status_code == 200, resp.text
+    remaining = await artifacts.list_for_user(tenant_id=_TENANT, user_id=user_id)
+    assert all(a.name != "report.md" for a in remaining)
+
+
+@pytest.mark.asyncio
+async def test_non_admin_action_on_someone_else_is_403(
+    setup: tuple[AsyncClient, InMemoryArtifactStore, UUID],
+) -> None:
+    client, _, user_id = setup
+    viewer_jwt = make_test_jwt(tenant_id=_TENANT, subject="user-b", roles=("viewer",))
+    resp = await client.delete(
+        f"/v1/artifacts/report.md?user_id={user_id}",
+        headers={"Authorization": f"Bearer {viewer_jwt}"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "USER_SCOPE_FORBIDDEN"
+
+
+@pytest.mark.asyncio
 async def test_download_artifact_returns_content(
     setup: tuple[AsyncClient, InMemoryArtifactStore, UUID],
 ) -> None:

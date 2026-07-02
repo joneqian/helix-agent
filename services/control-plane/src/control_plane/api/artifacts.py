@@ -33,9 +33,8 @@ from pydantic import BaseModel, ConfigDict
 
 from control_plane.api._artifact_mime import content_disposition_header, infer_content_type
 from control_plane.api._quota_admission import check_admission
-from control_plane.api._user_scope import get_user_repo, resolve_caller_user_id
+from control_plane.api._user_scope import get_user_repo, resolve_target_user_id
 from control_plane.audit import emit as audit_emit
-from control_plane.auth.rbac import is_admin
 from control_plane.quota.base import QuotaService
 from control_plane.tenant_scope import (
     CrossTenant,
@@ -124,20 +123,7 @@ def build_artifacts_router() -> APIRouter:
                     for a in artifacts
                 ]
             else:
-                caller_user_id = await resolve_caller_user_id(request, users)
-                target_user_id = caller_user_id
-                if user_id is not None and user_id != caller_user_id:
-                    # Same admin semantics as ``caller_owns_thread`` — a
-                    # tenant admin reads any member, a plain user does not.
-                    if not is_admin(request.state.principal):
-                        raise HTTPException(
-                            status_code=403,
-                            detail={
-                                "code": "USER_SCOPE_FORBIDDEN",
-                                "message": ("only tenant admins may read another user's artifacts"),
-                            },
-                        )
-                    target_user_id = user_id
+                target_user_id = await resolve_target_user_id(request, users, requested=user_id)
                 # Artifacts are per-user; a machine principal owns none
                 # (unless an admin machine principal targets a user).
                 if target_user_id is None:
@@ -169,20 +155,24 @@ def build_artifacts_router() -> APIRouter:
         supervisor: Annotated[SupervisorClient | None, Depends(_get_supervisor_client)],
         quota: Annotated[QuotaService, Depends(_get_quota)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        # H.8-F1 — tenant-admin governance: act on one member's artifact
+        # (the user-detail Artifacts tab). Non-admins targeting someone
+        # else get a 403 from the shared gate.
+        user_id: Annotated[UUID | None, Query()] = None,
     ) -> Response:
         tenant_id: UUID = request.state.tenant_id
-        caller_user_id = await resolve_caller_user_id(request, users)
+        target_user_id = await resolve_target_user_id(request, users, requested=user_id)
         # 404 (not 403) so a cross-user / nonexistent name stays opaque.
-        if caller_user_id is None:
+        if target_user_id is None:
             raise HTTPException(status_code=404, detail="artifact not found")
-        current_user_id_var.set(caller_user_id)
+        current_user_id_var.set(target_user_id)
         version = await store.get_latest_version(
-            tenant_id=tenant_id, user_id=caller_user_id, name=name
+            tenant_id=tenant_id, user_id=target_user_id, name=name
         )
         if version is None:
             raise HTTPException(status_code=404, detail="artifact not found")
         # Re-fetch the parent row to know the ``kind`` for MIME inference.
-        artifacts = await store.list_for_user(tenant_id=tenant_id, user_id=caller_user_id)
+        artifacts = await store.list_for_user(tenant_id=tenant_id, user_id=target_user_id)
         artifact = next((a for a in artifacts if a.name == name), None)
         if artifact is None:
             # Defensive — would mean a version exists but its parent does
@@ -211,7 +201,7 @@ def build_artifacts_router() -> APIRouter:
         try:
             data = await supervisor.read_workspace_file(
                 tenant_id=tenant_id,
-                user_id=caller_user_id,
+                user_id=target_user_id,
                 path=version.path_in_workspace,
             )
         except SandboxSupervisorError as exc:
@@ -248,6 +238,8 @@ def build_artifacts_router() -> APIRouter:
         store: Annotated[ArtifactStore, Depends(_get_artifact_store)],
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        # H.8-F1 — tenant-admin governance target (see download).
+        user_id: Annotated[UUID | None, Query()] = None,
     ) -> JSONResponse:
         """Mini-ADR J-25 — soft-delete one artifact (metadata only).
 
@@ -256,12 +248,12 @@ def build_artifacts_router() -> APIRouter:
         the user re-saves the same name (which un-deletes).
         """
         tenant_id: UUID = request.state.tenant_id
-        caller_user_id = await resolve_caller_user_id(request, users)
-        if caller_user_id is None:
+        target_user_id = await resolve_target_user_id(request, users, requested=user_id)
+        if target_user_id is None:
             raise HTTPException(status_code=404, detail="artifact not found")
-        current_user_id_var.set(caller_user_id)
+        current_user_id_var.set(target_user_id)
         hit = await store.soft_delete(
-            tenant_id=tenant_id, user_id=caller_user_id, name=name, now=datetime.now(UTC)
+            tenant_id=tenant_id, user_id=target_user_id, name=name, now=datetime.now(UTC)
         )
         # Hides cross-user / already-deleted / unknown behind the same 404.
         if not hit:
@@ -276,7 +268,7 @@ def build_artifacts_router() -> APIRouter:
             resource_id=name,
             result=AuditResult.SUCCESS,
             trace_id=current_trace_id_hex(),
-            details={"user_id": str(caller_user_id)},
+            details={"user_id": str(target_user_id)},
         )
         return JSONResponse(status_code=200, content={"deleted": name})
 
@@ -288,6 +280,8 @@ def build_artifacts_router() -> APIRouter:
         store: Annotated[ArtifactStore, Depends(_get_artifact_store)],
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
         audit: Annotated[AuditLogger, Depends(_get_audit)],
+        # H.8-F1 — tenant-admin governance target (see download).
+        user_id: Annotated[UUID | None, Query()] = None,
     ) -> JSONResponse:
         """Mini-ADR J-25 — update an artifact's mutable fields (M0: ``kind``).
 
@@ -301,12 +295,12 @@ def build_artifacts_router() -> APIRouter:
             # Literal — guard kept for the rare future divergence.
             raise HTTPException(status_code=422, detail="invalid kind")
         tenant_id: UUID = request.state.tenant_id
-        caller_user_id = await resolve_caller_user_id(request, users)
-        if caller_user_id is None:
+        target_user_id = await resolve_target_user_id(request, users, requested=user_id)
+        if target_user_id is None:
             raise HTTPException(status_code=404, detail="artifact not found")
-        current_user_id_var.set(caller_user_id)
+        current_user_id_var.set(target_user_id)
         updated = await store.update_kind(
-            tenant_id=tenant_id, user_id=caller_user_id, name=name, kind=body.kind
+            tenant_id=tenant_id, user_id=target_user_id, name=name, kind=body.kind
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="artifact not found")
@@ -320,7 +314,7 @@ def build_artifacts_router() -> APIRouter:
             resource_id=name,
             result=AuditResult.SUCCESS,
             trace_id=current_trace_id_hex(),
-            details={"user_id": str(caller_user_id), "kind": body.kind},
+            details={"user_id": str(target_user_id), "kind": body.kind},
         )
         return JSONResponse(
             status_code=200,
@@ -337,6 +331,8 @@ def build_artifacts_router() -> APIRouter:
         request: Request,
         store: Annotated[ArtifactStore, Depends(_get_artifact_store)],
         users: Annotated[TenantUserStore, Depends(get_user_repo)],
+        # H.8-F1 — tenant-admin governance target (see download).
+        user_id: Annotated[UUID | None, Query()] = None,
     ) -> JSONResponse:
         """Mini-ADR J-25 — version history for one artifact.
 
@@ -346,11 +342,11 @@ def build_artifacts_router() -> APIRouter:
         has never been downloaded (lazy backfill).
         """
         tenant_id: UUID = request.state.tenant_id
-        caller_user_id = await resolve_caller_user_id(request, users)
-        if caller_user_id is None:
+        target_user_id = await resolve_target_user_id(request, users, requested=user_id)
+        if target_user_id is None:
             raise HTTPException(status_code=404, detail="artifact not found")
-        current_user_id_var.set(caller_user_id)
-        versions = await store.list_versions(tenant_id=tenant_id, user_id=caller_user_id, name=name)
+        current_user_id_var.set(target_user_id)
+        versions = await store.list_versions(tenant_id=tenant_id, user_id=target_user_id, name=name)
         if versions is None:
             raise HTTPException(status_code=404, detail="artifact not found")
         items: list[dict[str, Any]] = [
