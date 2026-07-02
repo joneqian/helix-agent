@@ -45,9 +45,14 @@ export interface ArtifactVersionList {
 }
 
 export async function listArtifacts(
-  params: { tenantScope?: TenantScope } = {},
+  params: {
+    tenantScope?: TenantScope;
+    /** Tenant-admin governance view of one member's artifacts (M2 user
+     *  detail). Non-admins asking for someone else get a 403. */
+    userId?: string;
+  } = {},
 ): Promise<ArtifactList> {
-  const query = withTenantScope({}, params.tenantScope);
+  const query = withTenantScope({ user_id: params.userId }, params.tenantScope);
   const response = await apiClient.get<ArtifactList>("/v1/artifacts", { params: query });
   return response.data;
 }

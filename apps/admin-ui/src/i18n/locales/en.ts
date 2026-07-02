@@ -139,6 +139,7 @@ export interface TranslationKeys {
     tab_overview: string;
     tab_manifest: string;
     tab_playground: string;
+    tab_users: string;
     tab_conversations: string;
     tab_skills: string;
     tab_triggers: string;
@@ -176,6 +177,35 @@ export interface TranslationKeys {
   conversations_tab: {
     title: string;
     empty: string;
+  };
+  users_tab: {
+    title: string;
+    empty: string;
+    unnamed: string;
+    column_user: string;
+    column_conversations: string;
+    column_runs: string;
+    column_tokens: string;
+    column_last_active: string;
+  };
+  user_detail: {
+    tab_conversations: string;
+    tab_memory: string;
+    tab_artifacts: string;
+    tab_usage: string;
+    conversations_empty: string;
+    memory_scope_note: string;
+    memory_empty: string;
+    artifacts_scope_note: string;
+    artifacts_empty: string;
+    artifact_name: string;
+    artifact_kind: string;
+    artifact_version: string;
+    usage_scope_note: string;
+    usage_month: string;
+    usage_total: string;
+    usage_in_out: string;
+    usage_by_model: string;
   };
   conversations_page: {
     page_title: string;
@@ -2240,6 +2270,7 @@ const en: TranslationKeys = {
     tab_overview: "Overview",
     tab_manifest: "Manifest",
     tab_playground: "Playground",
+    tab_users: "Users",
     tab_conversations: "Conversations",
     tab_skills: "Skills",
     tab_triggers: "Triggers",
@@ -2278,6 +2309,37 @@ const en: TranslationKeys = {
   conversations_tab: {
     title: "Conversations with this agent",
     empty: "No conversations for this agent yet.",
+  },
+  users_tab: {
+    title: "Users of this agent",
+    empty: "No user conversations for this agent yet.",
+    unnamed: "Unnamed user",
+    column_user: "User",
+    column_conversations: "Conversations",
+    column_runs: "Runs",
+    column_tokens: "Tokens",
+    column_last_active: "Last active",
+  },
+  user_detail: {
+    tab_conversations: "Conversations",
+    tab_memory: "Memory",
+    tab_artifacts: "Artifacts",
+    tab_usage: "Usage",
+    conversations_empty: "No conversations with this agent.",
+    memory_scope_note:
+      "Long-term memory is a per-user asset shared across agents — this lists everything remembered for this user, not just this agent.",
+    memory_empty: "No memories recorded for this user.",
+    artifacts_scope_note:
+      "Artifacts live in the user's persistent workspace shared across agents.",
+    artifacts_empty: "No artifacts for this user.",
+    artifact_name: "Name",
+    artifact_kind: "Kind",
+    artifact_version: "Latest",
+    usage_scope_note: "Token usage is the user's tenant-wide month, across all agents.",
+    usage_month: "Usage — {{month}}",
+    usage_total: "Total tokens",
+    usage_in_out: "Input / output",
+    usage_by_model: "By model",
   },
   conversations_page: {
     page_title: "Conversations",
