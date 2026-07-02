@@ -46,5 +46,7 @@ test("top-level /artifacts route is gone (404 catch-all)", async ({ page }) => {
   await page.getByTestId("login-token").fill(SAMPLE_JWT);
   await page.getByTestId("login-submit").click();
   await page.goto("/artifacts");
-  await expect(page.getByText("404")).toBeVisible();
+  // ComingSoon renders the title twice (header + body) — .first() avoids
+  // the strict-mode violation.
+  await expect(page.getByText("404").first()).toBeVisible();
 });
