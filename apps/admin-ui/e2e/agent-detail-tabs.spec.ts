@@ -96,6 +96,28 @@ const MEMORY_RESPONSE = {
   },
 };
 
+// Conversation-centric IA M2 — the per-agent users rollup.
+const USERS_RESPONSE = {
+  success: true,
+  error: null,
+  data: {
+    items: [
+      {
+        user_id: "88888888-8888-8888-8888-888888888888",
+        display_name: "Alice",
+        conversation_count: 2,
+        run_count: 3,
+        error_count: 0,
+        pending_count: 0,
+        last_run_at: "2026-06-12T01:05:00Z",
+        tokens: null,
+      },
+    ],
+    total: 1,
+    cross_tenant: false,
+  },
+};
+
 test("the four per-agent tabs render real content, not the placeholder", async ({ page }) => {
   await page.route(`**/v1/agents/${AGENT_NAME}/${AGENT_VERSION}`, async (route) => {
     await route.fulfill({ json: DETAIL_ENVELOPE });
@@ -109,6 +131,9 @@ test("the four per-agent tabs render real content, not the placeholder", async (
   await page.route("**/v1/memory*", async (route) => {
     await route.fulfill({ json: MEMORY_RESPONSE });
   });
+  await page.route(`**/v1/agents/${AGENT_NAME}/${AGENT_VERSION}/users*`, async (route) => {
+    await route.fulfill({ json: USERS_RESPONSE });
+  });
 
   await page.goto("/login");
   await page.getByTestId("login-token").fill(SAMPLE_JWT);
@@ -120,6 +145,14 @@ test("the four per-agent tabs render real content, not the placeholder", async (
   await expect(page.getByTestId("conversations-tab-root")).toBeVisible();
   await expect(page.getByText("refund question")).toBeVisible();
   await expect(page.getByTestId("agent-detail-tab-placeholder")).toHaveCount(0);
+
+  // Users (M2) — the rollup row renders and drills into the user detail.
+  await page.goto(`/agents/${AGENT_NAME}/${AGENT_VERSION}/users`);
+  await expect(page.getByTestId("users-tab-root")).toBeVisible();
+  await expect(page.getByText("Alice")).toBeVisible();
+  await page.getByText("Alice").click();
+  await expect(page.getByTestId("user-detail-root")).toBeVisible();
+  await expect(page.getByTestId("user-conversations-table")).toBeVisible();
 
   // Skills — the agent-authored row renders.
   await page.goto(`/agents/${AGENT_NAME}/${AGENT_VERSION}/skills`);

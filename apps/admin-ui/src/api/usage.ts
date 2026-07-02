@@ -76,11 +76,14 @@ export async function getUsageCost(params: GetUsageCostParams = {}): Promise<Usa
 export interface GetUsageTokensParams {
   /** ``YYYY-MM``; defaults server-side to the current month when omitted. */
   month?: string;
+  /** Narrow to one end-user (M2 user-detail usage tab). */
+  userId?: string;
 }
 
 /** ``GET /v1/usage/tokens`` — realtime current-month token counters. */
 export async function getUsageTokens(params: GetUsageTokensParams = {}): Promise<UsageTokens> {
   const query: Record<string, string> = {};
   if (params.month) query.month = params.month;
+  if (params.userId) query.user_id = params.userId;
   return getJson<UsageTokens>("/v1/usage/tokens", { params: query });
 }

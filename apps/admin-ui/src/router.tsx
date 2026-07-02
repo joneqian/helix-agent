@@ -39,6 +39,7 @@ import { SettingsUsage } from "./pages/SettingsUsage";
 import { SettingsBillingChargeback } from "./pages/SettingsBillingChargeback";
 import { SettingsObservability } from "./pages/SettingsObservability";
 import { SkillDetail } from "./pages/SkillDetail";
+import { UserDetail } from "./pages/UserDetail";
 import { SkillsList } from "./pages/SkillsList";
 import { TriggersList } from "./pages/TriggersList";
 import { WebhooksList } from "./pages/WebhooksList";
@@ -50,6 +51,9 @@ export function AppRouter() {
       <Route path="/" element={<Navigate to="/agents" replace />} />
       <Route path="/agents" element={<AgentsList />} />
       <Route path="/agents/:name/:version" element={<AgentDetail />} />
+      {/* User detail before the generic :tab route — three segments
+          (users/:userId) never collide, listed here for clarity. */}
+      <Route path="/agents/:name/:version/users/:userId" element={<UserDetail />} />
       <Route path="/agents/:name/:version/:tab" element={<AgentDetail />} />
       {/* Old flat runs list — permanently replaced by the conversation
           browser; redirect keeps bookmarks / deep links working. */}

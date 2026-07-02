@@ -34,6 +34,7 @@ import { getAgent, type AgentDetailResponse } from "../api/agents";
 import { ApiError } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
 import { ConversationsTab } from "./agent_detail/ConversationsTab";
+import { UsersTab } from "./agent_detail/UsersTab";
 import { HistoryTab } from "./agent_detail/HistoryTab";
 import { ManifestTab } from "./agent_detail/ManifestTab";
 import { MemoryTab } from "./agent_detail/MemoryTab";
@@ -148,6 +149,7 @@ export function AgentDetail() {
           { key: "manifest", label: t("agent_detail.tab_manifest") },
           { key: "history", label: t("agent_detail.tab_history") },
           { key: "playground", label: t("agent_detail.tab_playground") },
+          { key: "users", label: t("agent_detail.tab_users") },
           { key: "conversations", label: t("agent_detail.tab_conversations") },
           { key: "skills", label: t("agent_detail.tab_skills") },
           { key: "triggers", label: t("agent_detail.tab_triggers") },
@@ -159,6 +161,7 @@ export function AgentDetail() {
       {activeTab === "manifest" && <ManifestTab detail={detail} onSaved={refresh} />}
       {activeTab === "history" && <HistoryTab detail={detail} onRolledBack={refresh} />}
       {activeTab === "playground" && <PlaygroundTab detail={detail} />}
+      {activeTab === "users" && <UsersTab detail={detail} />}
       {activeTab === "conversations" && <ConversationsTab detail={detail} />}
       {activeTab === "skills" && <SkillsTab detail={detail} />}
       {activeTab === "triggers" && <TriggersTab detail={detail} />}
@@ -168,6 +171,7 @@ export function AgentDetail() {
         "manifest",
         "history",
         "playground",
+        "users",
         "conversations",
         "skills",
         "triggers",

@@ -45,13 +45,16 @@ export interface ListMemoriesParams {
   tenantScope?: TenantScope;
   kind?: MemoryKind;
   limit?: number;
+  /** Tenant-admin governance view of one member's memories (M2 user
+   *  detail). Non-admins asking for someone else get a 403. */
+  userId?: string;
 }
 
 export async function listMemories(
   params: ListMemoriesParams = {},
 ): Promise<MemoryList> {
-  const { tenantScope, kind, limit } = params;
-  const query = withTenantScope({ kind, limit }, tenantScope);
+  const { tenantScope, kind, limit, userId } = params;
+  const query = withTenantScope({ kind, limit, user_id: userId }, tenantScope);
   return getJson<MemoryList>("/v1/memory", { params: query });
 }
 
