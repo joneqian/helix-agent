@@ -78,10 +78,11 @@ export function filenameFromDisposition(header: string | undefined, fallback: st
 /** GET /v1/artifacts/download?name=… — fetch the latest version as a
  *  blob (the Bearer header rides the axios instance; a bare
  *  ``window.open`` would arrive unauthenticated) and hand it to the
- *  browser via an object URL. Returns the saved filename. */
-export async function downloadArtifact(name: string): Promise<string> {
+ *  browser via an object URL. Returns the saved filename. ``userId``
+ *  is the tenant-admin governance target (H.8-F1). */
+export async function downloadArtifact(name: string, userId?: string): Promise<string> {
   const response = await apiClient.get<Blob>("/v1/artifacts/download", {
-    params: { name },
+    params: { name, user_id: userId },
     responseType: "blob",
   });
   const disposition = (response.headers as Record<string, string | undefined>)[
@@ -104,8 +105,10 @@ export async function downloadArtifact(name: string): Promise<string> {
 
 /** DELETE /v1/artifacts/{name} — soft-delete (metadata only; bytes stay
  *  until the retention sweep, and re-saving the same name un-deletes). */
-export async function deleteArtifact(name: string): Promise<void> {
-  await apiClient.delete(`/v1/artifacts/${encodeURIComponent(name)}`);
+export async function deleteArtifact(name: string, userId?: string): Promise<void> {
+  await apiClient.delete(`/v1/artifacts/${encodeURIComponent(name)}`, {
+    params: { user_id: userId },
+  });
 }
 
 /** PATCH /v1/artifacts/{name} — re-classify ``kind``. The backend 409s
@@ -114,18 +117,23 @@ export async function deleteArtifact(name: string): Promise<void> {
 export async function patchArtifactKind(
   name: string,
   kind: ArtifactKind,
+  userId?: string,
 ): Promise<{ name: string; kind: ArtifactKind; latest_version: number }> {
   const response = await apiClient.patch<{
     name: string;
     kind: ArtifactKind;
     latest_version: number;
-  }>(`/v1/artifacts/${encodeURIComponent(name)}`, { kind });
+  }>(`/v1/artifacts/${encodeURIComponent(name)}`, { kind }, { params: { user_id: userId } });
   return response.data;
 }
 
-export async function listArtifactVersions(name: string): Promise<ArtifactVersionList> {
+export async function listArtifactVersions(
+  name: string,
+  userId?: string,
+): Promise<ArtifactVersionList> {
   const response = await apiClient.get<ArtifactVersionList>(
     `/v1/artifacts/${encodeURIComponent(name)}/versions`,
+    { params: { user_id: userId } },
   );
   return response.data;
 }

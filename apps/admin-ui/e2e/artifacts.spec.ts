@@ -1,12 +1,15 @@
 /**
- * Artifacts page E2E — Stream H.8 PR 1.
+ * Artifact governance E2E — conversation-centric IA M3 (H.8-F1).
  *
- * Smoke: /artifacts is routed, reachable from the sidebar, and renders
- * the stubbed row with its home-mode actions. The artifacts routes are
- * registered here (the shared fixture has no /v1/artifacts default);
- * most-recently-added handlers win.
+ * The former top-level /artifacts page is gone; the governance surface
+ * (download / versions / delete / re-classify) lives on the user
+ * detail's Artifacts tab, targeted at one member via ``?user_id=``.
+ * The artifacts route is registered here (the shared fixture has no
+ * /v1/artifacts default); most-recently-added handlers win.
  */
 import { test, expect, SAMPLE_JWT } from "./fixtures";
+
+const USER_ID = "88888888-8888-8888-8888-888888888888";
 
 const ARTIFACTS_RESPONSE = {
   artifacts: [],
@@ -17,7 +20,7 @@ const ARTIFACTS_RESPONSE = {
   cross_tenant: false,
 };
 
-test("/artifacts renders the stubbed rows with home-mode actions", async ({ page }) => {
+test("user-detail artifacts tab renders rows with governance actions", async ({ page }) => {
   await page.route("**/v1/artifacts*", async (route) => {
     await route.fulfill({ json: ARTIFACTS_RESPONSE });
   });
@@ -27,9 +30,23 @@ test("/artifacts renders the stubbed rows with home-mode actions", async ({ page
   await page.getByTestId("login-submit").click();
   await expect(page).toHaveURL(/\/agents$/);
 
-  await page.goto("/artifacts");
-  await expect(page.getByTestId("artifacts-table")).toBeVisible();
+  await page.goto(`/agents/customer-support-bot/3.4.2/users/${USER_ID}`);
+  await expect(page.getByTestId("user-detail-root")).toBeVisible();
+  await page.getByRole("tab", { name: /Artifacts|产物/ }).click();
+
+  await expect(page.getByTestId("user-artifacts-table")).toBeVisible();
   await expect(page.getByText("q2-report.md")).toBeVisible();
   await expect(page.getByTestId("artifact-download-q2-report.md")).toBeVisible();
   await expect(page.getByTestId("artifact-versions-etl.py")).toBeVisible();
+  await expect(page.getByTestId("artifact-delete-q2-report.md")).toBeVisible();
+});
+
+test("top-level /artifacts route is gone (404 catch-all)", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByTestId("login-token").fill(SAMPLE_JWT);
+  await page.getByTestId("login-submit").click();
+  await page.goto("/artifacts");
+  // ComingSoon renders the title twice (header + body) — .first() avoids
+  // the strict-mode violation.
+  await expect(page.getByText("404").first()).toBeVisible();
 });

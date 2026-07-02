@@ -164,9 +164,12 @@ test("the four per-agent tabs render real content, not the placeholder", async (
   await expect(page.getByTestId("triggers-tab-root")).toBeVisible();
   await expect(page.getByText("nightly-digest")).toBeVisible();
 
-  // Memory — per-user item renders + the scope note is stated (H-13).
-  await page.goto(`/agents/${AGENT_NAME}/${AGENT_VERSION}/memory`);
-  await expect(page.getByTestId("memory-tab-root")).toBeVisible();
-  await expect(page.getByTestId("memory-tab-scope-note")).toBeVisible();
+  // Memory (M3) — the per-agent tab is gone; the user detail's Memory
+  // pane renders the per-user item instead.
+  await page.goto(
+    `/agents/${AGENT_NAME}/${AGENT_VERSION}/users/88888888-8888-8888-8888-888888888888`,
+  );
+  await page.getByRole("tab", { name: /Memory|记忆/ }).click();
+  await expect(page.getByTestId("user-memory-pane")).toBeVisible();
   await expect(page.getByText("prefers terse answers")).toBeVisible();
 });

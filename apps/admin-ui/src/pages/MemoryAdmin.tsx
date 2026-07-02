@@ -65,6 +65,9 @@ export function MemoryAdmin() {
   const [error, setError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<MemoryKind | undefined>(undefined);
   const [searchText, setSearchText] = useState("");
+  // M3 — tenant-admin governance: narrow to one member's memories
+  // (server-side ?user_id=, same gate as the user-detail Memory tab).
+  const [userFilter, setUserFilter] = useState("");
 
   const [editing, setEditing] = useState<MemoryItem | null>(null);
   const [editBuf, setEditBuf] = useState("");
@@ -73,11 +76,24 @@ export function MemoryAdmin() {
   // self-correction endpoint (confidence → 1.0); "edit" keeps the admin PATCH.
   const [mode, setMode] = useState<"edit" | "correct">("edit");
 
+  // Only a well-formed UUID reaches the server — partial input while
+  // typing must not turn into 422s.
+  const userIdParam = useMemo(() => {
+    const v = userFilter.trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+      ? v
+      : undefined;
+  }, [userFilter]);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await listMemories({ tenantScope: apiTenantScope, kind: kindFilter });
+      const result = await listMemories({
+        tenantScope: apiTenantScope,
+        kind: kindFilter,
+        userId: userIdParam,
+      });
       setData(result);
     } catch (err) {
       const msg =
@@ -90,7 +106,7 @@ export function MemoryAdmin() {
     } finally {
       setLoading(false);
     }
-  }, [apiTenantScope, kindFilter]);
+  }, [apiTenantScope, kindFilter, userIdParam]);
 
   useEffect(() => {
     refresh();
@@ -268,6 +284,15 @@ export function MemoryAdmin() {
               onChange={(e) => setSearchText(e.target.value)}
               style={{ width: 240 }}
               data-testid="memory-search"
+              allowClear
+            />
+            <Input
+              placeholder={t("memory.filter_user_placeholder")}
+              aria-label={t("memory.filter_user_placeholder")}
+              value={userFilter}
+              onChange={(e) => setUserFilter(e.target.value)}
+              style={{ width: 220 }}
+              data-testid="memory-user-filter"
               allowClear
             />
             <Select<MemoryKind | "all">

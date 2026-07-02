@@ -37,7 +37,6 @@ import { ConversationsTab } from "./agent_detail/ConversationsTab";
 import { UsersTab } from "./agent_detail/UsersTab";
 import { HistoryTab } from "./agent_detail/HistoryTab";
 import { ManifestTab } from "./agent_detail/ManifestTab";
-import { MemoryTab } from "./agent_detail/MemoryTab";
 import { PlaygroundTab } from "./agent_detail/PlaygroundTab";
 import { SkillsTab } from "./agent_detail/SkillsTab";
 import { TriggersTab } from "./agent_detail/TriggersTab";
@@ -153,7 +152,6 @@ export function AgentDetail() {
           { key: "conversations", label: t("agent_detail.tab_conversations") },
           { key: "skills", label: t("agent_detail.tab_skills") },
           { key: "triggers", label: t("agent_detail.tab_triggers") },
-          { key: "memory", label: t("agent_detail.tab_memory") },
         ]}
       />
 
@@ -165,7 +163,9 @@ export function AgentDetail() {
       {activeTab === "conversations" && <ConversationsTab detail={detail} />}
       {activeTab === "skills" && <SkillsTab detail={detail} />}
       {activeTab === "triggers" && <TriggersTab detail={detail} />}
-      {activeTab === "memory" && <MemoryTab />}
+      {/* The per-agent Memory tab is gone (conversation-centric IA M3):
+          memory is a per-user cross-agent asset — it lives on the user
+          detail's Memory tab and the tenant-level /memory governance page. */}
       {![
         "overview",
         "manifest",
@@ -175,7 +175,6 @@ export function AgentDetail() {
         "conversations",
         "skills",
         "triggers",
-        "memory",
       ].includes(activeTab) && (
         <Empty
           description={t("agent_detail.tab_coming_soon", { tab: activeTab })}
