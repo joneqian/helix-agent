@@ -3,10 +3,12 @@
  * (``docs/design/conversation-centric-ia.md``).
  *
  * Shows the conversation summary (agent / user / status / token rollup /
- * last active) and its run list; each run drills into the existing
- * per-run detail (``/runs/{thread}/{run}``) with its event stream,
- * approval card, and Langfuse deep link. The unified cross-run message
- * transcript is M1.5 (needs a checkpoint-read API).
+ * last active), the unified message transcript (M1.5 — user/assistant
+ * turns read from the durable checkpoint via the existing
+ * ``GET /v1/sessions/{id}/messages``; tool/system turns stay in the
+ * per-run event stream by design), and its run list; each run drills
+ * into the existing per-run detail (``/runs/{thread}/{run}``) with its
+ * event stream, approval card, and Langfuse deep link.
  */
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Card, Empty, Skeleton, Space, Table, Tag, Tooltip, Typography } from "antd";
@@ -21,6 +23,7 @@ import {
   type ConversationDetail as ConversationDetailModel,
   type ConversationRun,
 } from "../api/conversations";
+import { getSessionMessages, type HistoryMessage } from "../api/sessions";
 import { PageHeader } from "../components/PageHeader";
 import { formatCompact, formatDuration } from "../utils/runFormat";
 
@@ -49,6 +52,10 @@ export function ConversationDetail() {
   const [convo, setConvo] = useState<ConversationDetailModel | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // M1.5 transcript — ``null`` means unavailable (e.g. a cross-tenant
+  // thread the messages endpoint can't scope to): hide the panel rather
+  // than erroring the page. ``[]`` renders an explicit empty state.
+  const [messages, setMessages] = useState<HistoryMessage[] | null>(null);
 
   const refresh = useCallback(async () => {
     if (!threadId) return;
@@ -66,6 +73,14 @@ export function ConversationDetail() {
       );
     } finally {
       setLoading(false);
+    }
+    // Best-effort, independent of the summary fetch — a transcript
+    // failure must never take down the operational view.
+    try {
+      const msgs = await getSessionMessages(threadId);
+      setMessages(Array.isArray(msgs) ? msgs : null);
+    } catch {
+      setMessages(null);
     }
   }, [threadId]);
 
@@ -244,6 +259,48 @@ export function ConversationDetail() {
           </dd>
         </dl>
       </Card>
+
+      {messages !== null && (
+        <Card
+          size="small"
+          title={t("conversations_detail.messages_title")}
+          style={{ marginTop: 16 }}
+          data-testid="conversation-messages"
+        >
+          {messages.length === 0 ? (
+            <Empty description={t("conversations_detail.messages_empty")} />
+          ) : (
+            <div style={{ maxHeight: 480, overflowY: "auto" }}>
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  data-testid={`conversation-message-${i}`}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "72px 1fr",
+                    columnGap: 12,
+                    padding: "8px 0",
+                    borderTop: i === 0 ? "none" : "1px solid var(--hx-border-default)",
+                    fontSize: 13,
+                  }}
+                >
+                  <Tag
+                    color={m.role === "user" ? "cyan" : "purple"}
+                    style={{ marginInlineEnd: 0, height: "fit-content", justifySelf: "start" }}
+                  >
+                    {m.role === "user"
+                      ? t("conversations_detail.role_user")
+                      : t("conversations_detail.role_assistant")}
+                  </Tag>
+                  <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card
         size="small"

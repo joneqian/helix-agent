@@ -61,12 +61,25 @@ const convo = {
   ],
 };
 
-/** ``GET /v1/conversations/{id}`` is an envelope endpoint — ``{success,data}``. */
+const transcript = [
+  { role: "user", content: "I was charged twice for my last order — can I get a refund?" },
+  {
+    role: "assistant",
+    content: "I can see the duplicate charge. I've opened refund case #4821; the second charge will be reversed within 3–5 business days.",
+  },
+  { role: "user", content: "Great, thanks. Can you email me the confirmation?" },
+  { role: "assistant", content: "Done — the confirmation for case #4821 was sent to your registered email." },
+];
+
+/** Both endpoints are envelope-shaped — route by URL so the transcript
+ *  panel (``GET /v1/sessions/{id}/messages``) gets its own payload. */
 function withStub() {
   return (Story: ComponentType) => {
     apiClient.defaults.adapter = (config) =>
       Promise.resolve({
-        data: { success: true, data: convo, error: null },
+        data: config.url?.endsWith("/messages")
+          ? { success: true, data: { messages: transcript }, error: null }
+          : { success: true, data: convo, error: null },
         status: 200,
         statusText: "OK",
         headers: {},
