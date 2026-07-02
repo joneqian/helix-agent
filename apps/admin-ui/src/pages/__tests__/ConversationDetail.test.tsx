@@ -11,6 +11,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import "../../i18n";
 
 import * as convoSdk from "../../api/conversations";
+import * as sessionsSdk from "../../api/sessions";
 import { ConversationDetail } from "../ConversationDetail";
 import type { ConversationDetail as ConversationDetailModel } from "../../api/conversations";
 
@@ -106,5 +107,46 @@ describe("ConversationDetail", () => {
     await waitFor(() =>
       expect(screen.getByTestId("conversation-detail-error")).toBeInTheDocument(),
     );
+  });
+
+  it("renders the message transcript (M1.5) when the endpoint returns turns", async () => {
+    vi.spyOn(convoSdk, "getConversation").mockResolvedValue(CONVO);
+    vi.spyOn(sessionsSdk, "getSessionMessages").mockResolvedValue([
+      { role: "user", content: "I was charged twice" },
+      { role: "assistant", content: "Refund case opened" },
+    ]);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-messages")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("I was charged twice")).toBeInTheDocument();
+    expect(screen.getByText("Refund case opened")).toBeInTheDocument();
+    expect(screen.getByTestId("conversation-message-0")).toBeInTheDocument();
+  });
+
+  it("hides the transcript panel when the messages endpoint fails", async () => {
+    vi.spyOn(convoSdk, "getConversation").mockResolvedValue(CONVO);
+    vi.spyOn(sessionsSdk, "getSessionMessages").mockRejectedValue(new Error("403"));
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-detail-root")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("conversation-messages")).not.toBeInTheDocument();
+  });
+
+  it("shows an explicit empty state for a conversation with no messages", async () => {
+    vi.spyOn(convoSdk, "getConversation").mockResolvedValue(CONVO);
+    vi.spyOn(sessionsSdk, "getSessionMessages").mockResolvedValue([]);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("conversation-messages")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("No messages recorded for this conversation.")).toBeInTheDocument();
   });
 });

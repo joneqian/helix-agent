@@ -75,11 +75,65 @@ Agent 详情
 - `GET /v1/conversations/{thread_id}` —— 该 thread 的 runs[](含状态/时间戳/trace_id)+ 聚合摘要(总 token / llm_calls / 模型 / 成本 fast-follow)。
 - **最大未知**:跨 run 的**统一消息 transcript**(用户/助手轮)存 LangGraph checkpoint(keyed by thread_id),现无读 API。**M1 对话详情先做「摘要 + run 列表」**,每 run 消息仍走现 `RunDetail` 事件流。统一 transcript 标 **M1.5**(需评估 checkpoint 读端点成本)。
 
-### M2 — 用户
+### M1.5 — 统一消息 transcript(盘点后定稿:后端零改动)
 
-- `GET /v1/agents/{name}/{version}/users?limit=&cursor=` —— `agent_run` 按 `user_id` rollup:`user_id, conversation_count, last_active_at, total_tokens`。
-- 用户详情**拼装**现有 per-user 端点(对话列表按 user 过滤 + `/v1/memories` + `/v1/artifacts` + 用量)。
-- **须核后端缺口**:记忆端点是否支持 `user_id` 过滤(现 MemoryTab 是租户 per-user 全量,无 agent/user 过滤)。缺则补 `user_id` 查询参数。
+盘点结论(2026-07-02):「无读 API」的假设**已过期** —— Playground 会话历史早已落了读路径:
+
+- **`GET /v1/sessions/{thread_id}/messages`**(`api/runs.py` `get_thread_messages`)直接
+  `checkpointer.aget_tuple()` 读最新 checkpoint(`messages` channel 是 `add_messages`
+  append reducer,最新 checkpoint 即含全量历史,单次读够),筛 human/ai 文本轮返回
+  `{role: user|assistant, content}`。无 agent rebuild,失败降级空列表。
+- **鉴权已适配运营场景**:`caller_owns_thread` 对 tenant admin 全租户放行
+  (`_user_scope.py`),运营者看成员对话直通;普通用户仍只见本人。
+- 前端 SDK `getSessionMessages`(`api/sessions.ts`)现成。
+
+**M1.5 = 纯前端**:`ConversationDetail` 在摘要与 run 列表之间加「消息」面
+(user/assistant 轮),复用现端点。已知限制(接受,不阻塞):
+
+1. 端点无 `tenant_id` 参数 —— system_admin 从跨租户浏览器下钻他租户对话时,消息面
+   拿不到(thread_meta 按 home tenant 查 → 404)→ 前端降级隐藏消息面,不炸页。
+   按需 fast-follow 补参数。
+2. 只含 user/assistant 文本轮 —— tool/system 轮 by design 走 per-run `RunDetail`
+   事件流(职责分离:transcript 给运营看对话,事件流给调试看执行)。
+
+### M2 — 用户(盘点后定稿)
+
+盘点结论(2026-07-02):数据底座全齐 —— `agent_run` 有 `user_id` +
+`ix_agent_run_tenant_user_created` 索引;**`token_usage` 有
+`agent_name/agent_version/user_id` 三列 + `token_usage_tenant_user_time_idx`**
+(migration 0096),per (agent×user) token rollup 直接 GROUP BY,**零 trace join**;
+`tenant_user` 有 `display_name/created_at/last_active_at` 可 join 出人话名。
+
+**后端新建:**
+
+- `RunStore.aggregate_by_users(agent_name, agent_version, tenant_id)` ——
+  `agent_run` 按 `user_id` GROUP BY:`conversation_count(COUNT DISTINCT thread_id),
+  run_count, error_count, last_active_at(MAX created_at)`(照 `aggregate_by_threads`
+  的 ABC + InMemory + Sql 三件套)。
+- `TokenUsageStore.totals_by_users(tenant_id, agent_name, agent_version)` ——
+  token_usage 直接按 `user_id` GROUP BY 聚合(该 agent 维度)。
+- `GET /v1/agents/{name}/{version}/users` —— rollup + join `tenant_user`
+  (display_name)。envelope,tenant-scoped(agent 详情本身 per-tenant,跨租户不做)。
+- **`/v1/memory` + `/v1/artifacts` 补 `?user_id=` 过滤**(盘点确认缺口):tenant
+  admin 治理视角看指定成员;非 admin 传非本人 user_id → 403 fail-fast(沿
+  `caller_owns_thread` 的 admin 语义,不引入新权限面)。
+- 用量 tab:`/v1/usage/tokens` 补 `user_id` 过滤(token_usage 索引已备)。
+  per-user **成本**跟随成本 fast-follow,M2 先 token。
+- migration:`thread_meta_tenant_agent_user_idx (tenant_id, agent_name, user_id)`
+  —— conversations 列表按 (agent, user) 过滤加速(现仅 `(tenant_id, user_id)`)。
+
+**可直接复用(零改动):**`GET /v1/conversations?agent_name=&user_id=`(M1 已有
+全部过滤)、`ConversationDetail`、messages transcript(M1.5)。
+
+**前端:**
+
+- `agent_detail/UsersTab.tsx` —— 用户列表(display_name / user_id / 对话数 /
+  run 数 / token / 末次活跃),行点击 → 用户详情。
+- `pages/UserDetail.tsx`(路由 `/agents/:name/:version/users/:userId`)——
+  四 tab:对话(listConversations user 过滤)/ 记忆 / 产物 / 用量。
+- `AgentDetail` 加「用户」tab(运营区,列于对话 tab 旁)。
+- SDK `api/users.ts` + memory/artifacts SDK 补参数;i18n 双语 / stories /
+  Playwright / TenantScope 对账(SE-8 全走)。
 
 ## 6. 前端(SE-8 接线点全走)
 
@@ -94,7 +148,20 @@ Agent 详情
 - 新 `pages/UserDetail.tsx` + Agent 详情「用户」tab;记忆/产物 tab 迁入用户详情。
 
 ### M3
-- 删 `WORKSPACE_ITEMS` 的 `artifacts`;`memory` → 租户级「记忆治理」(语义/分组明确);`router.tsx` 死链回收;面包屑统一。
+- 删 `WORKSPACE_ITEMS` 的 `artifacts`(产物新家 = 用户详情产物 tab,M2 落地后才可删);路由收敛。
+- `memory` → 租户级「记忆治理」:label 已随 M1b-2 改「记忆治理」,M3 补 MemoryAdmin
+  的 user 过滤 UI(复用 M2 的 `?user_id=`)+ agent 详情 MemoryTab **删除**
+  (维度错位:记忆是 per-user 跨 agent 资产,挂 agent 下误导,§2 已判)。
+- 面包屑统一:`Agent / 用户 X / 对话 #a1b2 / run #c3d4`。
+
+### 实施切分(2026-07-02 拍板)
+
+| PR | 内容 | 依赖 |
+|----|------|------|
+| PR-1 | M1.5 消息面(纯前端)+ 本设计文档更新 | 无 |
+| PR-2 | M2 后端:两 store 聚合 + users 端点 + memory/artifacts/usage `user_id` 参数 + migration + 测试 | 无 |
+| PR-3 | M2 前端:UsersTab + UserDetail 四 tab + SDK + i18n/stories/e2e | PR-2 |
+| PR-4 | M3 收口:顶层 artifacts 删 + MemoryTab 删 + MemoryAdmin user 过滤 + 面包屑 | PR-3 |
 
 ## 7. 非目标(有意不做)
 

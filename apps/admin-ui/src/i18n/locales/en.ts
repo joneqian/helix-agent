@@ -208,6 +208,10 @@ export interface TranslationKeys {
     tokens: string;
     tokens_value: string;
     models: string;
+    messages_title: string;
+    messages_empty: string;
+    role_user: string;
+    role_assistant: string;
     runs_title: string;
     runs_empty: string;
     column_started: string;
@@ -2306,6 +2310,10 @@ const en: TranslationKeys = {
     tokens: "Tokens",
     tokens_value: "{{total}} ({{input}} in / {{output}} out, {{calls}} calls)",
     models: "Models",
+    messages_title: "Messages",
+    messages_empty: "No messages recorded for this conversation.",
+    role_user: "User",
+    role_assistant: "Agent",
     runs_title: "Runs",
     runs_empty: "No runs in this conversation.",
     column_started: "Started",
