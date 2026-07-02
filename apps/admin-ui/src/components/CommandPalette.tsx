@@ -9,8 +9,8 @@
  * in "All tenants" mode sees Agents across every tenant they can
  * reach.
  *
- * Static jumps (Runs / Curation / Memory / Skills / Triggers /
- * Settings · API Keys) point at the real router paths already wired
+ * Static jumps (Conversations / Curation / Memory / Skills / Triggers
+ * / Settings · API Keys) point at the real router paths already wired
  * by the H.1b scaffold — entries here are the single source of truth
  * for the keyboard-first navigation surface.
  */
@@ -29,7 +29,6 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   Bot,
-  Activity,
   CheckSquare,
   FlaskConical,
   Brain,
@@ -38,6 +37,7 @@ import {
   Clock,
   Key,
   ListChecks,
+  MessagesSquare,
   Package,
   Plus,
   ArrowRight,
@@ -171,7 +171,7 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
 
     const jumpItems = [
       { key: "go-agents", label: t("agents_page.page_title"), path: "/agents", icon: <Bot size={16} strokeWidth={1.5} />, sc: ["g", "a"] },
-      { key: "go-runs", label: t("cmdk.label_runs"), path: "/runs", icon: <Activity size={16} strokeWidth={1.5} />, sc: ["g", "r"] },
+      { key: "go-conversations", label: t("cmdk.label_conversations"), path: "/conversations", icon: <MessagesSquare size={16} strokeWidth={1.5} />, sc: ["g", "r"] },
       { key: "go-approvals", label: t("cmdk.label_approvals"), path: "/approvals", icon: <ListChecks size={16} strokeWidth={1.5} />, sc: ["g", "p"] },
       { key: "go-curation", label: t("cmdk.label_curation"), path: "/curation", icon: <CheckSquare size={16} strokeWidth={1.5} />, sc: ["g", "c"] },
       { key: "go-eval", label: t("cmdk.label_eval"), path: "/eval-runs", icon: <FlaskConical size={16} strokeWidth={1.5} />, sc: ["g", "e"] },

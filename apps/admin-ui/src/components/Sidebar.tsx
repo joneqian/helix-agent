@@ -4,7 +4,6 @@ import { Menu } from "antd";
 import {
   Banknote,
   Bot,
-  Activity,
   ListChecks,
   CheckSquare,
   FlaskConical,
@@ -18,6 +17,7 @@ import {
   LayoutTemplate,
   Gauge,
   LineChart,
+  MessagesSquare,
   Network,
   Package,
   Plug,
@@ -49,7 +49,7 @@ import {
  *  data module (no JSX). */
 const ICONS: Record<string, React.ReactNode> = {
   agents: <Bot size={16} strokeWidth={1.5} />,
-  runs: <Activity size={16} strokeWidth={1.5} />,
+  conversations: <MessagesSquare size={16} strokeWidth={1.5} />,
   approvals: <ListChecks size={16} strokeWidth={1.5} />,
   curation: <CheckSquare size={16} strokeWidth={1.5} />,
   eval: <FlaskConical size={16} strokeWidth={1.5} />,

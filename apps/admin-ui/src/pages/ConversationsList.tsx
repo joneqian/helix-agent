@@ -1,16 +1,14 @@
 /**
- * Runs list page — Stream H.3 PR 1.
+ * Global conversations browser — the top-level operations entry
+ * (``docs/design/conversation-centric-ia.md`` §3 primitive ③).
  *
- * Cross-thread index backed by the new ``GET /v1/runs`` endpoint
- * (Mini-ADR H-6). Drops the previous ``ComingSoon`` placeholder under
- * ``/runs``. Mirrors the ``AgentsList`` shell so cross-tenant banner,
- * empty state, error Alert, and refresh button stay visually
- * consistent.
- *
- * Filters in M0: ``status`` (Antd Select). Search-by-agent_name moves
- * to a follow-up — Mini-ADR J-41 didn't index agent_name on agent_run,
- * so the server-side JOIN already pays a per-row cost; adding text
- * search requires a SQL JOIN in M1 (see § 6.5.5 (b)).
+ * Replaces the flat cross-agent ``/runs`` list: a conversation
+ * (``thread_meta`` + its ``agent_run`` rollup) is the operational unit,
+ * so the browser lists conversations across agents with status / user /
+ * free-text filters and drills into ``/conversations/:threadId`` — which
+ * then drills into the per-run detail. Mirrors the previous ``RunsList``
+ * shell (cross-tenant banner, URL-owned ``?user_id=`` filter, debounced
+ * search) so the operational UX carries over.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -25,72 +23,53 @@ import {
   Typography,
 } from "antd";
 import type { TableColumnsType } from "antd";
-import { Activity, AlertTriangle, Globe2, RefreshCw, Search } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { AlertTriangle, Globe2, MessagesSquare, RefreshCw, Search } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { listRuns, type RunList, type RunListItem, type RunStatus } from "../api/runs";
+import {
+  listConversations,
+  type ConversationList,
+  type ConversationListItem,
+  type ConversationStatus,
+} from "../api/conversations";
 import { ApiError } from "../api/client";
 import { useTenantScope } from "../tenant/TenantScopeContext";
 import { PageHeader } from "../components/PageHeader";
+import { formatCompact } from "../utils/runFormat";
 
 const { Text } = Typography;
 
-type TFn = (key: string, opts?: Record<string, unknown>) => string;
-
-/** Compact wall-clock duration from a run's created→finished span. A run
- *  with no ``finished_at`` is still in flight → localized "running". */
-function formatDuration(t: TFn, createdIso: string, finishedIso: string | null): string {
-  if (!finishedIso) return t("runs_page.duration_running");
-  const seconds = Math.max(
-    0,
-    Math.round((new Date(finishedIso).getTime() - new Date(createdIso).getTime()) / 1000),
-  );
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
-/** 1234 → "1.2k", 2_000_000 → "2.0M" — keeps the token column narrow. */
-function formatCompact(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
-}
-
 const STATUS_COLOR: Record<string, string> = {
-  pending: "default",
-  running: "processing",
+  active: "processing",
   paused: "warning",
-  success: "success",
-  error: "error",
-  timeout: "error",
-  interrupted: "default",
+  completed: "success",
+  failed: "error",
+  cancelled: "default",
+  archived: "default",
 };
 
-const STATUS_OPTIONS: RunStatus[] = [
-  "running",
+const STATUS_OPTIONS: ConversationStatus[] = [
+  "active",
   "paused",
-  "success",
-  "error",
-  "timeout",
-  "interrupted",
-  "pending",
+  "completed",
+  "failed",
+  "cancelled",
+  "archived",
 ];
 
-export function RunsList() {
+export function ConversationsList() {
   const { t } = useTranslation();
   const { scope, apiTenantScope } = useTenantScope();
   const navigate = useNavigate();
-  const [data, setData] = useState<RunList | null>(null);
+  const [data, setData] = useState<ConversationList | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<RunStatus | undefined>(undefined);
+  const [statusFilter, setStatusFilter] = useState<ConversationStatus | undefined>(undefined);
   const [search, setSearch] = useState("");
   const [q, setQ] = useState<string | undefined>(undefined);
-  // ``?user_id=`` drives the "member's runs" filter — URL-owned so a member
-  // page can deep-link into it and the filter survives refresh / share.
+  // ``?user_id=`` drives the "member's conversations" filter — URL-owned so
+  // a member page can deep-link into it and the filter survives refresh.
   const [searchParams, setSearchParams] = useSearchParams();
   const userFilter = searchParams.get("user_id") ?? undefined;
 
@@ -117,8 +96,7 @@ export function RunsList() {
   }, [setSearchParams]);
 
   // Debounce the search box into the server ``q`` param (substring match on
-  // run_id / thread_id — server-side so it spans all pages, not just the one
-  // loaded).
+  // the conversation title — server-side so it spans all pages).
   useEffect(() => {
     const handle = setTimeout(() => setQ(search.trim() || undefined), 300);
     return () => clearTimeout(handle);
@@ -128,7 +106,7 @@ export function RunsList() {
     setLoading(true);
     setError(null);
     try {
-      const result = await listRuns({
+      const result = await listConversations({
         tenantScope: apiTenantScope,
         status: statusFilter,
         q,
@@ -149,51 +127,32 @@ export function RunsList() {
   }, [apiTenantScope, statusFilter, q, userFilter]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   const isCrossTenant = data?.cross_tenant ?? false;
 
-  const columns: TableColumnsType<RunListItem> = useMemo(
+  const columns: TableColumnsType<ConversationListItem> = useMemo(
     () => [
       {
-        title: t("runs_page.column_run_id"),
-        dataIndex: "run_id",
-        key: "run_id",
-        width: 200,
-        render: (id: string) => (
-          <Tooltip title={id}>
-            <Text code style={{ fontSize: 12 }}>
-              {id.slice(0, 8)}…
-            </Text>
-          </Tooltip>
+        title: t("conversations_page.column_conversation"),
+        key: "conversation",
+        render: (_: unknown, record) => (
+          <Space direction="vertical" size={0}>
+            <Text strong>{record.title ?? t("conversations_page.untitled")}</Text>
+            <Tooltip title={record.thread_id}>
+              <Text code style={{ fontSize: 11 }}>
+                {record.thread_id.slice(0, 8)}…
+              </Text>
+            </Tooltip>
+          </Space>
         ),
       },
       {
-        title: t("runs_page.column_status"),
-        dataIndex: "status",
-        key: "status",
-        width: 130,
-        render: (status: string, record) => {
-          // Tag colour + literal text so colour is not the only signal (axe).
-          const tag = <Tag color={STATUS_COLOR[status] ?? "default"}>{status}</Tag>;
-          if (!record.error) return tag;
-          // Surface the failure reason inline — the list was previously silent
-          // about *why* a run errored.
-          return (
-            <Tooltip title={record.error}>
-              <Space size={4} data-testid={`run-error-${record.run_id}`}>
-                {tag}
-                <AlertTriangle size={13} strokeWidth={1.5} color="var(--hx-status-error, #f5222d)" />
-              </Space>
-            </Tooltip>
-          );
-        },
-      },
-      {
-        title: t("runs_page.column_agent"),
+        title: t("conversations_page.column_agent"),
         dataIndex: "agent_name",
         key: "agent",
+        width: 180,
         render: (name: string | null, record) => {
           if (name === null) {
             return <Text type="secondary">—</Text>;
@@ -211,20 +170,20 @@ export function RunsList() {
         },
       },
       {
-        title: t("runs_page.column_user"),
+        title: t("conversations_page.column_user"),
         dataIndex: "user_id",
         key: "user",
         width: 130,
         render: (uid: string | null) => {
           if (!uid) return <Text type="secondary">—</Text>;
-          // Click filters the list to this user (URL ?user_id=…). stopPropagation
-          // so it doesn't also trigger the row → run-detail navigation.
+          // Click filters the list to this user (URL ?user_id=…).
+          // stopPropagation so it doesn't also trigger the row navigation.
           return (
-            <Tooltip title={t("runs_page.filter_user_tip")}>
+            <Tooltip title={t("conversations_page.filter_user_tip")}>
               <span
                 role="button"
                 tabIndex={0}
-                data-testid={`run-user-${uid}`}
+                data-testid={`conversation-user-${uid}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   setUserFilter(uid);
@@ -246,24 +205,51 @@ export function RunsList() {
         },
       },
       {
-        title: t("runs_page.column_duration"),
-        key: "duration",
-        width: 100,
-        render: (_: unknown, record) => (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {formatDuration(t, record.created_at, record.finished_at)}
-          </Text>
+        title: t("conversations_page.column_status"),
+        dataIndex: "status",
+        key: "status",
+        width: 120,
+        render: (status: string) => (
+          <Tag color={STATUS_COLOR[status] ?? "default"}>{status}</Tag>
         ),
       },
       {
-        title: t("runs_page.column_tokens"),
+        title: t("conversations_page.column_runs"),
+        key: "runs",
+        width: 110,
+        render: (_: unknown, record) => (
+          <Space size={6}>
+            <Text>{record.run_count}</Text>
+            {record.error_count > 0 && (
+              <Tooltip title={t("conversations_page.error_count", { count: record.error_count })}>
+                <Space size={2} data-testid={`conversations-page-error-${record.thread_id}`}>
+                  <AlertTriangle
+                    size={13}
+                    strokeWidth={1.5}
+                    color="var(--hx-status-error, #f5222d)"
+                  />
+                </Space>
+              </Tooltip>
+            )}
+            {record.pending_count > 0 && (
+              <Tooltip
+                title={t("conversations_page.pending_count", { count: record.pending_count })}
+              >
+                <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+                  {record.pending_count}
+                </Tag>
+              </Tooltip>
+            )}
+          </Space>
+        ),
+      },
+      {
+        title: t("conversations_page.column_tokens"),
         key: "tokens",
-        width: 100,
+        width: 90,
         render: (_: unknown, record) => {
           const tk = record.tokens;
-          if (!tk || tk.total_tokens === 0) {
-            return <Text type="secondary">—</Text>;
-          }
+          if (!tk || tk.total_tokens === 0) return <Text type="secondary">—</Text>;
           return (
             <Tooltip
               title={t("runs_page.tokens_tip", {
@@ -272,7 +258,7 @@ export function RunsList() {
                 calls: tk.llm_calls,
               })}
             >
-              <Text style={{ fontSize: 12 }} data-testid={`run-tokens-${record.run_id}`}>
+              <Text style={{ fontSize: 12 }} data-testid={`conversation-tokens-${record.thread_id}`}>
                 {formatCompact(tk.total_tokens)}
               </Text>
             </Tooltip>
@@ -280,28 +266,18 @@ export function RunsList() {
         },
       },
       {
-        title: t("runs_page.column_thread"),
-        dataIndex: "thread_id",
-        key: "thread",
-        width: 140,
-        render: (id: string) => (
-          <Tooltip title={id}>
-            <Text code style={{ fontSize: 12 }}>
-              {id.slice(0, 8)}…
+        title: t("conversations_page.column_last_active"),
+        dataIndex: "last_run_at",
+        key: "last_run_at",
+        width: 190,
+        render: (iso: string | null) =>
+          iso ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {new Date(iso).toLocaleString()}
             </Text>
-          </Tooltip>
-        ),
-      },
-      {
-        title: t("runs_page.column_created"),
-        dataIndex: "created_at",
-        key: "created_at",
-        width: 200,
-        render: (iso: string) => (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {new Date(iso).toLocaleString()}
-          </Text>
-        ),
+          ) : (
+            <Text type="secondary">—</Text>
+          ),
       },
     ],
     [t, setUserFilter],
@@ -310,8 +286,8 @@ export function RunsList() {
   return (
     <div>
       <PageHeader
-        icon={<Activity size={18} strokeWidth={1.5} />}
-        title={t("runs_page.page_title")}
+        icon={<MessagesSquare size={18} strokeWidth={1.5} />}
+        title={t("conversations_page.page_title")}
         actions={
           <>
             {isCrossTenant && (
@@ -320,7 +296,7 @@ export function RunsList() {
                 color="purple"
                 data-testid="cross-tenant-banner"
               >
-                {t("runs_page.cross_tenant_banner")}
+                {t("conversations_page.cross_tenant_banner")}
               </Tag>
             )}
             {userFilter && (
@@ -328,29 +304,29 @@ export function RunsList() {
                 closable
                 onClose={clearUserFilter}
                 color="cyan"
-                data-testid="runs-user-filter-chip"
+                data-testid="conversations-user-filter-chip"
               >
-                {t("runs_page.filter_user_active", { user: userFilter.slice(0, 8) })}
+                {t("conversations_page.filter_user_active", { user: userFilter.slice(0, 8) })}
               </Tag>
             )}
             <Input
               allowClear
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("runs_page.search_placeholder")}
-              aria-label={t("runs_page.search_placeholder")}
+              placeholder={t("conversations_page.search_placeholder")}
+              aria-label={t("conversations_page.search_placeholder")}
               prefix={<Search size={14} strokeWidth={1.5} />}
               style={{ width: 220 }}
-              data-testid="runs-search"
+              data-testid="conversations-search"
             />
-            <Select<RunStatus | "all">
+            <Select<ConversationStatus | "all">
               value={statusFilter ?? "all"}
-              onChange={(v) => setStatusFilter(v === "all" ? undefined : (v as RunStatus))}
+              onChange={(v) => setStatusFilter(v === "all" ? undefined : (v as ConversationStatus))}
               style={{ width: 160 }}
-              aria-label={t("runs_page.filter_status")}
-              data-testid="runs-status-filter"
+              aria-label={t("conversations_page.filter_status")}
+              data-testid="conversations-status-filter"
               options={[
-                { value: "all", label: t("runs_page.filter_status_all") },
+                { value: "all", label: t("conversations_page.filter_status_all") },
                 ...STATUS_OPTIONS.map((s) => ({ value: s, label: s })),
               ]}
             />
@@ -359,7 +335,7 @@ export function RunsList() {
               onClick={refresh}
               disabled={loading}
               aria-label={t("common.refresh")}
-              data-testid="runs-refresh"
+              data-testid="conversations-refresh"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -384,17 +360,17 @@ export function RunsList() {
         <Alert
           type="error"
           showIcon
-          message={t("runs_page.failed_to_load")}
+          message={t("conversations_page.failed_to_load")}
           description={error}
           style={{ marginBottom: 16 }}
-          data-testid="runs-error"
+          data-testid="conversations-error"
         />
       )}
 
-      <Table<RunListItem>
+      <Table<ConversationListItem>
         columns={columns}
         dataSource={data?.items ?? []}
-        rowKey={(record) => record.run_id}
+        rowKey={(record) => record.thread_id}
         loading={loading}
         pagination={{
           total: data?.total ?? 0,
@@ -402,10 +378,7 @@ export function RunsList() {
           pageSize: 50,
         }}
         onRow={(record) => ({
-          onClick: () =>
-            navigate(
-              `/runs/${encodeURIComponent(record.thread_id)}/${encodeURIComponent(record.run_id)}`,
-            ),
+          onClick: () => navigate(`/conversations/${encodeURIComponent(record.thread_id)}`),
           style: { cursor: "pointer" },
         })}
         locale={{
@@ -413,19 +386,14 @@ export function RunsList() {
             <Empty
               description={
                 scope === "*"
-                  ? t("runs_page.empty_cross")
-                  : t("runs_page.empty_home")
+                  ? t("conversations_page.empty_cross")
+                  : t("conversations_page.empty_home")
               }
             />
           ),
         }}
-        data-testid="runs-table"
+        data-testid="conversations-table"
       />
-
-      <p style={{ marginTop: 16, fontSize: 12, color: "var(--hx-text-tertiary)" }}>
-        {t("runs_page.detail_hint")}{" "}
-        <Link to="/agents">{t("runs_page.detail_hint_link")}</Link>
-      </p>
     </div>
   );
 }

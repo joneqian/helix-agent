@@ -4,6 +4,7 @@ import { ApprovalsList } from "./pages/ApprovalsList";
 import { AgentDetail } from "./pages/AgentDetail";
 import { ArtifactsList } from "./pages/ArtifactsList";
 import { ConversationDetail } from "./pages/ConversationDetail";
+import { ConversationsList } from "./pages/ConversationsList";
 import { Curation } from "./pages/Curation";
 import { EvalRunDetail } from "./pages/EvalRunDetail";
 import { EvalRunsList } from "./pages/EvalRunsList";
@@ -11,7 +12,6 @@ import { KnowledgeAdmin } from "./pages/KnowledgeAdmin";
 import { KnowledgeDetail } from "./pages/KnowledgeDetail";
 import { MemoryAdmin } from "./pages/MemoryAdmin";
 import { RunDetail } from "./pages/RunDetail";
-import { RunsList } from "./pages/RunsList";
 import { SettingsApiKeys } from "./pages/SettingsApiKeys";
 import { SettingsAudit } from "./pages/SettingsAudit";
 import { SettingsEgressAudit } from "./pages/SettingsEgressAudit";
@@ -51,9 +51,12 @@ export function AppRouter() {
       <Route path="/agents" element={<AgentsList />} />
       <Route path="/agents/:name/:version" element={<AgentDetail />} />
       <Route path="/agents/:name/:version/:tab" element={<AgentDetail />} />
-      <Route path="/runs" element={<RunsList />} />
+      {/* Old flat runs list — permanently replaced by the conversation
+          browser; redirect keeps bookmarks / deep links working. */}
+      <Route path="/runs" element={<Navigate to="/conversations" replace />} />
       <Route path="/approvals" element={<ApprovalsList />} />
       <Route path="/runs/:threadId/:runId" element={<RunDetail />} />
+      <Route path="/conversations" element={<ConversationsList />} />
       <Route path="/conversations/:threadId" element={<ConversationDetail />} />
       <Route path="/curation" element={<Curation />} />
       <Route path="/eval-runs" element={<EvalRunsList />} />
